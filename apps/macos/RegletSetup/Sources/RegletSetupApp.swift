@@ -128,7 +128,8 @@ struct SafetyView: View {
         SafetyRow(symbol: "checkmark.shield", title: "No daemon starts during setup")
         SafetyRow(symbol: "arrow.triangle.2.circlepath", title: "No sync is configured unless you enable it later")
         SafetyRow(symbol: "doc.badge.gearshape", title: "Provider writes are previewed before backup and apply")
-        SafetyRow(symbol: "clock.arrow.circlepath", title: "Restore and revert remain available after onboarding")
+        SafetyRow(symbol: "clock.arrow.circlepath", title: "Reglet backs up managed provider paths before changing them")
+        SafetyRow(symbol: "arrow.uturn.backward", title: "Revert restores backed-up paths or removes Reglet-created outputs")
       }
 
       Button {
@@ -200,6 +201,9 @@ struct SelectionView: View {
             }
           }
         }
+        if model.selectedContents.contains(.skills) {
+          SkillSelectionView()
+        }
         Spacer()
         HStack {
           Button {
@@ -230,8 +234,14 @@ struct SelectionView: View {
       set: { isSelected in
         if isSelected {
           model.selectedProviders.insert(provider)
+          if let providerRecord = model.scan?.providers.first(where: { $0.id == provider }) {
+            for skill in providerRecord.inventory.skills {
+              model.selectedSkillTargets.insert("\(provider):\(skill)")
+            }
+          }
         } else {
           model.selectedProviders.remove(provider)
+          model.selectedSkillTargets = Set(model.selectedSkillTargets.filter { !$0.hasPrefix("\(provider):") })
         }
       }
     )
@@ -245,6 +255,51 @@ struct SelectionView: View {
           model.selectedContents.insert(content)
         } else {
           model.selectedContents.remove(content)
+        }
+      }
+    )
+  }
+}
+
+struct SkillSelectionView: View {
+  @EnvironmentObject private var model: SetupModel
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Label("Skills to Transfer", systemImage: "square.stack.3d.up")
+        .font(.headline)
+      if model.availableSkillTargets.isEmpty {
+        Text("No provider skills were found for the selected providers.")
+          .foregroundStyle(.secondary)
+      } else {
+        ScrollView {
+          VStack(alignment: .leading, spacing: 8) {
+            ForEach(model.availableSkillTargets) { target in
+              Toggle(isOn: skillBinding(target.id)) {
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(target.skillName)
+                  Text(target.providerName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+              }
+            }
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxHeight: 180)
+      }
+    }
+  }
+
+  private func skillBinding(_ target: String) -> Binding<Bool> {
+    Binding(
+      get: { model.selectedSkillTargets.contains(target) },
+      set: { isSelected in
+        if isSelected {
+          model.selectedSkillTargets.insert(target)
+        } else {
+          model.selectedSkillTargets.remove(target)
         }
       }
     )
@@ -265,7 +320,7 @@ struct PreviewView: View {
       HStack {
         Button("Back", action: back)
         Spacer()
-        Text("Daemon, sync, and notifications remain off.")
+        Text("Daemon, sync, and notifications stay off. Managed provider paths are backed up before writes.")
           .foregroundStyle(.secondary)
         Button {
           apply()

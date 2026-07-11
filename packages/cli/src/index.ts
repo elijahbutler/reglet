@@ -55,12 +55,13 @@ program
   .option('-y, --yes', 'run non-interactively and enroll detected providers')
   .option('-p, --provider <provider...>', 'provider(s) to enroll/import', parseProviderList)
   .option('-c, --content <content...>', 'content type(s) to import/apply', parseContentList)
-  .action(async (options: { yes?: boolean; provider?: ProviderId[]; content?: ApplyContent[] }) => {
+  .option('-s, --skill <provider:skill...>', 'specific provider skill(s) to import/apply', parseSkillTargetList)
+  .action(async (options: { yes?: boolean; provider?: ProviderId[]; content?: ApplyContent[]; skill?: SkillTarget[] }) => {
     await initMasterDir();
-    if (options.yes === true || options.provider !== undefined || options.content !== undefined) {
+    if (options.yes === true || options.provider !== undefined || options.content !== undefined || options.skill !== undefined) {
       const providers = options.provider ?? (await detectedProviderIds());
       const contents = options.content ?? [...contentIds];
-      await runOnboarding(providers, contents);
+      await runOnboarding(providers, contents, skillSelectionsFromTargets(options.skill));
     } else if (process.stdin.isTTY) {
       await runInteractiveOnboarding();
     }
@@ -89,11 +90,13 @@ program
   .description('Preview first-run onboarding reads and writes without changing files')
   .option('-p, --provider <provider...>', 'provider(s) to include', parseProviderList)
   .option('-c, --content <content...>', 'content type(s) to include', parseContentList)
+  .option('-s, --skill <provider:skill...>', 'specific provider skill(s) to include', parseSkillTargetList)
   .option('--json', 'print machine-readable JSON for setup apps')
-  .action(async (options: { provider?: ProviderId[]; content?: ApplyContent[]; json?: boolean }) => {
+  .action(async (options: { provider?: ProviderId[]; content?: ApplyContent[]; skill?: SkillTarget[]; json?: boolean }) => {
     const plan = await buildOnboardingPlanJson({
       providers: options.provider ?? (await detectedProviderIds()),
       contents: options.content ?? [...contentIds],
+      skillSelections: skillSelectionsFromTargets(options.skill),
     });
 
     if (options.json === true) {
@@ -287,6 +290,13 @@ interface ProviderTarget {
   content?: ContentId;
 }
 
+interface SkillTarget {
+  provider: ProviderId;
+  skill: string;
+}
+
+type SkillSelections = Partial<Record<ProviderId, Set<string>>>;
+
 interface ScanProviderJson {
   id: ProviderId;
   displayName: string;
@@ -323,6 +333,7 @@ interface PlannedProviderJson {
 interface PlannedContentJson {
   selected: boolean;
   supported: boolean;
+  items?: string[];
   readPaths: string[];
   writePaths: string[];
   notes: string[];
@@ -347,6 +358,7 @@ interface SafetyJson {
 interface BuildOnboardingPlanOptions {
   providers: ProviderId[];
   contents: ApplyContent[];
+  skillSelections?: SkillSelections;
 }
 
 function safetyDefaults(): SafetyJson {
@@ -380,6 +392,22 @@ function parseContentList(value: string, previous: ApplyContent[] = []): ApplyCo
   return [...previous, ...value.split(',').filter((item) => item.length > 0).map(parseContent)];
 }
 
+function parseSkillTargetList(value: string, previous: SkillTarget[] = []): SkillTarget[] {
+  return [...previous, ...value.split(',').filter((item) => item.length > 0).map(parseSkillTarget)];
+}
+
+function parseSkillTarget(value: string): SkillTarget {
+  const separator = value.indexOf(':');
+  if (separator <= 0 || separator === value.length - 1) {
+    throw new InvalidArgumentError(`Invalid skill target: ${value}. Use provider:skill-name.`);
+  }
+
+  return {
+    provider: parseProvider(value.slice(0, separator)),
+    skill: value.slice(separator + 1),
+  };
+}
+
 function parseProviderTarget(value: string): ProviderTarget {
   const [providerRaw, contentRaw] = value.split(':');
   if (providerRaw === undefined || providerRaw.length === 0) {
@@ -392,7 +420,20 @@ function parseProviderTarget(value: string): ProviderTarget {
   return { provider, content: parseContent(contentRaw) };
 }
 
-async function runOnboarding(providers: ProviderId[], contents: ApplyContent[]): Promise<void> {
+function skillSelectionsFromTargets(targets: SkillTarget[] | undefined): SkillSelections | undefined {
+  if (targets === undefined) {
+    return undefined;
+  }
+
+  const selections: SkillSelections = {};
+  for (const target of targets) {
+    selections[target.provider] ??= new Set<string>();
+    selections[target.provider]?.add(target.skill);
+  }
+  return selections;
+}
+
+async function runOnboarding(providers: ProviderId[], contents: ApplyContent[], skillSelections?: SkillSelections): Promise<void> {
   const config = await loadConfig();
   for (const provider of providers) {
     config.providers[provider].enabled = true;
@@ -403,7 +444,7 @@ async function runOnboarding(providers: ProviderId[], contents: ApplyContent[]):
       await importProviderRules(provider);
     }
     if (contents.includes('skills')) {
-      await importProviderSkills(provider);
+      await importProviderSkills(provider, skillSelections?.[provider]);
     }
     if (contents.includes('mcp')) {
       await importProviderMcp(provider);
@@ -444,6 +485,14 @@ async function runInteractiveOnboarding(): Promise<void> {
     return;
   }
 
+  const selectedProviders = normalizeProviderSelections(providers);
+  const selectedContents = normalizeContentSelections(contents);
+  const skillSelections = selectedContents.includes('skills') ? await promptForSkillSelections(selectedProviders) : undefined;
+  if (skillSelections === 'cancelled') {
+    outro('Onboarding cancelled.');
+    return;
+  }
+
   const shouldApply = await confirm({
     message: `Import selected content and apply to ${providers.length} provider(s)?`,
     initialValue: true,
@@ -453,8 +502,38 @@ async function runInteractiveOnboarding(): Promise<void> {
     return;
   }
 
-  await runOnboarding(normalizeProviderSelections(providers), normalizeContentSelections(contents));
+  await runOnboarding(selectedProviders, selectedContents, skillSelections);
   outro('Onboarding complete.');
+}
+
+async function promptForSkillSelections(providers: ProviderId[]): Promise<SkillSelections | 'cancelled' | undefined> {
+  const options: { value: string; label: string }[] = [];
+  const initialValues: string[] = [];
+  for (const provider of providers) {
+    const adapter = getAdapter(provider);
+    const inventory = await adapter.inventory();
+    for (const skill of inventory.skills.sort((left, right) => left.localeCompare(right))) {
+      const value = `${provider}:${skill}`;
+      options.push({ value, label: `${adapter.displayName} / ${skill}` });
+      initialValues.push(value);
+    }
+  }
+
+  if (options.length === 0) {
+    return undefined;
+  }
+
+  const selected = await multiselect({
+    message: 'Select skills to transfer into the unified directory',
+    options,
+    initialValues,
+    required: false,
+  });
+  if (isCancel(selected)) {
+    return 'cancelled';
+  }
+
+  return skillSelectionsFromTargets(selected.map(parseSkillTarget));
 }
 
 function normalizeProviderSelections(values: readonly string[]): ProviderId[] {
@@ -509,7 +588,7 @@ async function buildOnboardingPlanJson(options: BuildOnboardingPlanOptions): Pro
     };
 
     for (const content of options.contents) {
-      const contentPlan = await buildContentPlan(provider, content, inventory);
+      const contentPlan = await buildContentPlan(provider, content, inventory, options.skillSelections);
       plannedProvider.contents[content] = contentPlan;
       reads.push(...contentPlan.readPaths.map((filePath) => plannedFile(provider, content, filePath, 'provider', 'read')));
       writes.push(...contentPlan.writePaths.map((filePath) => plannedFile(provider, content, filePath, plannedScope(filePath), 'write')));
@@ -533,6 +612,7 @@ async function buildContentPlan(
   provider: ProviderId,
   content: ApplyContent,
   inventory: ProviderInventory,
+  skillSelections?: SkillSelections,
 ): Promise<PlannedContentJson> {
   if (content === 'rules') {
     const readPaths = inventory.rulesPath === null || !inventory.rulesExists ? [] : [inventory.rulesPath];
@@ -552,16 +632,18 @@ async function buildContentPlan(
   if (content === 'skills') {
     const skillsDir = inventory.skillsDir;
     const supported = skillsDir !== null;
+    const selectedSkills = selectedSkillsForProvider(provider, inventory.skills, skillSelections);
     const writePaths = supported
       ? [
-          ...(await plannedSkillImportPaths(provider, inventory.skills)),
+          ...(await plannedSkillImportPaths(provider, selectedSkills)),
           skillsDir,
         ]
       : [];
     return {
       selected: true,
       supported,
-      readPaths: skillsDir !== null && inventory.skills.length > 0 ? [skillsDir] : [],
+      items: selectedSkills,
+      readPaths: skillsDir !== null && selectedSkills.length > 0 ? [skillsDir] : [],
       writePaths,
       notes: supported ? [] : [`${provider}:skills unsupported`],
     };
@@ -579,6 +661,18 @@ async function buildContentPlan(
     writePaths,
     notes: inventory.mcpPath === null ? [`${provider}:mcp unsupported`] : [],
   };
+}
+
+function selectedSkillsForProvider(
+  provider: ProviderId,
+  availableSkills: string[],
+  skillSelections: SkillSelections | undefined,
+): string[] {
+  const selected = skillSelections?.[provider];
+  if (selected === undefined) {
+    return [...availableSkills];
+  }
+  return availableSkills.filter((skill) => selected.has(skill));
 }
 
 async function plannedSkillImportPaths(provider: ProviderId, skillNames: string[]): Promise<string[]> {
@@ -681,7 +775,7 @@ async function importProviderRules(provider: ProviderId): Promise<void> {
   }
 }
 
-async function importProviderSkills(provider: ProviderId): Promise<void> {
+async function importProviderSkills(provider: ProviderId, selectedSkills?: Set<string>): Promise<void> {
   const adapter = getAdapter(provider);
   const skillsDir = adapter.skillsDir();
   if (skillsDir === null) {
@@ -712,14 +806,24 @@ async function importProviderSkills(provider: ProviderId): Promise<void> {
     }
   }
 
+  const missingSkills = selectedSkills === undefined ? new Set<string>() : new Set(selectedSkills);
   for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
     if (!entry.isDirectory()) {
       continue;
     }
 
+    if (selectedSkills !== undefined && !selectedSkills.has(entry.name)) {
+      continue;
+    }
+
+    missingSkills.delete(entry.name);
     const targetName = uniqueName(entry.name, provider, existingNames);
     existingNames.add(targetName);
     await copyDirRecursive(path.join(skillsDir, entry.name), path.join(masterSkillsDir, targetName));
+  }
+
+  if (missingSkills.size > 0) {
+    throw new Error(`Unknown ${provider} skill(s): ${[...missingSkills].sort((left, right) => left.localeCompare(right)).join(', ')}`);
   }
 }
 

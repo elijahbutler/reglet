@@ -71,9 +71,11 @@ reglet scan --json
 
 # preview first-run onboarding for setup UIs
 reglet plan --provider claude,codex --content rules,mcp --json
+reglet plan --provider claude --content skills --skill claude:skill-creator --json
 
 # create ~/.reglet, import selected content, then apply
 reglet init
+reglet init --provider claude --content skills --skill claude:skill-creator
 
 # compile ~/.reglet into enrolled provider outputs
 reglet apply
@@ -99,7 +101,7 @@ no explicit command -> no launchd service
 every managed write -> backup + manifest record
 ```
 
-- Provider files are backed up before managed writes.
+- Provider paths are backed up before managed writes; Reglet does not snapshot unrelated provider files it will not touch.
 - Generated rules files include a Reglet header pointing back to `~/.reglet/`.
 - Drift is reported instead of silently overwritten.
 - Reglet-owned MCP entries are merged without deleting unmanaged provider keys.

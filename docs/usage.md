@@ -21,7 +21,10 @@ Scripted:
 ```bash
 reglet init --provider claude --content rules
 reglet init --provider claude,codex --content rules,mcp
+reglet init --provider claude --content skills --skill claude:skill-creator
 ```
+
+When importing skills, interactive onboarding shows individual provider skills before copying them into `~/.reglet/skills`. Scripted onboarding can use `--skill provider:name` one or more times, or as a comma-separated list. If no `--skill` flag is provided, all selected providers' skills are imported.
 
 ## Apply Master Config
 
@@ -31,7 +34,7 @@ reglet apply --provider claude
 reglet apply --provider codex --content mcp
 ```
 
-Reglet writes generated provider files through the safe writer, creating a first backup and recording hashes in `.state/manifest.json`.
+Reglet writes generated provider files through the safe writer, creating a first backup and recording hashes in `.state/manifest.json`. Backups cover provider paths Reglet manages and is about to change; unrelated provider files are left untouched rather than snapshotted.
 
 ## Drift
 

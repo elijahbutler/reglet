@@ -35,6 +35,7 @@ Screens:
 - Welcome and safety contract.
 - Provider scan with detected/missing states.
 - Content selection for rules, skills, and MCP per provider.
+- Individual skill selection before transferring provider skills into the unified directory.
 - File preview grouped by read and write operations.
 - Confirmation that creates backups and applies changes.
 - Completion/status view with restore and revert actions.
@@ -102,6 +103,7 @@ Actions:
 - Run `reglet restore <provider>`.
 - Run `reglet revert <provider>`.
 - Link to the backup directory in `~/.reglet/.state/backups`.
+- Explain that backups are made for managed provider paths before Reglet changes them; unrelated provider files are preserved in place and are not snapshotted.
 
 ### 5. Real-machine QA
 

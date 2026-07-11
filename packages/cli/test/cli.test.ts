@@ -134,6 +134,34 @@ describe('reglet CLI', () => {
     await expect(readFile(path.join(home, 'rules', 'imported-claude.md'), 'utf8')).rejects.toThrow();
   });
 
+  test('plan --json can preview only selected provider skills', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await mkdir(path.join(providerHome, '.claude', 'skills', 'alpha'), { recursive: true });
+    await mkdir(path.join(providerHome, '.claude', 'skills', 'beta'), { recursive: true });
+    await writeFile(path.join(providerHome, '.claude', 'skills', 'alpha', 'SKILL.md'), 'alpha skill\n');
+    await writeFile(path.join(providerHome, '.claude', 'skills', 'beta', 'SKILL.md'), 'beta skill\n');
+
+    const result = await runCli(
+      ['plan', '--provider', 'claude', '--content', 'skills', '--skill', 'claude:alpha', '--json'],
+      home,
+      providerHome,
+    );
+    const plan = JSON.parse(result.stdout) as {
+      providers: { contents: { skills: { items: string[] } } }[];
+      writes: { content: string; path: string }[];
+    };
+
+    expect(plan.providers[0]?.contents.skills.items).toEqual(['alpha']);
+    expect(plan.writes).toContainEqual(expect.objectContaining({
+      content: 'skills',
+      path: path.join(home, 'skills', 'alpha'),
+    }));
+    expect(plan.writes).not.toContainEqual(expect.objectContaining({
+      content: 'skills',
+      path: path.join(home, 'skills', 'beta'),
+    }));
+  });
+
   test('init --yes enrolls detected providers, imports rules, and applies outputs', async () => {
     const { home, providerHome } = await useTempHomes();
     const claudeRules = path.join(providerHome, '.claude', 'CLAUDE.md');
@@ -185,6 +213,27 @@ describe('reglet CLI', () => {
     });
     expect(await readFile(path.join(home, 'reglet.toml'), 'utf8')).toContain('[providers.claude]');
     expect(await readFile(path.join(home, 'reglet.toml'), 'utf8')).toContain('enabled = true');
+  });
+
+  test('init can transfer only selected provider skills into the unified directory', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await mkdir(path.join(providerHome, '.claude', 'skills', 'alpha'), { recursive: true });
+    await mkdir(path.join(providerHome, '.claude', 'skills', 'beta'), { recursive: true });
+    await writeFile(path.join(providerHome, '.claude', 'skills', 'alpha', 'SKILL.md'), 'alpha skill\n');
+    await writeFile(path.join(providerHome, '.claude', 'skills', 'beta', 'SKILL.md'), 'beta skill\n');
+
+    await runCli(['init', '--provider', 'claude', '--content', 'skills', '--skill', 'claude:alpha'], home, providerHome);
+
+    expect(await readFile(path.join(home, 'skills', 'alpha', 'SKILL.md'), 'utf8')).toBe('alpha skill\n');
+    await expect(readFile(path.join(home, 'skills', 'beta', 'SKILL.md'), 'utf8')).rejects.toThrow();
+    expect(await readFile(path.join(providerHome, '.claude', 'skills', 'alpha', 'SKILL.md'), 'utf8')).toBe('alpha skill\n');
+    expect(await readFile(path.join(providerHome, '.claude', 'skills', 'beta', 'SKILL.md'), 'utf8')).toBe('beta skill\n');
+
+    const manifest = JSON.parse(await readFile(path.join(home, '.state', 'manifest.json'), 'utf8')) as {
+      outputs: Record<string, { backedUpTo: string | null }>;
+    };
+    expect(manifest.outputs[path.join(providerHome, '.claude', 'skills', 'alpha')]?.backedUpTo).not.toBeNull();
+    expect(manifest.outputs[path.join(providerHome, '.claude', 'skills', 'beta')]).toBeUndefined();
   });
 
   test('init --yes imports opencode mcp schema into canonical master format', async () => {

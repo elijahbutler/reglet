@@ -6,6 +6,7 @@ final class SetupModel: ObservableObject {
   @Published var plan: PlanResponse?
   @Published var selectedProviders: Set<String> = []
   @Published var selectedContents: Set<ContentKind> = Set(ContentKind.allCases)
+  @Published var selectedSkillTargets: Set<String> = []
   @Published var isWorking = false
   @Published var errorMessage: String?
   @Published var completionMessage: String?
@@ -17,7 +18,35 @@ final class SetupModel: ObservableObject {
   }
 
   var canContinue: Bool {
-    !selectedProviders.isEmpty && !selectedContents.isEmpty && !isWorking
+    !selectedProviders.isEmpty && !selectedContents.isEmpty && hasRequiredSkillSelection && !isWorking
+  }
+
+  var availableSkillTargets: [SkillTarget] {
+    detectedProviders
+      .filter { selectedProviders.contains($0.id) }
+      .flatMap { provider in
+        provider.inventory.skills.sorted().map { skill in
+          SkillTarget(providerId: provider.id, providerName: provider.displayName, skillName: skill)
+        }
+      }
+  }
+
+  var selectedSkillTargetArguments: [String] {
+    guard selectedContents.contains(.skills) else {
+      return []
+    }
+    return availableSkillTargets
+      .map(\.id)
+      .filter { selectedSkillTargets.contains($0) }
+      .sorted()
+  }
+
+  private var hasRequiredSkillSelection: Bool {
+    guard selectedContents.contains(.skills) else {
+      return true
+    }
+    let availableTargets = availableSkillTargets
+    return availableTargets.isEmpty || availableTargets.contains { selectedSkillTargets.contains($0.id) }
   }
 
   func load() {
@@ -33,6 +62,12 @@ final class SetupModel: ObservableObject {
       if self.selectedProviders.isEmpty {
         self.selectedProviders = Set(response.providers.filter(\.detected).map(\.id))
       }
+      let availableTargets = Set(self.availableSkillTargets.map(\.id))
+      if self.selectedSkillTargets.isEmpty {
+        self.selectedSkillTargets = availableTargets
+      } else {
+        self.selectedSkillTargets = self.selectedSkillTargets.intersection(availableTargets)
+      }
     }
   }
 
@@ -40,7 +75,8 @@ final class SetupModel: ObservableObject {
     await runWork {
       self.plan = try await self.command.plan(
         providers: Array(self.selectedProviders).sorted(),
-        contents: Array(self.selectedContents).sorted { $0.rawValue < $1.rawValue }
+        contents: Array(self.selectedContents).sorted { $0.rawValue < $1.rawValue },
+        skills: self.selectedSkillTargetArguments
       )
     }
   }
@@ -49,7 +85,8 @@ final class SetupModel: ObservableObject {
     await runWork {
       let result = try await self.command.onboard(
         providers: Array(self.selectedProviders).sorted(),
-        contents: Array(self.selectedContents).sorted { $0.rawValue < $1.rawValue }
+        contents: Array(self.selectedContents).sorted { $0.rawValue < $1.rawValue },
+        skills: self.selectedSkillTargetArguments
       )
       self.completionMessage = result.stdout.isEmpty ? "Onboarding complete." : result.stdout
       self.scan = try await self.command.scan()

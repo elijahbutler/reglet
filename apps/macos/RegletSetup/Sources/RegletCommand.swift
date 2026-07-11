@@ -39,7 +39,7 @@ struct RegletCommand {
     return try decode(ScanResponse.self, from: result.stdout, command: "reglet scan --json")
   }
 
-  func plan(providers: [String], contents: [ContentKind]) async throws -> PlanResponse {
+  func plan(providers: [String], contents: [ContentKind], skills: [String]) async throws -> PlanResponse {
     var arguments = ["plan"]
     if !providers.isEmpty {
       arguments.append("--provider")
@@ -49,13 +49,17 @@ struct RegletCommand {
       arguments.append("--content")
       arguments.append(contents.map(\.rawValue).joined(separator: ","))
     }
+    if !skills.isEmpty {
+      arguments.append("--skill")
+      arguments.append(skills.joined(separator: ","))
+    }
     arguments.append("--json")
 
     let result = try await run(arguments)
     return try decode(PlanResponse.self, from: result.stdout, command: "reglet \(arguments.joined(separator: " "))")
   }
 
-  func onboard(providers: [String], contents: [ContentKind]) async throws -> CommandResult {
+  func onboard(providers: [String], contents: [ContentKind], skills: [String]) async throws -> CommandResult {
     var arguments = ["init"]
     if !providers.isEmpty {
       arguments.append("--provider")
@@ -64,6 +68,10 @@ struct RegletCommand {
     if !contents.isEmpty {
       arguments.append("--content")
       arguments.append(contents.map(\.rawValue).joined(separator: ","))
+    }
+    if !skills.isEmpty {
+      arguments.append("--skill")
+      arguments.append(skills.joined(separator: ","))
     }
     return try await run(arguments)
   }

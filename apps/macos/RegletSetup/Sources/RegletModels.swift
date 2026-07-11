@@ -76,6 +76,16 @@ struct Safety: Decodable {
   let requiresExplicitConfirmation: Bool
 }
 
+struct SkillTarget: Identifiable, Hashable {
+  let providerId: String
+  let providerName: String
+  let skillName: String
+
+  var id: String {
+    "\(providerId):\(skillName)"
+  }
+}
+
 enum ContentKind: String, CaseIterable, Identifiable {
   case rules
   case skills
