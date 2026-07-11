@@ -15,6 +15,14 @@ struct RegletSetupApp: App {
     }
     .windowStyle(.titleBar)
     .windowToolbarStyle(.unified)
+    .commands {
+      CommandGroup(after: .appInfo) {
+        Button("Check for Updates...") {
+          Task { await model.checkForUpdates() }
+        }
+        .disabled(model.isCheckingForUpdates)
+      }
+    }
   }
 }
 
@@ -64,6 +72,27 @@ struct ContentView: View {
       Button("OK") { model.errorMessage = nil }
     } message: {
       Text(model.errorMessage ?? "")
+    }
+    .alert("Update Available", isPresented: Binding(
+      get: { model.update != nil },
+      set: { if !$0 { model.dismissUpdate() } }
+    )) {
+      Button("Open Release") {
+        model.openLatestRelease()
+      }
+      Button("Not Now", role: .cancel) {
+        model.dismissUpdate()
+      }
+    } message: {
+      Text("Reglet \(model.update?.version ?? "") is available.")
+    }
+    .alert("Reglet Updates", isPresented: Binding(
+      get: { model.updateMessage != nil },
+      set: { if !$0 { model.updateMessage = nil } }
+    )) {
+      Button("OK") { model.updateMessage = nil }
+    } message: {
+      Text(model.updateMessage ?? "")
     }
   }
 }
