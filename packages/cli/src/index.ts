@@ -14,6 +14,7 @@ import {
   initMasterDir,
   loadConfig,
   loadMasterDir,
+  listSkills,
   listUnmanagedSkills,
   type McpServerDef,
   regletHome,
@@ -203,6 +204,27 @@ program
   });
 
 const skills = program.command('skills').description('Inspect and adopt provider-local skills');
+
+skills
+  .command('list')
+  .description('List managed and provider-local skills')
+  .option('--json', 'print machine-readable JSON for manager apps')
+  .action(async (options: { json?: boolean }) => {
+    const overview = await listSkills();
+    if (options.json === true) {
+      printJson({ version: 1, regletHome: regletHome(), ...overview });
+      return;
+    }
+    for (const skill of overview.shared) {
+      console.log(`shared\t${skill.name}\t${skill.path}`);
+    }
+    for (const skill of overview.providerScoped) {
+      console.log(`${skill.provider}\t${skill.name}\t${skill.path}`);
+    }
+    for (const skill of overview.unmanaged) {
+      console.log(`${skill.provider}\t${skill.name}\t${skill.sourcePath}`);
+    }
+  });
 
 skills
   .command('unmanaged')

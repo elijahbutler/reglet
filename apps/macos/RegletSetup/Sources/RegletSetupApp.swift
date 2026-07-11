@@ -179,78 +179,238 @@ struct ProvidersManagerView: View {
 
 struct SkillsManagerView: View {
   @EnvironmentObject private var model: SetupModel
-  @State private var selectedSkill: UnmanagedSkill?
+
+  private var overview: SkillsOverviewResponse? { model.skillsOverview }
 
   var body: some View {
-    List {
-      Section("Provider-local skills") {
-        ForEach(model.unmanagedSkills) { skill in
-          Button {
-            selectedSkill = skill
-          } label: {
-            HStack {
+    VStack(spacing: 0) {
+      List {
+        Section("Unified (shared)") {
+          if (overview?.shared ?? []).isEmpty {
+            Text("No shared skills yet.").foregroundStyle(.secondary)
+          } else {
+            ForEach(overview?.shared ?? []) { skill in
               VStack(alignment: .leading, spacing: 3) {
-                Text(skill.name).foregroundStyle(.primary)
-                Text(skill.provider).font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                  Text(skill.name)
+                  ForEach(skill.shadowedBy, id: \.self) { provider in
+                    SkillBadge(text: "shadowed by \(model.providerDisplayName(provider))", tint: .orange)
+                  }
+                }
+                Text(skill.path)
+                  .font(.system(.caption, design: .monospaced))
+                  .foregroundStyle(.secondary)
+                  .textSelection(.enabled)
               }
-              Spacer()
-              Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+              .padding(.vertical, 2)
             }
-            .contentShape(Rectangle())
           }
-          .buttonStyle(.plain)
-          .padding(.vertical, 4)
+        }
+
+        Section("Provider-scoped") {
+          if (overview?.providerScoped ?? []).isEmpty {
+            Text("No provider-scoped skills.").foregroundStyle(.secondary)
+          } else {
+            ForEach(overview?.providerScoped ?? []) { skill in
+              VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                  Text(skill.name)
+                  Text(model.providerDisplayName(skill.provider))
+                    .font(.caption).foregroundStyle(.secondary)
+                  if skill.shadowsShared {
+                    SkillBadge(text: "shadows shared", tint: .orange)
+                  }
+                }
+                Text(skill.path)
+                  .font(.system(.caption, design: .monospaced))
+                  .foregroundStyle(.secondary)
+                  .textSelection(.enabled)
+              }
+              .padding(.vertical, 2)
+            }
+          }
+        }
+
+        Section("Provider-local (unmanaged)") {
+          if model.unmanagedSkills.isEmpty {
+            Text("No local skills to review. Provider-local skills stay untouched until adopted.")
+              .foregroundStyle(.secondary)
+          } else {
+            UnmanagedSkillsGroups(skills: model.unmanagedSkills)
+          }
         }
       }
-    }
-    .overlay {
-      if model.unmanagedSkills.isEmpty && !model.isWorking {
-        ContentUnavailableView("No local skills to review", systemImage: "checkmark.circle", description: Text("Provider-local skills remain untouched until adopted."))
+      .overlay {
+        if overview == nil && !model.isWorking {
+          ContentUnavailableView("Skills unavailable", systemImage: "hammer", description: Text("Refresh to scan this Mac."))
+        }
       }
-    }
-    .sheet(item: $selectedSkill) { skill in
-      SkillAdoptionView(skill: skill)
-        .environmentObject(model)
+
+      Divider()
+      HStack {
+        Text("Adoption applies skills to every enrolled provider.")
+          .font(.caption).foregroundStyle(.secondary)
+        Spacer()
+        Button {
+          Task { await model.adoptSelectedSkills() }
+        } label: {
+          Label("Adopt Selected", systemImage: "square.and.arrow.down")
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(model.checkedSkills.isEmpty || model.isWorking)
+      }
+      .padding(16)
+      .background(.regularMaterial)
     }
   }
 }
 
-struct SkillAdoptionView: View {
-  @EnvironmentObject private var model: SetupModel
-  @Environment(\.dismiss) private var dismiss
-  let skill: UnmanagedSkill
+struct SkillBadge: View {
+  let text: String
+  let tint: Color
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 20) {
-      Label(skill.name, systemImage: "hammer")
-        .font(.title2.weight(.semibold))
-      PathSummary(label: "Source", value: skill.sourcePath)
-      Divider()
-      PathSummary(label: "Shared destination", value: skill.sharedDestination)
-      Text(skill.sharedConflict == "none" ? "No conflict" : "Destination already exists")
-        .font(.caption).foregroundStyle(skill.sharedConflict == "none" ? Color.secondary : Color.red)
-      Text("Affects: \(skill.affectedProviders.isEmpty ? "No enrolled providers" : skill.affectedProviders.joined(separator: ", "))")
-        .font(.caption).foregroundStyle(.secondary)
-      PathSummary(label: "Provider destination", value: skill.providerDestination)
-      Text(skill.providerConflict == "none" ? "No conflict" : "Destination already exists")
-        .font(.caption).foregroundStyle(skill.providerConflict == "none" ? Color.secondary : Color.red)
-      Spacer()
+    Text(text)
+      .font(.caption2)
+      .padding(.horizontal, 6)
+      .padding(.vertical, 2)
+      .background(tint.opacity(0.18), in: Capsule())
+      .foregroundStyle(tint)
+  }
+}
+
+/// Reusable grouped checkbox/scope-picker rows for unmanaged skills.
+/// Emits a per-provider header (with select-all) followed by one row per skill.
+/// Used by both the onboarding Skills step and the Skills manager.
+struct UnmanagedSkillsGroups: View {
+  @EnvironmentObject private var model: SetupModel
+  let skills: [UnmanagedSkill]
+
+  private var byProvider: [(provider: String, skills: [UnmanagedSkill])] {
+    Dictionary(grouping: skills, by: \.provider)
+      .map { (provider: $0.key, skills: $0.value.sorted { $0.name < $1.name }) }
+      .sorted { $0.provider < $1.provider }
+  }
+
+  var body: some View {
+    ForEach(byProvider, id: \.provider) { group in
       HStack {
-        Button("Keep Local Only") { dismiss() }
+        Text(model.providerDisplayName(group.provider))
+          .font(.subheadline.weight(.semibold))
         Spacer()
-        Button("This Provider") {
-          Task { await model.adoptSkill(skill, scope: .provider); dismiss() }
+        Button(allSelected(group.skills) ? "Deselect All" : "Select All") {
+          toggleAll(group.skills)
         }
-        .disabled(skill.providerConflict != "none" || model.isWorking)
-        Button("Share With All") {
-          Task { await model.adoptSkill(skill, scope: .shared); dismiss() }
-        }
-        .buttonStyle(.borderedProminent)
-        .disabled(skill.sharedConflict != "none" || model.isWorking)
+        .buttonStyle(.link)
+        .disabled(selectable(in: group.skills).isEmpty)
+      }
+      ForEach(group.skills) { skill in
+        SkillSelectionRow(skill: skill)
       }
     }
-    .padding(24)
-    .frame(width: 620, height: 480)
+  }
+
+  private func selectable(in skills: [UnmanagedSkill]) -> [UnmanagedSkill] {
+    skills.filter(model.canAdopt)
+  }
+
+  private func allSelected(_ skills: [UnmanagedSkill]) -> Bool {
+    let candidates = selectable(in: skills)
+    return !candidates.isEmpty && candidates.allSatisfy { model.checkedSkills.contains($0.id) }
+  }
+
+  private func toggleAll(_ skills: [UnmanagedSkill]) {
+    let candidates = selectable(in: skills)
+    if allSelected(skills) {
+      for skill in candidates { model.checkedSkills.remove(skill.id) }
+    } else {
+      for skill in candidates { model.checkedSkills.insert(skill.id) }
+    }
+  }
+}
+
+struct SkillSelectionRow: View {
+  @EnvironmentObject private var model: SetupModel
+  let skill: UnmanagedSkill
+
+  private var scope: SkillAdoptionScope { model.skillScope(skill.id) }
+  private var overwrite: Bool { model.overwriteFlags.contains(skill.id) }
+  private var conflicts: Bool {
+    let field = scope == .shared ? skill.sharedConflict : skill.providerConflict
+    return field == "destination-exists"
+  }
+
+  var body: some View {
+    HStack(spacing: 12) {
+      Toggle(isOn: checkedBinding) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text(skill.name)
+          Text(scope == .shared ? skill.sharedDestination : skill.providerDestination)
+            .font(.system(.caption, design: .monospaced))
+            .foregroundStyle(.secondary)
+        }
+      }
+      .toggleStyle(.checkbox)
+      .disabled(conflicts && !overwrite)
+
+      Spacer()
+
+      Picker("Scope", selection: scopeBinding) {
+        Text("Share with all").tag(SkillAdoptionScope.shared)
+        Text("This provider only").tag(SkillAdoptionScope.provider)
+      }
+      .labelsHidden()
+      .frame(width: 190)
+
+      if conflicts {
+        Image(systemName: "exclamationmark.triangle.fill")
+          .foregroundStyle(.orange)
+          .accessibilityLabel("Destination already exists")
+        Toggle("Overwrite", isOn: overwriteBinding)
+          .toggleStyle(.checkbox)
+      }
+    }
+    .padding(.vertical, 2)
+  }
+
+  private var checkedBinding: Binding<Bool> {
+    Binding(
+      get: { model.checkedSkills.contains(skill.id) },
+      set: { on in
+        if on {
+          model.checkedSkills.insert(skill.id)
+        } else {
+          model.checkedSkills.remove(skill.id)
+        }
+      }
+    )
+  }
+
+  private var scopeBinding: Binding<SkillAdoptionScope> {
+    Binding(
+      get: { model.skillScope(skill.id) },
+      set: { newScope in
+        model.skillScopes[skill.id] = newScope
+        // A checked row must not silently point at a conflicting destination.
+        if !model.canAdopt(skill) {
+          model.checkedSkills.remove(skill.id)
+        }
+      }
+    )
+  }
+
+  private var overwriteBinding: Binding<Bool> {
+    Binding(
+      get: { model.overwriteFlags.contains(skill.id) },
+      set: { on in
+        if on {
+          model.overwriteFlags.insert(skill.id)
+        } else {
+          model.overwriteFlags.remove(skill.id)
+          if conflicts { model.checkedSkills.remove(skill.id) }
+        }
+      }
+    )
   }
 }
 
@@ -314,6 +474,10 @@ struct OnboardingView: View {
   @EnvironmentObject private var model: SetupModel
   @State private var step = 0
 
+  private var showsSkillsStep: Bool {
+    !model.selectedProviderUnmanagedSkills.isEmpty
+  }
+
   var body: some View {
     VStack(spacing: 0) {
       HeaderView(step: step)
@@ -328,16 +492,24 @@ struct OnboardingView: View {
           SelectionView {
             Task {
               await model.refreshPlan()
-              step = 2
+              step = showsSkillsStep ? 2 : 3
             }
           }
         case 2:
-          PreviewView(
+          SkillsStepView(
             back: { step = 1 },
+            continueAction: { step = 3 }
+          )
+        case 3:
+          PreviewView(
+            back: { step = showsSkillsStep ? 2 : 1 },
             apply: {
               Task {
-                await model.applySelection()
-                step = 3
+                guard await model.applySelection() else { return }
+                if !model.checkedSkills.isEmpty {
+                  await model.adoptSelectedSkills(limitedTo: model.selectedProviders)
+                }
+                step = 4
               }
             }
           )
@@ -372,7 +544,7 @@ struct OnboardingView: View {
 struct HeaderView: View {
   let step: Int
 
-  private let steps = ["Safety", "Choose", "Preview", "Done"]
+  private let steps = ["Safety", "Choose", "Skills", "Preview", "Done"]
 
   var body: some View {
     HStack(spacing: 16) {
@@ -524,6 +696,7 @@ struct SelectionView: View {
           model.selectedProviders.insert(provider)
         } else {
           model.selectedProviders.remove(provider)
+          model.clearSkillSelections(provider: provider)
         }
       }
     )
@@ -540,6 +713,41 @@ struct SelectionView: View {
         }
       }
     )
+  }
+}
+
+struct SkillsStepView: View {
+  @EnvironmentObject private var model: SetupModel
+  let back: () -> Void
+  let continueAction: () -> Void
+
+  var body: some View {
+    VStack(spacing: 0) {
+      List {
+        Section {
+          UnmanagedSkillsGroups(skills: model.selectedProviderUnmanagedSkills)
+        } header: {
+          Text("Adopt provider-local skills into your unified library")
+        } footer: {
+          Text("Unchecked skills stay local and untouched. Adoption runs after you confirm on the next step.")
+        }
+      }
+      .listStyle(.inset)
+      Divider()
+      HStack {
+        Button("Back", action: back)
+        Spacer()
+        Button {
+          continueAction()
+        } label: {
+          Label("Preview Files", systemImage: "doc.text.magnifyingglass")
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(model.isWorking)
+      }
+      .padding(20)
+      .background(.regularMaterial)
+    }
   }
 }
 

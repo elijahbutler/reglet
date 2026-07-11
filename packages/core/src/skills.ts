@@ -2,6 +2,7 @@ import { cp, mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { loadConfig } from './config.js';
 import { loadManifest } from './manifest.js';
+import { loadMasterDir } from './master.js';
 import { regletHome } from './paths.js';
 import { allAdapters, getAdapter } from './providers/registry.js';
 import type { ProviderId } from './providers/types.js';
@@ -36,6 +37,67 @@ export interface AdoptedSkill {
   destination: string;
   overwritten: boolean;
   affectedProviders: ProviderId[];
+}
+
+export interface SharedSkillSummary {
+  name: string;
+  path: string;
+  fileCount: number;
+  shadowedBy: ProviderId[];
+}
+
+export interface ProviderScopedSkillSummary {
+  provider: ProviderId;
+  name: string;
+  path: string;
+  fileCount: number;
+  shadowsShared: boolean;
+}
+
+export interface SkillsOverview {
+  shared: SharedSkillSummary[];
+  providerScoped: ProviderScopedSkillSummary[];
+  unmanaged: UnmanagedSkill[];
+}
+
+export async function listSkills(home = regletHome()): Promise<SkillsOverview> {
+  const [master, unmanaged] = await Promise.all([loadMasterDir(home), listUnmanagedSkills(home)]);
+  const sharedNames = new Set(master.skills.map((skill) => skill.name));
+  const shadowedBy = new Map<string, ProviderId[]>();
+  const providerScoped: ProviderScopedSkillSummary[] = [];
+
+  for (const adapter of allAdapters()) {
+    const providerSkills = master.providerSkills[adapter.id];
+    for (const skill of providerSkills) {
+      providerScoped.push({
+        provider: adapter.id,
+        name: skill.name,
+        path: path.join(home, 'skills', adapter.id, skill.name),
+        fileCount: skill.files.length,
+        shadowsShared: sharedNames.has(skill.name),
+      });
+      if (sharedNames.has(skill.name)) {
+        shadowedBy.set(skill.name, [...(shadowedBy.get(skill.name) ?? []), adapter.id]);
+      }
+    }
+  }
+
+  const shared = master.skills
+    .map((skill) => ({
+      name: skill.name,
+      path: path.join(home, 'skills', skill.name),
+      fileCount: skill.files.length,
+      shadowedBy: shadowedBy.get(skill.name) ?? [],
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+
+  return {
+    shared,
+    providerScoped: providerScoped.sort((left, right) =>
+      left.provider === right.provider ? left.name.localeCompare(right.name) : left.provider.localeCompare(right.provider),
+    ),
+    unmanaged,
+  };
 }
 
 export async function listUnmanagedSkills(home = regletHome()): Promise<UnmanagedSkill[]> {

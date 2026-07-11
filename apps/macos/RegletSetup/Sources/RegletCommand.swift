@@ -80,13 +80,21 @@ struct RegletCommand {
     try await run(["revert", provider])
   }
 
-  func unmanagedSkills() async throws -> UnmanagedSkillsResponse {
-    let result = try await run(["skills", "unmanaged", "--json"])
-    return try decode(UnmanagedSkillsResponse.self, from: result.stdout, command: "reglet skills unmanaged --json")
+  func skillsList() async throws -> SkillsOverviewResponse {
+    let result = try await run(["skills", "list", "--json"])
+    return try decode(SkillsOverviewResponse.self, from: result.stdout, command: "reglet skills list --json")
   }
 
-  func adoptSkill(_ skill: UnmanagedSkill, scope: SkillAdoptionScope) async throws -> SkillAdoptionResponse {
-    let arguments = ["skills", "adopt", skill.provider, skill.name, "--scope", scope.rawValue, "--json"]
+  func applySkills() async throws -> CommandResult {
+    try await run(["apply", "--content", "skills"])
+  }
+
+  func adoptSkill(_ skill: UnmanagedSkill, scope: SkillAdoptionScope, overwrite: Bool = false) async throws -> SkillAdoptionResponse {
+    var arguments = ["skills", "adopt", skill.provider, skill.name, "--scope", scope.rawValue]
+    if overwrite {
+      arguments.append("--overwrite")
+    }
+    arguments.append("--json")
     let result = try await run(arguments)
     return try decode(SkillAdoptionResponse.self, from: result.stdout, command: "reglet \(arguments.joined(separator: " "))")
   }
