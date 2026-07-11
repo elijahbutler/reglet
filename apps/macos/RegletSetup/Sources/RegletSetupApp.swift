@@ -829,6 +829,10 @@ struct OnboardingView: View {
     !model.selectedProviderUnmanagedSkills.isEmpty
   }
 
+  private var route: OnboardingRoute {
+    OnboardingRoute(includesPrompts: showsPromptStep, includesSkills: showsSkillsStep)
+  }
+
   private var nextAfterSelection: Int {
     showsPromptStep ? 2 : (showsSkillsStep ? 3 : 4)
   }
@@ -855,22 +859,22 @@ struct OnboardingView: View {
           SelectionView {
             Task {
               await model.refreshPlan()
-              step = nextAfterSelection
+              step = route.next(after: .selection).rawValue
             }
           }
         case 2:
           PromptHandlingStepView(
-            back: { step = 1 },
-            continueAction: { step = nextAfterPrompts }
+            back: { step = route.back(from: .prompts).rawValue },
+            continueAction: { step = route.next(after: .prompts).rawValue }
           )
         case 3:
           SkillsStepView(
-            back: { step = showsPromptStep ? 2 : 1 },
-            continueAction: { step = 4 }
+            back: { step = route.back(from: .skills).rawValue },
+            continueAction: { step = route.next(after: .skills).rawValue }
           )
         case 4:
           PreviewView(
-            back: { step = previewBackStep },
+            back: { step = route.back(from: .preview).rawValue },
             apply: {
               Task {
                 guard await model.applySelection() else { return }
@@ -970,6 +974,8 @@ struct SafetyView: View {
       }
       .buttonStyle(.borderedProminent)
       .controlSize(.large)
+      .keyboardShortcut(.defaultAction)
+      .accessibilityHint("Continues to provider selection")
 
       Spacer()
     }
@@ -1048,6 +1054,7 @@ struct SelectionView: View {
             Label("Preview Files", systemImage: "doc.text.magnifyingglass")
           }
           .buttonStyle(.borderedProminent)
+          .keyboardShortcut(.defaultAction)
           .disabled(!model.canContinue)
         }
       }
@@ -1185,6 +1192,7 @@ struct PromptHandlingStepView: View {
       Divider()
       HStack {
         Button("Back", action: back)
+          .keyboardShortcut(.cancelAction)
         Spacer()
         Button {
           continueAction()
@@ -1192,6 +1200,7 @@ struct PromptHandlingStepView: View {
           Label("Continue", systemImage: "arrow.right")
         }
         .buttonStyle(.borderedProminent)
+        .keyboardShortcut(.defaultAction)
         .disabled(!canContinue)
       }
       .padding(20)
@@ -1233,6 +1242,7 @@ struct SkillsStepView: View {
       Divider()
       HStack {
         Button("Back", action: back)
+          .keyboardShortcut(.cancelAction)
         Spacer()
         Button {
           continueAction()
@@ -1240,6 +1250,7 @@ struct SkillsStepView: View {
           Label("Preview Files", systemImage: "doc.text.magnifyingglass")
         }
         .buttonStyle(.borderedProminent)
+        .keyboardShortcut(.defaultAction)
         .disabled(model.isWorking)
       }
       .padding(20)
@@ -1320,9 +1331,17 @@ struct PreviewView: View {
             Text("No provider rule files were selected for reconciliation.")
               .foregroundStyle(.secondary)
           } else {
-            ForEach(rules) { comparison in
-              RuleComparisonRow(comparison: comparison)
+            ScrollView(.horizontal) {
+              HStack(alignment: .top, spacing: 0) {
+                ForEach(rules) { comparison in
+                  RuleComparisonRow(comparison: comparison)
+                    .frame(width: 340, alignment: .topLeading)
+                    .padding(.horizontal, 12)
+                  if comparison.id != rules.last?.id { Divider() }
+                }
+              }
             }
+            .accessibilityLabel("Discovered provider rule sources")
           }
         } header: {
           Text("Provider rule reconciliation")
@@ -1368,6 +1387,7 @@ struct PreviewView: View {
       Divider()
       HStack {
         Button("Back", action: back)
+          .keyboardShortcut(.cancelAction)
         Spacer()
         Text(statusMessage)
           .foregroundStyle(.secondary)
@@ -1377,6 +1397,8 @@ struct PreviewView: View {
           Label("Create Backups and Apply", systemImage: "checkmark.circle")
         }
         .buttonStyle(.borderedProminent)
+        .keyboardShortcut(.defaultAction)
+        .accessibilityHint("Creates provider backups, then applies the reviewed changes")
         .disabled(model.isWorking || hasBlockedAdoption || hasBlockedUnifiedDraft)
       }
       .padding(20)

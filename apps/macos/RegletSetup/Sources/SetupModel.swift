@@ -29,9 +29,13 @@ final class SetupModel: ObservableObject {
   @Published var editableRuleMergeDraft = ""
   @Published var ruleMergeError: String?
 
-  private let command = RegletCommand()
+  private let command: RegletCommand
   private let updateChecker = UpdateChecker()
   private let dismissedUpdateVersionKey = "dismissedUpdateVersion"
+
+  init(command: RegletCommand = RegletCommand()) {
+    self.command = command
+  }
 
   var unmanagedSkills: [UnmanagedSkill] {
     skillsOverview?.unmanaged ?? []
