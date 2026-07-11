@@ -7,6 +7,7 @@ import { applyAll } from '../src/engine/apply.js';
 import { GENERATED_HEADER } from '../src/header.js';
 import { loadManifest } from '../src/manifest.js';
 import { getAdapter } from '../src/providers/registry.js';
+import { parse as parseToml } from 'smol-toml';
 
 let currentHome: string | undefined;
 let currentProviderHome: string | undefined;
@@ -175,5 +176,154 @@ describe('applyAll', () => {
 
     expect(claude).toEqual({ theme: 'dark', mcpServers: { userServer: { command: 'python' } } });
     expect(gemini).toEqual({ selectedAuthType: 'oauth', mcpServers: { userServer: { url: 'https://example.test' } } });
+  });
+
+  test('applies json mcp converters for cursor and windsurf with managed-key removal', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await enableProviders(home, ['cursor', 'windsurf']);
+    await mkdir(path.join(home, 'rules'), { recursive: true });
+    await mkdir(path.join(home, 'mcp'), { recursive: true });
+    await writeFile(
+      path.join(home, 'mcp', 'servers.json'),
+      `${JSON.stringify(
+        {
+          mcpServers: {
+            alpha: { command: 'node', args: ['alpha.js'] },
+            beta: { url: 'https://beta.example.test' },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await mkdir(path.join(providerHome, '.cursor'), { recursive: true });
+    await writeFile(
+      path.join(providerHome, '.cursor', 'mcp.json'),
+      `${JSON.stringify({ mcpServers: { user: { command: 'python' } } }, null, 2)}\n`,
+    );
+    await mkdir(path.join(providerHome, '.codeium', 'windsurf'), { recursive: true });
+    await writeFile(
+      path.join(providerHome, '.codeium', 'windsurf', 'mcp_config.json'),
+      `${JSON.stringify({ window: 'keep', mcpServers: { user: { command: 'ruby' } } }, null, 2)}\n`,
+    );
+
+    await applyAll({ providers: ['cursor', 'windsurf'], contents: ['mcp'] });
+    await writeFile(
+      path.join(home, 'mcp', 'servers.json'),
+      `${JSON.stringify({ mcpServers: { beta: { url: 'https://beta.example.test' } } }, null, 2)}\n`,
+    );
+    await applyAll({ providers: ['cursor', 'windsurf'], contents: ['mcp'] });
+
+    const cursor = JSON.parse(await readFile(path.join(providerHome, '.cursor', 'mcp.json'), 'utf8')) as unknown;
+    const windsurf = JSON.parse(
+      await readFile(path.join(providerHome, '.codeium', 'windsurf', 'mcp_config.json'), 'utf8'),
+    ) as unknown;
+
+    expect(cursor).toEqual({
+      mcpServers: {
+        user: { command: 'python' },
+        beta: { url: 'https://beta.example.test' },
+      },
+    });
+    expect(windsurf).toEqual({
+      window: 'keep',
+      mcpServers: {
+        user: { command: 'ruby' },
+        beta: { url: 'https://beta.example.test' },
+      },
+    });
+  });
+
+  test('applies codex toml mcp while preserving unrelated tables and unmanaged servers', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await enableProviders(home, ['codex']);
+    await mkdir(path.join(home, 'rules'), { recursive: true });
+    await mkdir(path.join(home, 'mcp'), { recursive: true });
+    await writeFile(
+      path.join(home, 'mcp', 'servers.json'),
+      `${JSON.stringify(
+        {
+          mcpServers: {
+            alpha: { command: 'node', args: ['alpha.js'], env: { TOKEN: 'one' } },
+            remote: { url: 'https://remote.example.test' },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await mkdir(path.join(providerHome, '.codex'), { recursive: true });
+    await writeFile(
+      path.join(providerHome, '.codex', 'config.toml'),
+      [
+        '[profile]',
+        'model = "gpt-5"',
+        '',
+        '[mcp_servers.user]',
+        'command = "python"',
+        '',
+      ].join('\n'),
+    );
+
+    await applyAll({ providers: ['codex'], contents: ['mcp'] });
+    await writeFile(
+      path.join(home, 'mcp', 'servers.json'),
+      `${JSON.stringify({ mcpServers: { remote: { url: 'https://remote.example.test' } } }, null, 2)}\n`,
+    );
+    await applyAll({ providers: ['codex'], contents: ['mcp'] });
+
+    const config = parseToml(await readFile(path.join(providerHome, '.codex', 'config.toml'), 'utf8')) as {
+      profile?: { model?: string };
+      mcp_servers?: Record<string, unknown>;
+    };
+
+    expect(config.profile?.model).toBe('gpt-5');
+    expect(config.mcp_servers).toEqual({
+      user: { command: 'python' },
+      remote: { url: 'https://remote.example.test' },
+    });
+  });
+
+  test('applies opencode mcp schema for local and remote servers', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await enableProviders(home, ['opencode']);
+    await mkdir(path.join(home, 'rules'), { recursive: true });
+    await mkdir(path.join(home, 'mcp'), { recursive: true });
+    await writeFile(
+      path.join(home, 'mcp', 'servers.json'),
+      `${JSON.stringify(
+        {
+          mcpServers: {
+            alpha: { command: 'node', args: ['alpha.js'], env: { TOKEN: 'one' } },
+            remote: { url: 'https://remote.example.test' },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await mkdir(path.join(providerHome, '.config', 'opencode'), { recursive: true });
+    await writeFile(
+      path.join(providerHome, '.config', 'opencode', 'opencode.json'),
+      `${JSON.stringify({ theme: 'system', mcp: { user: { type: 'local', command: ['python'] } } }, null, 2)}\n`,
+    );
+
+    await applyAll({ providers: ['opencode'], contents: ['mcp'] });
+    await writeFile(
+      path.join(home, 'mcp', 'servers.json'),
+      `${JSON.stringify({ mcpServers: { remote: { url: 'https://remote.example.test' } } }, null, 2)}\n`,
+    );
+    await applyAll({ providers: ['opencode'], contents: ['mcp'] });
+
+    const config = JSON.parse(await readFile(path.join(providerHome, '.config', 'opencode', 'opencode.json'), 'utf8')) as unknown;
+
+    expect(config).toEqual({
+      $schema: 'https://opencode.ai/config.json',
+      theme: 'system',
+      mcp: {
+        user: { type: 'local', command: ['python'] },
+        remote: { type: 'remote', url: 'https://remote.example.test' },
+      },
+    });
   });
 });
