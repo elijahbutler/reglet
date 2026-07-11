@@ -33,6 +33,8 @@ reglet apply --provider codex --content mcp
 
 Reglet writes generated provider files through the safe writer, creating a first backup and recording hashes in `.state/manifest.json`.
 
+Shared skills live in `~/.reglet/skills/<skill-name>/` and apply to every enrolled provider with skills support. Provider-specific skills live in `~/.reglet/skills/<provider>/<skill-name>/`, such as `~/.reglet/skills/codex/my-skill/`, and apply only to that provider. A provider-specific skill with the same name as a shared skill overrides the shared version for that provider.
+
 ## Drift
 
 ```bash
@@ -67,5 +69,7 @@ Sync scope is limited to:
 - `skills/`
 - `mcp/servers.json`
 - `reglet.toml`
+
+Provider-specific skills are included because they are nested under `skills/<provider>/`.
 
 `.state/` is never synced.

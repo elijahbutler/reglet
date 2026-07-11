@@ -8,6 +8,7 @@ Reglet is a local-first control plane for AI agent configuration. It turns rules
 ~/.reglet/                 provider outputs
   rules/*.md        -+     ~/.claude/CLAUDE.md
   skills/*/          +-->  ~/.codex/AGENTS.md
+  skills/codex/*/    |     provider skill dirs
   mcp/servers.json  -+     ~/.cursor/mcp.json
   reglet.toml              ~/.gemini/settings.json
                            ~/.codeium/.../mcp_config.json
@@ -123,11 +124,13 @@ Master directory:
 ```text
 ~/.reglet/
 |-- rules/                 # canonical agent instructions
-|-- skills/                # canonical skill directories
+|-- skills/                # shared and provider-specific skill directories
 |-- mcp/servers.json       # canonical MCP definitions
 |-- reglet.toml            # enrollment and sync config
 `-- .state/                # manifest, backups, drift queue, sync cursor
 ```
+
+Shared skills live directly under `skills/<skill-name>/` and are applied to every enrolled provider with skills support. Provider-specific skills live under `skills/<provider>/<skill-name>/`, for example `skills/codex/my-skill/`, and are applied only to that provider. If a provider-specific skill has the same name as a shared skill, the provider-specific version overrides the shared version for that provider.
 
 ## Provider Matrix
 
@@ -181,7 +184,7 @@ reglet login http://localhost:3000 --token dev-token --device laptop
 reglet sync
 ```
 
-Sync scope is the master directory only: `rules/`, `skills/`, `mcp/servers.json`, and `reglet.toml`. Reglet never syncs `.state/`.
+Sync scope is the master directory only: `rules/`, `skills/`, `mcp/servers.json`, and `reglet.toml`. Provider-specific skills sync naturally because they are nested under `skills/<provider>/`. Reglet never syncs `.state/`.
 
 ## Development
 

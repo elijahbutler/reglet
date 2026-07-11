@@ -51,7 +51,39 @@ describe('master dir', () => {
         ].sort((left, right) => left.relPath.localeCompare(right.relPath)),
       },
     ]);
+    expect(master.providerSkills.claude).toEqual([]);
+    expect(master.providerSkills.codex).toEqual([]);
     expect(master.mcpServers).toEqual({ local: { command: 'node', args: ['server.js'], env: { A: 'B' } } });
+  });
+
+  test('loads provider-specific skills separately from shared skills', async () => {
+    const home = await useTempHome();
+    await mkdir(path.join(home, 'rules'), { recursive: true });
+    await mkdir(path.join(home, 'skills', 'shared'), { recursive: true });
+    await mkdir(path.join(home, 'skills', 'codex', 'codex-only', 'assets'), { recursive: true });
+    await mkdir(path.join(home, 'skills', 'claude', 'claude-only'), { recursive: true });
+    await writeFile(path.join(home, 'skills', 'shared', 'SKILL.md'), 'shared');
+    await writeFile(path.join(home, 'skills', 'codex', 'codex-only', 'SKILL.md'), 'codex');
+    await writeFile(path.join(home, 'skills', 'codex', 'codex-only', 'assets', 'note.txt'), 'note');
+    await writeFile(path.join(home, 'skills', 'claude', 'claude-only', 'SKILL.md'), 'claude');
+
+    const master = await loadMasterDir(home);
+
+    expect(master.skills.map((skill) => skill.name)).toEqual(['shared']);
+    expect(master.providerSkills.codex).toEqual([
+      {
+        name: 'codex-only',
+        files: [
+          {
+            relPath: 'assets/note.txt',
+            absPath: path.join(home, 'skills', 'codex', 'codex-only', 'assets', 'note.txt'),
+          },
+          { relPath: 'SKILL.md', absPath: path.join(home, 'skills', 'codex', 'codex-only', 'SKILL.md') },
+        ].sort((left, right) => left.relPath.localeCompare(right.relPath)),
+      },
+    ]);
+    expect(master.providerSkills.claude.map((skill) => skill.name)).toEqual(['claude-only']);
+    expect(master.providerSkills.gemini).toEqual([]);
   });
 
   test('initMasterDir creates skeleton and is idempotent', async () => {

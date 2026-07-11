@@ -1,6 +1,6 @@
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { configPath, defaultConfig, serializeConfig } from './config.js';
+import { configPath, defaultConfig, providerNames, serializeConfig, type ProviderName } from './config.js';
 import { regletHome } from './paths.js';
 
 export interface McpServerDef {
@@ -28,6 +28,7 @@ export interface MasterSkill {
 export interface MasterDir {
   rules: MasterRule[];
   skills: MasterSkill[];
+  providerSkills: Record<ProviderName, MasterSkill[]>;
   mcpServers: Record<string, McpServerDef>;
 }
 
@@ -52,9 +53,11 @@ export async function initMasterDir(home = regletHome()): Promise<void> {
 }
 
 export async function loadMasterDir(home = regletHome()): Promise<MasterDir> {
+  const loadedSkills = await loadSkills(path.join(home, 'skills'));
   return {
     rules: await loadRules(path.join(home, 'rules')),
-    skills: await loadSkills(path.join(home, 'skills')),
+    skills: loadedSkills.shared,
+    providerSkills: loadedSkills.providers,
     mcpServers: await loadMcpServers(path.join(home, 'mcp', 'servers.json')),
   };
 }
@@ -73,10 +76,42 @@ async function loadRules(rulesDir: string): Promise<MasterRule[]> {
   return rules;
 }
 
-async function loadSkills(skillsDir: string): Promise<MasterSkill[]> {
+interface LoadedSkills {
+  shared: MasterSkill[];
+  providers: Record<ProviderName, MasterSkill[]>;
+}
+
+async function loadSkills(skillsDir: string): Promise<LoadedSkills> {
   let entries: string[];
   try {
     entries = (await readdir(skillsDir, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort((left, right) => left.localeCompare(right));
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') {
+      return emptyLoadedSkills();
+    }
+    throw error;
+  }
+
+  const shared: MasterSkill[] = [];
+  const providers = emptyProviderSkills();
+  for (const name of entries) {
+    if (isProviderName(name)) {
+      providers[name] = await loadSkillDirectories(path.join(skillsDir, name));
+    } else {
+      shared.push(await loadSkillDirectory(skillsDir, name));
+    }
+  }
+
+  return { shared, providers };
+}
+
+async function loadSkillDirectories(parentDir: string): Promise<MasterSkill[]> {
+  let entries: string[];
+  try {
+    entries = (await readdir(parentDir, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort((left, right) => left.localeCompare(right));
@@ -89,14 +124,38 @@ async function loadSkills(skillsDir: string): Promise<MasterSkill[]> {
 
   const skills: MasterSkill[] = [];
   for (const name of entries) {
-    const skillDir = path.join(skillsDir, name);
-    skills.push({
-      name,
-      files: await collectFiles(skillDir),
-    });
+    skills.push(await loadSkillDirectory(parentDir, name));
   }
-
   return skills;
+}
+
+async function loadSkillDirectory(parentDir: string, name: string): Promise<MasterSkill> {
+  return {
+    name,
+    files: await collectFiles(path.join(parentDir, name)),
+  };
+}
+
+function emptyLoadedSkills(): LoadedSkills {
+  return {
+    shared: [],
+    providers: emptyProviderSkills(),
+  };
+}
+
+function emptyProviderSkills(): Record<ProviderName, MasterSkill[]> {
+  return {
+    claude: [],
+    codex: [],
+    cursor: [],
+    gemini: [],
+    windsurf: [],
+    opencode: [],
+  };
+}
+
+function isProviderName(value: string): value is ProviderName {
+  return (providerNames as readonly string[]).includes(value);
 }
 
 async function loadMcpServers(serversPath: string): Promise<Record<string, McpServerDef>> {

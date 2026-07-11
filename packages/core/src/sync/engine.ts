@@ -26,7 +26,7 @@ export async function syncOnce(home = regletHome(), fetchImpl: typeof fetch = fe
   await pushChanges(home, state, client, result);
   await saveSyncState(state, home);
   if (pullChanged) {
-    await applyAll();
+    await applyAll({ home });
   }
   return result;
 }

@@ -27,8 +27,13 @@ async function tempDir(prefix: string): Promise<string> {
   return dir;
 }
 
+async function useTempProviderHome(): Promise<void> {
+  process.env.REGLET_PROVIDER_HOME = await tempDir('reglet-sync-provider-');
+}
+
 describe('sync engine', () => {
   test('syncs a local edit from one client to another through the server', async () => {
+    await useTempProviderHome();
     const serverDb = path.join(await tempDir('reglet-sync-server-'), 'db.sqlite');
     const app = useApp(createApp({ dbPath: serverDb, singleUserToken: 'sync-token' }));
     const fetchImpl = appFetch(app);
@@ -49,6 +54,7 @@ describe('sync engine', () => {
   });
 
   test('clean pull applies remote files into an empty local master', async () => {
+    await useTempProviderHome();
     const serverDb = path.join(await tempDir('reglet-sync-server-'), 'db.sqlite');
     const app = useApp(createApp({ dbPath: serverDb, singleUserToken: 'sync-token' }));
     const fetchImpl = appFetch(app);
@@ -70,7 +76,36 @@ describe('sync engine', () => {
     expect(await readFile(path.join(homeB, 'rules', '00-general.md'), 'utf8')).toBe('Shared rules\n');
   });
 
+  test('syncs provider-specific skill files as part of the master skills tree', async () => {
+    await useTempProviderHome();
+    const serverDb = path.join(await tempDir('reglet-sync-server-'), 'db.sqlite');
+    const app = useApp(createApp({ dbPath: serverDb, singleUserToken: 'sync-token' }));
+    const fetchImpl = appFetch(app);
+    const homeA = await tempDir('reglet-sync-a-');
+    const homeB = await tempDir('reglet-sync-b-');
+
+    await writeBasicMaster(homeA, 'A rules\n');
+    await mkdir(path.join(homeA, 'skills', 'codex', 'codex-only'), { recursive: true });
+    await writeFile(path.join(homeA, 'skills', 'codex', 'codex-only', 'SKILL.md'), 'codex only\n');
+    await mkdir(path.join(homeB, 'rules'), { recursive: true });
+    await mkdir(path.join(homeB, 'mcp'), { recursive: true });
+    await writeFile(path.join(homeB, 'mcp', 'servers.json'), `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`);
+    await writeFile(path.join(homeB, 'reglet.toml'), '[sync]\nserver_url = ""\n');
+    await configureTokenLogin('http://reglet.test', 'sync-token', 'device-a', homeA);
+    await configureTokenLogin('http://reglet.test', 'sync-token', 'device-b', homeB);
+
+    const syncA = await syncOnce(homeA, fetchImpl);
+    const syncB = await syncOnce(homeB, fetchImpl);
+
+    expect(syncA.pushed).toContain('skills/codex/codex-only/SKILL.md');
+    expect(syncB.pulled).toContain('skills/codex/codex-only/SKILL.md');
+    expect(await readFile(path.join(homeB, 'skills', 'codex', 'codex-only', 'SKILL.md'), 'utf8')).toBe(
+      'codex only\n',
+    );
+  });
+
   test('merges non-overlapping text edits and retries push after remote conflict', async () => {
+    await useTempProviderHome();
     const serverDb = path.join(await tempDir('reglet-sync-server-'), 'db.sqlite');
     const app = useApp(createApp({ dbPath: serverDb, singleUserToken: 'sync-token' }));
     const fetchImpl = appFetch(app);

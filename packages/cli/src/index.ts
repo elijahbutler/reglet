@@ -7,7 +7,6 @@ import { parse as parseToml } from 'smol-toml';
 import {
   applyAll,
   configureTokenLogin,
-  copyDirRecursive,
   detectDrift,
   getAdapter,
   importDriftedRules,
@@ -402,9 +401,9 @@ async function runOnboarding(providers: ProviderId[], contents: ApplyContent[]):
     if (contents.includes('rules')) {
       await importProviderRules(provider);
     }
-    if (contents.includes('skills')) {
-      await importProviderSkills(provider);
-    }
+    // Existing provider skills stay local and unmanaged by default. Importing
+    // them into the master would otherwise copy one provider's skills to all
+    // enrolled providers on the next apply.
     if (contents.includes('mcp')) {
       await importProviderMcp(provider);
     }
@@ -678,48 +677,6 @@ async function importProviderRules(provider: ProviderId): Promise<void> {
     if (!isNodeError(error) || (error.code !== 'ENOENT' && error.code !== 'EEXIST')) {
       throw error;
     }
-  }
-}
-
-async function importProviderSkills(provider: ProviderId): Promise<void> {
-  const adapter = getAdapter(provider);
-  const skillsDir = adapter.skillsDir();
-  if (skillsDir === null) {
-    return;
-  }
-
-  let entries;
-  try {
-    entries = await readdir(skillsDir, { withFileTypes: true });
-  } catch (error) {
-    if (isNodeError(error) && error.code === 'ENOENT') {
-      return;
-    }
-    throw error;
-  }
-
-  const masterSkillsDir = path.join(regletHome(), 'skills');
-  const existingNames = new Set<string>();
-  try {
-    for (const entry of await readdir(masterSkillsDir, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        existingNames.add(entry.name);
-      }
-    }
-  } catch (error) {
-    if (!isNodeError(error) || error.code !== 'ENOENT') {
-      throw error;
-    }
-  }
-
-  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-
-    const targetName = uniqueName(entry.name, provider, existingNames);
-    existingNames.add(targetName);
-    await copyDirRecursive(path.join(skillsDir, entry.name), path.join(masterSkillsDir, targetName));
   }
 }
 
