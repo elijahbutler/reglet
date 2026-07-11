@@ -34,7 +34,7 @@ Raw binaries are available from GitHub Releases:
 https://github.com/elijahbutler/reglet/releases
 ```
 
-The app and `.pkg` must be signed and notarized with an Apple Developer ID before broad distribution. Unsigned builds trigger Gatekeeper malware-verification warnings.
+The Homebrew cask uses an ad-hoc-signed app until Apple Developer ID signing and notarization are configured. Homebrew installs this build without quarantine; direct app downloads are not suitable for broad distribution yet.
 
 ## From Checkout
 

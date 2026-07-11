@@ -40,6 +40,7 @@ cask "reglet" do
   homepage "https://github.com/elijahbutler/reglet"
 
   depends_on macos: :sonoma
+  no_quarantine
 
   app "Reglet.app"
   binary "#{appdir}/Reglet.app/Contents/Resources/reglet"

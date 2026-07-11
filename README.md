@@ -58,7 +58,7 @@ GitHub Releases also include raw CLI binaries:
 https://github.com/elijahbutler/reglet/releases
 ```
 
-Public app distribution still requires Apple Developer ID signing and notarization. Unsigned builds are not suitable for broad Mac distribution.
+The Homebrew cask uses an ad-hoc-signed app until Apple Developer ID signing and notarization are configured. Direct app downloads are not suitable for broad Mac distribution yet.
 
 Source checkout:
 

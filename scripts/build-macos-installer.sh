@@ -88,7 +88,11 @@ if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
   codesign --force --timestamp --options runtime --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE"
   codesign --verify --strict --verbose=2 "$APP_BUNDLE"
 else
-  echo "CODESIGN_IDENTITY is not set; building an unsigned app bundle." >&2
+  echo "CODESIGN_IDENTITY is not set; ad-hoc signing the completed app bundle." >&2
+  codesign --force --sign - "$APP_BUNDLE/Contents/Resources/reglet"
+  codesign --force --sign - "$APP_BUNDLE/Contents/MacOS/RegletSetup"
+  codesign --force --sign - "$APP_BUNDLE"
+  codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 fi
 
 pkgbuild \
