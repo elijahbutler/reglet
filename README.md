@@ -1,147 +1,128 @@
 # Reglet
 
-![Reglet: one source of truth for every local agent](docs/assets/reglet-banner.svg)
+![Reglet engineering control plane banner](docs/assets/reglet-banner.svg)
+
+Reglet is a local-first control plane for AI agent configuration. It turns rules, skills, and MCP servers into infrastructure: one versionable master directory, deterministic provider adapters, backups, drift detection, optional daemon apply, and self-hosted sync.
 
 ```text
-agent config is infrastructure
-
-~/.reglet/
-  rules/          one rule system
-  skills/         one skill library
-  mcp/            one server registry
-      |
-      v
-  claude  codex  cursor  gemini  windsurf  opencode
+~/.reglet/                 provider outputs
+  rules/*.md        -+     ~/.claude/CLAUDE.md
+  skills/*/          +-->  ~/.codex/AGENTS.md
+  mcp/servers.json  -+     ~/.cursor/mcp.json
+  reglet.toml              ~/.gemini/settings.json
+                           ~/.codeium/.../mcp_config.json
+                           ~/.config/opencode/opencode.json
 ```
 
-Reglet is a local-first control plane for AI coding agents. It gives engineers one canonical directory for prompts, rules, skills, and MCP server definitions, then compiles that source into every tool-specific format your workstation needs.
+Reglet is built for engineers who treat agent setup as workstation infrastructure, not a hand-copied dotfile habit.
 
-It is built for the moment when agent setup stops being a personal dotfile habit and starts becoming engineering infrastructure: auditable, reversible, portable, syncable, and eventually team-distributable.
+## Status
 
-| Surface | Status |
+| Surface | State |
 |---|---|
-| Local master directory | implemented |
+| Master directory | implemented |
 | Provider adapters | Claude Code, Codex CLI, Cursor, Gemini CLI, Windsurf, OpenCode |
-| Onboarding import | implemented |
+| Selective onboarding import | implemented |
 | Safe apply + backups | implemented |
-| Drift detection | implemented |
+| Drift detection + import | implemented |
+| Restore / revert | implemented |
 | Daemon watching | opt-in, implemented |
 | Self-hosted sync | implemented |
+| Mac setup app + unsigned pkg | PR |
+| Signed/notarized installer | roadmap |
 | Hosted/team product | roadmap |
 
-> **v0.1:** V1 foundations are in place. Sync merge semantics and broad real-machine smoke testing are still being hardened.
+## Install
 
-## The Problem
-
-Every AI coding tool wants to own its own global configuration:
+Download the latest macOS package from GitHub Releases:
 
 ```text
-Claude Code     ~/.claude/CLAUDE.md        ~/.claude/skills/        ~/.claude.json
-Codex CLI       ~/.codex/AGENTS.md         ~/.agents/skills/        ~/.codex/config.toml
-Cursor          ~/.cursor/skills/          ~/.cursor/mcp.json
-Gemini CLI      ~/.gemini/GEMINI.md        ~/.gemini/skills/        ~/.gemini/settings.json
-Windsurf        ~/.codeium/.../rules.md    ~/.codeium/.../mcp_config.json
-OpenCode        ~/.config/opencode/...     ~/.config/opencode/opencode.json
+https://github.com/elijahbutler/reglet/releases
 ```
 
-Those files hold operational leverage: codebase rules, security boundaries, preferred tools, company workflows, and reusable skills. But without a source of truth, they become scattered, stale, hand-copied, and hard to recover.
+The unsigned package installs:
 
-Reglet treats those files like a build artifact.
+```text
+/usr/local/bin/reglet
+/Applications/Reglet Setup.app
+```
 
-## The Product Bet
+It does not install a daemon, start a background process, configure sync, or write provider files. Open `Reglet Setup.app` after install to scan providers and preview exact reads/writes before applying.
 
-Reglet starts as a developer tool and points toward a team product.
-
-- **For individuals:** keep every local agent aligned without manually editing six config systems.
-- **For founders:** establish the repo shape for hosted sync, shared skill packs, and team policy distribution.
-- **For engineering teams:** move agent context from tribal knowledge into versionable, inspectable infrastructure.
-
-The core architecture is intentionally local and open. The commercial path is not lock-in; it is managed distribution, hosted sync, policy, and visibility for teams that do not want to run the server themselves.
-
-## Terminal First
+Source checkout:
 
 ```bash
 git clone https://github.com/elijahbutler/reglet.git
 cd reglet
 bun install
-
-# inspect installed providers
 bun packages/cli/src/index.ts scan
-
-# import selected rules, skills, and MCP servers
-bun packages/cli/src/index.ts init
-
-# compile ~/.reglet into provider outputs
-bun packages/cli/src/index.ts apply
-
-# detect direct edits to generated files
-bun packages/cli/src/index.ts status --check
 ```
 
-Installed binary form:
+## CLI
 
 ```bash
+# inspect local provider inventory
 reglet scan
+reglet scan --json
+
+# preview first-run onboarding for setup UIs
+reglet plan --provider claude,codex --content rules,mcp --json
+
+# create ~/.reglet, import selected content, then apply
 reglet init
-reglet apply --provider claude
+
+# compile ~/.reglet into enrolled provider outputs
+reglet apply
 reglet diff
+
+# detect direct edits to generated files
 reglet status --check
+
+# recover from provider writes
+reglet restore claude
+reglet revert
 ```
+
+## Safety Invariants
+
+Reglet is conservative because global agent config is operational surface area.
+
+```text
+no onboarding       -> no provider writes
+no enrollment       -> no daemon
+no sync login       -> no sync
+no explicit command -> no launchd service
+every managed write -> backup + manifest record
+```
+
+- Provider files are backed up before managed writes.
+- Generated rules files include a Reglet header pointing back to `~/.reglet/`.
+- Drift is reported instead of silently overwritten.
+- Reglet-owned MCP entries are merged without deleting unmanaged provider keys.
+- Daemon execution, macOS notifications, and sync are opt-in.
 
 ## System Model
 
-![Reglet lifecycle: onboard, master, apply, drift, sync](docs/assets/reglet-lifecycle.svg)
+![Reglet lifecycle system diagram](docs/assets/reglet-lifecycle.svg)
 
 ```text
-             scan/import
-provider dirs ---------> ~/.reglet/
-                          |
-                          | apply
-                          v
-                  provider-specific outputs
-                          |
-                drift detection + backups
-                          |
-                          v
-                optional self-hosted sync
+scan/import -> master dir -> provider adapters -> generated outputs
+                  ^                    |
+                  |                    v
+             sync base            drift queue
+                  ^                    |
+                  └──── restore / import / apply
 ```
 
-The master directory is small on purpose:
+Master directory:
 
 ```text
 ~/.reglet/
-├── rules/                 # canonical agent instructions
-├── skills/                # canonical skill directories
-├── mcp/servers.json       # canonical MCP definitions
-├── reglet.toml            # enrollment and sync config
-└── .state/                # manifest, backups, drift queue, sync cursor
-```
-
-The apply engine converts that source into provider-specific files. MCP adapters merge Reglet-owned server entries while preserving unmanaged provider settings.
-
-## What Ships Today
-
-```text
-packages/core
-  master dir loader
-  provider registry
-  rules / skills / MCP conversion
-  safe apply, manifest, backups
-  drift import and revert
-  sync client and merge handling
-
-packages/cli
-  init / scan / apply / status / diff
-  enroll / unenroll / import / restore / revert
-  login / sync
-  daemon run / start / stop / install
-
-packages/server
-  Bun + Hono API
-  SQLite persistence
-  single-user token mode
-  account + device token mode
-  Docker-ready self-hosting
+|-- rules/                 # canonical agent instructions
+|-- skills/                # canonical skill directories
+|-- mcp/servers.json       # canonical MCP definitions
+|-- reglet.toml            # enrollment and sync config
+`-- .state/                # manifest, backups, drift queue, sync cursor
 ```
 
 ## Provider Matrix
@@ -155,27 +136,35 @@ packages/server
 | Windsurf | `~/.codeium/windsurf/memories/global_rules.md` | unsupported | `~/.codeium/windsurf/mcp_config.json` |
 | OpenCode | `~/.config/opencode/AGENTS.md` | `~/.config/opencode/skills/` | `~/.config/opencode/opencode.json` |
 
-## Safety Contract
-
-Reglet is conservative by default because global agent config is sensitive.
+## Packages
 
 ```text
-no onboarding  -> no provider writes
-no enrollment  -> no daemon
-no opt-in      -> no sync
-no .state/     -> no backup or cursor sync
-```
+packages/core
+  config, master dir, manifest, writer
+  provider adapters and MCP merges
+  apply, drift, import, restore/revert
+  sync client and merge engine
 
-- Onboarding is explicit and selective.
-- Provider files are backed up before managed writes.
-- Generated files include a header pointing back to `~/.reglet/`.
-- Drift is reported instead of silently overwritten.
-- Unmanaged MCP keys are preserved.
-- Daemon execution and macOS notifications are opt-in.
+packages/cli
+  init, scan, plan, apply, diff, status
+  enroll, unenroll, import, restore, revert
+  login, sync
+  daemon run/start/stop/install
+
+packages/server
+  Bun + Hono API
+  SQLite persistence
+  token and account/device modes
+  Docker-ready self-hosting
+
+apps/macos/RegletSetup
+  SwiftUI first-run setup shell
+  consumes scan/plan JSON from the CLI
+```
 
 ## Self-Hosted Sync
 
-Run the sync server yourself:
+Run a local sync server:
 
 ```bash
 REGLET_TOKEN=dev-token REGLET_DB=./reglet.sqlite bun packages/server/src/index.ts
@@ -188,19 +177,7 @@ reglet login http://localhost:3000 --token dev-token --device laptop
 reglet sync
 ```
 
-The server is Bun + Hono + SQLite, with a Dockerfile included. It syncs the master directory only: `rules/`, `skills/`, `mcp/servers.json`, and `reglet.toml`.
-
-## Repository Layout
-
-```text
-reglet/
-├── docs/                    # Installation, usage, architecture, providers, hosting
-├── packages/core/           # Provider adapters and local state engine
-├── packages/cli/            # Terminal UX and daemon
-├── packages/server/         # Self-hosted sync service
-├── scripts/                 # Binary build scripts
-└── ROADMAP.md
-```
+Sync scope is the master directory only: `rules/`, `skills/`, `mcp/servers.json`, and `reglet.toml`. Reglet never syncs `.state/`.
 
 ## Development
 
@@ -209,6 +186,7 @@ bun run typecheck
 bun test
 bun run lint
 bun run build:binaries
+bun run build:macos-installer
 ```
 
 ## Docs
@@ -220,10 +198,6 @@ bun run build:binaries
 - [Self-hosting](docs/self-hosting.md)
 - [Development](docs/development.md)
 - [Roadmap](ROADMAP.md)
-
-## Roadmap
-
-The next product phases are hosted sync, team/shared skill packs, subagent content types, more provider adapters, optional end-to-end encryption, and project-scope mode.
 
 ## License
 
