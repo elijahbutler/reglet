@@ -76,6 +76,55 @@ struct Safety: Decodable {
   let requiresExplicitConfirmation: Bool
 }
 
+struct StatusResponse: Decodable {
+  let version: Int
+  let regletHome: String
+  let providers: [Provider]
+  let drift: [DriftRecord]
+  let driftedCount: Int
+  let sync: SyncInfo
+
+  struct Provider: Decodable, Identifiable {
+    let id: String
+    let displayName: String
+    let enabled: Bool
+    let contents: ScanResponse.Contents
+  }
+
+  struct SyncInfo: Decodable {
+    let configured: Bool
+    let serverUrl: String
+    let deviceName: String
+  }
+}
+
+struct DriftRecord: Decodable, Identifiable {
+  let outputPath: String
+  let provider: String
+  let content: String
+  let status: String
+
+  var id: String { "\(provider):\(content):\(outputPath)" }
+}
+
+struct SyncRunResponse: Decodable {
+  let version: Int
+  let pulled: [String]
+  let pushed: [String]
+  let conflicts: [String]
+  let deleted: [String]
+}
+
+struct RulesListResponse: Decodable {
+  let version: Int
+  let documents: [Document]
+
+  struct Document: Decodable, Identifiable {
+    let path: String
+    var id: String { path }
+  }
+}
+
 enum ContentKind: String, CaseIterable, Identifiable {
   case rules
   case skills

@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
+import { accountSession, claimPairing, loginWithAccount, startPairing } from '../src/sync/account.js';
 import { configureTokenLogin, syncOnce, tryMergeText } from '../src/sync/engine.js';
 import { closeApp, createApp } from '../../../packages/server/src/app.js';
 
@@ -130,6 +131,44 @@ describe('sync engine', () => {
     expect(await readFile(path.join(homeB, 'rules', '00-general.md'), 'utf8')).toBe(
       'line one remote\nline two local\nline three\n',
     );
+  });
+
+  test('account login pairs a device and pairing codes work across devices and restarts', async () => {
+    await useTempProviderHome();
+    const serverDb = path.join(await tempDir('reglet-sync-server-'), 'db.sqlite');
+    const app = useApp(createApp({ dbPath: serverDb }));
+    const fetchImpl = appFetch(app);
+    const homeA = await tempDir('reglet-sync-a-');
+    const homeB = await tempDir('reglet-sync-b-');
+
+    await writeBasicMaster(homeA, 'Account rules\n');
+    await mkdir(path.join(homeB, 'rules'), { recursive: true });
+    await mkdir(path.join(homeB, 'mcp'), { recursive: true });
+    const stateA = await loginWithAccount({
+      serverUrl: 'http://reglet.test',
+      email: 'user@example.com',
+      password: 'secret-password',
+      deviceName: 'device-a',
+      mode: 'register',
+      home: homeA,
+      fetchImpl,
+    });
+    expect(stateA.deviceToken.length).toBeGreaterThan(0);
+
+    // Pair a second device with a code issued by the account, claimed after a
+    // simulated server restart (new app instance, same SQLite file).
+    const sessionToken = await accountSession('http://reglet.test', 'user@example.com', 'secret-password', 'login', fetchImpl);
+    const code = await startPairing('http://reglet.test', sessionToken, fetchImpl);
+    const restarted = useApp(createApp({ dbPath: serverDb }));
+    const stateB = await claimPairing('http://reglet.test', code, 'device-b', homeB, appFetch(restarted));
+    expect(stateB.deviceToken.length).toBeGreaterThan(0);
+    expect(stateB.deviceToken).not.toBe(stateA.deviceToken);
+
+    const syncA = await syncOnce(homeA, appFetch(restarted));
+    const syncB = await syncOnce(homeB, appFetch(restarted));
+    expect(syncA.pushed).toContain('rules/00-general.md');
+    expect(syncB.pulled).toContain('rules/00-general.md');
+    expect(await readFile(path.join(homeB, 'rules', '00-general.md'), 'utf8')).toBe('Account rules\n');
   });
 
   test('tryMergeText returns null for overlapping text edits', () => {

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { defaultConfig, saveConfig, type ProviderName } from '../src/config.js';
 import { applyAll } from '../src/engine/apply.js';
 import { appendDriftEvent, clearDriftEvents, detectDrift, listDriftEvents } from '../src/engine/drift.js';
-import { importDriftedRules } from '../src/engine/import.js';
+import { importDriftedMcp, importDriftedRules, importDriftedSkills } from '../src/engine/import.js';
 import { revert, restore } from '../src/engine/revert.js';
 import { GENERATED_HEADER } from '../src/header.js';
 import { loadManifest } from '../src/manifest.js';
@@ -111,6 +111,79 @@ describe('drift, import, and revert', () => {
 
     expect(result.importedPath).toBe(path.join(home, 'rules', 'imported-claude-2026-07-10.md'));
     expect(await readFile(result.importedPath, 'utf8')).toBe('Imported body.\n');
+  });
+
+  test('importDriftedSkills copies modified managed skills back to their master source', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await mkdir(path.join(home, 'rules'), { recursive: true });
+    await mkdir(path.join(home, 'skills', 'shared-skill'), { recursive: true });
+    await writeFile(path.join(home, 'skills', 'shared-skill', 'SKILL.md'), 'original shared\n');
+    await mkdir(path.join(home, 'skills', 'claude', 'scoped-skill'), { recursive: true });
+    await writeFile(path.join(home, 'skills', 'claude', 'scoped-skill', 'SKILL.md'), 'original scoped\n');
+    await enableProviders(home, ['claude']);
+    await applyAll({ providers: ['claude'], contents: ['skills'] });
+
+    const sharedOutput = path.join(providerHome, '.claude', 'skills', 'shared-skill', 'SKILL.md');
+    const scopedOutput = path.join(providerHome, '.claude', 'skills', 'scoped-skill', 'SKILL.md');
+    await writeFile(sharedOutput, 'edited shared\n');
+    await writeFile(scopedOutput, 'edited scoped\n');
+
+    const result = await importDriftedSkills('claude', home);
+
+    expect(result.imported.map((skill) => skill.name).sort()).toEqual(['scoped-skill', 'shared-skill']);
+    expect(await readFile(path.join(home, 'skills', 'shared-skill', 'SKILL.md'), 'utf8')).toBe('edited shared\n');
+    expect(await readFile(path.join(home, 'skills', 'claude', 'scoped-skill', 'SKILL.md'), 'utf8')).toBe('edited scoped\n');
+
+    // A second import finds nothing new only after re-apply refreshes hashes.
+    await applyAll({ providers: ['claude'], contents: ['skills'] });
+    expect((await importDriftedSkills('claude', home)).imported).toEqual([]);
+  });
+
+  test('importDriftedMcp writes managed provider server values back into the master file', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await mkdir(path.join(home, 'rules'), { recursive: true });
+    await mkdir(path.join(home, 'mcp'), { recursive: true });
+    await writeFile(
+      path.join(home, 'mcp', 'servers.json'),
+      `${JSON.stringify({ mcpServers: { managed: { command: 'node', args: ['server.js'] } } }, null, 2)}\n`,
+    );
+    await enableProviders(home, ['claude']);
+    await applyAll({ providers: ['claude'], contents: ['mcp'] });
+
+    const outputPath = path.join(providerHome, '.claude.json');
+    await writeFile(
+      outputPath,
+      `${JSON.stringify({ mcpServers: { managed: { command: 'ruby' }, user: { command: 'python' } } }, null, 2)}\n`,
+    );
+
+    const result = await importDriftedMcp('claude', home);
+
+    expect(result.importedServers).toEqual(['managed']);
+    const master = JSON.parse(await readFile(path.join(home, 'mcp', 'servers.json'), 'utf8')) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(master.mcpServers.managed).toEqual({ command: 'ruby' });
+    expect(master.mcpServers.user).toBeUndefined();
+  });
+
+  test('importDriftedMcp imports removal of a managed server', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await mkdir(path.join(home, 'mcp'), { recursive: true });
+    await enableProviders(home, ['claude']);
+    await writeFile(
+      path.join(home, 'mcp', 'servers.json'),
+      `${JSON.stringify({ mcpServers: { managed: { command: 'node' } } }, null, 2)}\n`,
+    );
+    await applyAll({ providers: ['claude'], contents: ['mcp'] }, home);
+    await writeFile(path.join(providerHome, '.claude.json'), `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`);
+
+    const result = await importDriftedMcp('claude', home);
+    const master = JSON.parse(await readFile(path.join(home, 'mcp', 'servers.json'), 'utf8')) as {
+      mcpServers: Record<string, unknown>;
+    };
+
+    expect(result.importedServers).toEqual([]);
+    expect(master.mcpServers.managed).toBeUndefined();
   });
 
   test('revert restores backed-up originals byte-identically and removes created outputs', async () => {

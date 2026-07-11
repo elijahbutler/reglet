@@ -8,6 +8,14 @@ The app does not implement provider logic directly. It shells out to the install
 reglet scan --json
 reglet plan --json
 reglet init --provider <providers> --content <contents>
+reglet status --json
+reglet rules list --json
+reglet rules read <path>
+reglet rules write <path>
+reglet diff --content rules
+reglet apply --content rules
+reglet login <url> --token <token> --device <name>
+reglet sync --json
 reglet restore <provider>
 reglet revert <provider>
 ```
