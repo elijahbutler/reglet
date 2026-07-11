@@ -43,7 +43,7 @@ brew tap elijahbutler/reglet
 brew install --cask elijahbutler/reglet/reglet
 ```
 
-This installs `Reglet.app` and exposes its bundled CLI as `reglet`. It does not install a daemon, start a background process, configure sync, or write provider files without confirmation.
+This installs `Reglet.app` and exposes its bundled CLI as `reglet`. Until Apple Developer ID signing and notarization are configured, the cask removes quarantine from the checksum-verified app bundle. It does not install a daemon, start a background process, configure sync, or write provider files without confirmation.
 
 CLI-only install:
 

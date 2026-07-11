@@ -40,10 +40,13 @@ cask "reglet" do
   homepage "https://github.com/elijahbutler/reglet"
 
   depends_on macos: :sonoma
-  no_quarantine
 
   app "Reglet.app"
   binary "#{appdir}/Reglet.app/Contents/Resources/reglet"
+
+  postflight do
+    system "xattr -dr com.apple.quarantine #{appdir}/Reglet.app"
+  end
 end
 RUBY
 
