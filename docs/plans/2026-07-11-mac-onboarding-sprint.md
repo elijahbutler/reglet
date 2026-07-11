@@ -48,7 +48,7 @@ Implementation notes:
 
 ### 3. Installer packaging
 
-Status: unsigned GitHub Release `.pkg` path implemented with `scripts/build-macos-installer.sh`.
+Status: GitHub Release `.pkg` path implemented with `scripts/build-macos-installer.sh`; release signing/notarization is wired and requires Apple Developer secrets.
 
 Create a notarization-ready packaging path for macOS.
 
@@ -67,9 +67,18 @@ GitHub Release artifacts:
 
 Remaining production hardening:
 
-- Developer ID signing.
-- Apple notarization and stapling.
 - Optional `.dmg` presentation wrapper.
+
+Required GitHub secrets for verified downloads:
+
+- `APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64`: base64-encoded `.p12` for `Developer ID Application`.
+- `APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD`: password for that `.p12`.
+- `APPLE_DEVELOPER_ID_INSTALLER_CERT_BASE64`: base64-encoded `.p12` for `Developer ID Installer`.
+- `APPLE_DEVELOPER_ID_INSTALLER_CERT_PASSWORD`: password for that `.p12`.
+- `APPLE_BUILD_KEYCHAIN_PASSWORD`: temporary CI keychain password.
+- `APPLE_NOTARY_KEY_BASE64`: base64-encoded App Store Connect API key `.p8`.
+- `APPLE_NOTARY_KEY_ID`: App Store Connect API key ID.
+- `APPLE_NOTARY_ISSUER_ID`: App Store Connect issuer UUID.
 
 ### 4. Restore and recovery
 

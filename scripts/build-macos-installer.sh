@@ -9,6 +9,9 @@ PAYLOAD_DIR="$WORK_DIR/payload"
 APP_BUNDLE="$PAYLOAD_DIR/Applications/Reglet Setup.app"
 VERSION="${REGLET_VERSION:-0.1.0}"
 ARCH="$(uname -m)"
+PKG_PATH="$OUT_DIR/reglet-macos-$ARCH.pkg"
+UNSIGNED_PKG_PATH="$WORK_DIR/reglet-macos-$ARCH-unsigned.pkg"
+APP_ZIP_PATH="$OUT_DIR/reglet-setup-macos-$ARCH.app.zip"
 
 case "$ARCH" in
   arm64) CLI_BINARY="$OUT_DIR/reglet-darwin-arm64" ;;
@@ -76,14 +79,43 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
+  codesign --force --timestamp --options runtime --sign "$CODESIGN_IDENTITY" "$PAYLOAD_DIR/usr/local/bin/reglet"
+  codesign --force --timestamp --options runtime --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE/Contents/MacOS/RegletSetup"
+  codesign --force --timestamp --options runtime --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE"
+  codesign --verify --strict --verbose=2 "$APP_BUNDLE"
+else
+  echo "CODESIGN_IDENTITY is not set; building an unsigned app bundle." >&2
+fi
+
 pkgbuild \
   --root "$PAYLOAD_DIR" \
   --identifier "com.reglet.installer" \
   --version "$VERSION" \
   --install-location "/" \
-  "$OUT_DIR/reglet-macos-$ARCH.pkg"
+  "$UNSIGNED_PKG_PATH"
 
-ditto -c -k --keepParent "$APP_BUNDLE" "$OUT_DIR/reglet-setup-macos-$ARCH.app.zip"
+if [[ -n "${PRODUCTSIGN_IDENTITY:-}" ]]; then
+  productsign --sign "$PRODUCTSIGN_IDENTITY" "$UNSIGNED_PKG_PATH" "$PKG_PATH"
+  pkgutil --check-signature "$PKG_PATH"
+else
+  echo "PRODUCTSIGN_IDENTITY is not set; publishing an unsigned package." >&2
+  cp "$UNSIGNED_PKG_PATH" "$PKG_PATH"
+fi
 
-echo "Built $OUT_DIR/reglet-macos-$ARCH.pkg"
-echo "Built $OUT_DIR/reglet-setup-macos-$ARCH.app.zip"
+if [[ -n "${NOTARY_KEY_PATH:-}" && -n "${APPLE_NOTARY_KEY_ID:-}" && -n "${APPLE_NOTARY_ISSUER_ID:-}" ]]; then
+  xcrun notarytool submit "$PKG_PATH" \
+    --key "$NOTARY_KEY_PATH" \
+    --key-id "$APPLE_NOTARY_KEY_ID" \
+    --issuer "$APPLE_NOTARY_ISSUER_ID" \
+    --wait
+  xcrun stapler staple "$PKG_PATH"
+  xcrun stapler validate "$PKG_PATH"
+else
+  echo "Notary credentials are not set; package is not notarized." >&2
+fi
+
+ditto -c -k --keepParent "$APP_BUNDLE" "$APP_ZIP_PATH"
+
+echo "Built $PKG_PATH"
+echo "Built $APP_ZIP_PATH"

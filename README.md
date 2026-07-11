@@ -40,7 +40,7 @@ Download the latest macOS package from GitHub Releases:
 https://github.com/elijahbutler/reglet/releases
 ```
 
-The unsigned package installs:
+The package installs:
 
 ```text
 /usr/local/bin/reglet
@@ -48,6 +48,8 @@ The unsigned package installs:
 ```
 
 It does not install a daemon, start a background process, configure sync, or write provider files. Open `Reglet Setup.app` after install to scan providers and preview exact reads/writes before applying.
+
+If macOS says it cannot verify the package, that release was not Developer ID signed and notarized. Use the source checkout path until a verified release is published.
 
 Source checkout:
 
