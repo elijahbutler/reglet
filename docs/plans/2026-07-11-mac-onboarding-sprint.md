@@ -48,9 +48,9 @@ Implementation notes:
 
 ### 3. Installer packaging
 
-Status: GitHub Release `.pkg` path implemented with `scripts/build-macos-installer.sh`; release signing/notarization is wired and requires Apple Developer secrets.
+Status: Homebrew CLI distribution is the active install path. The native `.pkg` path is blocked until Reglet has Apple Developer ID signing and notarization.
 
-Create a notarization-ready packaging path for macOS.
+Create a trusted distribution path for macOS.
 
 Requirements:
 
@@ -62,15 +62,27 @@ Requirements:
 
 GitHub Release artifacts:
 
-- `reglet-macos-<arch>.pkg`
-- `reglet-setup-macos-<arch>.app.zip`
+- `reglet-darwin-arm64`
+- `reglet-darwin-x64`
+- `reglet-windows-x64.exe`
+
+Homebrew install:
+
+```bash
+brew tap elijahbutler/reglet
+brew trust --formula elijahbutler/reglet/reglet
+brew install reglet
+```
 
 Remaining production hardening:
 
+- Developer ID signing and Apple notarization.
+- Re-enable downloadable `.pkg` or `.dmg`.
 - Optional `.dmg` presentation wrapper.
 
 Required GitHub secrets for verified downloads:
 
+- `HOMEBREW_TAP_TOKEN`: token with write access to `elijahbutler/homebrew-reglet` so releases can update `Formula/reglet.rb`.
 - `APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64`: base64-encoded `.p12` for `Developer ID Application`.
 - `APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD`: password for that `.p12`.
 - `APPLE_DEVELOPER_ID_INSTALLER_CERT_BASE64`: base64-encoded `.p12` for `Developer ID Installer`.

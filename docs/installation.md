@@ -1,6 +1,6 @@
 # Installation
 
-Reglet can be installed from a GitHub Release or from source.
+Reglet can be installed with Homebrew, from a GitHub Release binary, or from source.
 
 ## Requirements
 
@@ -8,22 +8,27 @@ Reglet can be installed from a GitHub Release or from source.
 - Git
 - macOS or Windows for daemon service installation
 
-## macOS GitHub Installer
+## Homebrew
 
-Download the latest `reglet-macos-<arch>.pkg` from GitHub Releases:
+Recommended macOS install:
+
+```bash
+brew tap elijahbutler/reglet
+brew trust --formula elijahbutler/reglet/reglet
+brew install reglet
+```
+
+This installs the `reglet` CLI only. It does **not** install, load, or start the Reglet daemon. It does **not** configure sync or write provider files.
+
+## GitHub Release Binaries
+
+Raw binaries are available from GitHub Releases:
 
 ```text
 https://github.com/elijahbutler/reglet/releases
 ```
 
-The package installs:
-
-- `reglet` to `/usr/local/bin/reglet`
-- `Reglet Setup.app` to `/Applications/Reglet Setup.app`
-
-The installer does **not** install, load, or start the Reglet daemon. It does **not** configure sync. Open `Reglet Setup.app` after installation to scan providers, preview file reads/writes, and explicitly confirm backup/apply.
-
-If macOS reports that it cannot verify the package is free of malware, the package was built without Developer ID signing and Apple notarization. Do not use unsigned installer packages for broad distribution; use the source install path below until a signed/notarized release is available.
+The native `.pkg` installer path is blocked until Reglet has Apple Developer ID signing and notarization. Unsigned packages trigger Gatekeeper malware-verification warnings and should not be used for broad distribution.
 
 ## From Checkout
 

@@ -28,28 +28,30 @@ Reglet is built for engineers who treat agent setup as workstation infrastructur
 | Restore / revert | implemented |
 | Daemon watching | opt-in, implemented |
 | Self-hosted sync | implemented |
-| Mac setup app + unsigned pkg | PR |
-| Signed/notarized installer | roadmap |
+| Homebrew tap | implemented |
+| Mac setup app | implemented, installer blocked on Developer ID |
+| Signed/notarized installer | blocked |
 | Hosted/team product | roadmap |
 
 ## Install
 
-Download the latest macOS package from GitHub Releases:
+Recommended macOS install:
+
+```bash
+brew tap elijahbutler/reglet
+brew trust --formula elijahbutler/reglet/reglet
+brew install reglet
+```
+
+This installs the CLI only. It does not install a daemon, start a background process, configure sync, or write provider files.
+
+GitHub Releases also include raw CLI binaries:
 
 ```text
 https://github.com/elijahbutler/reglet/releases
 ```
 
-The package installs:
-
-```text
-/usr/local/bin/reglet
-/Applications/Reglet Setup.app
-```
-
-It does not install a daemon, start a background process, configure sync, or write provider files. Open `Reglet Setup.app` after install to scan providers and preview exact reads/writes before applying.
-
-If macOS says it cannot verify the package, that release was not Developer ID signed and notarized. Use the source checkout path until a verified release is published.
+The native `.pkg` installer path is blocked until Reglet has Apple Developer ID signing and notarization. Unsigned packages are not suitable for broad Mac distribution.
 
 Source checkout:
 
