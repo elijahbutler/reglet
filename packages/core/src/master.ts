@@ -141,7 +141,7 @@ async function collectFiles(rootDir: string): Promise<MasterSkillFile[]> {
         await visit(absPath);
       } else if (entry.isFile()) {
         files.push({
-          relPath: path.relative(rootDir, absPath),
+          relPath: normalizeRelativePath(path.relative(rootDir, absPath)),
           absPath,
         });
       }
@@ -193,6 +193,10 @@ function readOptionalStringRecord(value: unknown): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizeRelativePath(relativePath: string): string {
+  return relativePath.split(path.sep).join('/');
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

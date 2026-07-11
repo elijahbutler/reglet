@@ -145,7 +145,7 @@ async function hashDirectory(dirPath: string): Promise<string> {
       }
 
       if (entry.isFile()) {
-        const relPath = path.relative(dirPath, entryPath);
+        const relPath = normalizeRelativePath(path.relative(dirPath, entryPath));
         parts.push(`${relPath}\0${await readFile(entryPath, 'utf8')}`);
       }
     }
@@ -157,4 +157,8 @@ async function hashDirectory(dirPath: string): Promise<string> {
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && 'code' in error;
+}
+
+function normalizeRelativePath(relativePath: string): string {
+  return relativePath.split(path.sep).join('/');
 }
