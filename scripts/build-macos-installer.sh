@@ -6,12 +6,13 @@ OUT_DIR="$ROOT_DIR/dist"
 APP_DIR="$ROOT_DIR/apps/macos/RegletSetup"
 WORK_DIR="$OUT_DIR/macos-installer"
 PAYLOAD_DIR="$WORK_DIR/payload"
-APP_BUNDLE="$PAYLOAD_DIR/Applications/Reglet Setup.app"
-VERSION="${REGLET_VERSION:-0.1.0}"
-ARCH="$(uname -m)"
+APP_BUNDLE="$PAYLOAD_DIR/Applications/Reglet.app"
+VERSION="${REGLET_VERSION:-${GITHUB_REF_NAME:-0.1.0}}"
+VERSION="${VERSION#v}"
+ARCH="${REGLET_ARCH:-$(uname -m)}"
 PKG_PATH="$OUT_DIR/reglet-macos-$ARCH.pkg"
 UNSIGNED_PKG_PATH="$WORK_DIR/reglet-macos-$ARCH-unsigned.pkg"
-APP_ZIP_PATH="$OUT_DIR/reglet-setup-macos-$ARCH.app.zip"
+APP_ZIP_PATH="$OUT_DIR/reglet-macos-$ARCH.app.zip"
 
 case "$ARCH" in
   arm64) CLI_BINARY="$OUT_DIR/reglet-darwin-arm64" ;;
@@ -49,6 +50,7 @@ fi
 
 install -m 0755 "$CLI_BINARY" "$PAYLOAD_DIR/usr/local/bin/reglet"
 install -m 0755 "$SWIFT_BIN" "$APP_BUNDLE/Contents/MacOS/RegletSetup"
+install -m 0755 "$CLI_BINARY" "$APP_BUNDLE/Contents/Resources/reglet"
 
 cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -60,11 +62,11 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key>
   <string>RegletSetup</string>
   <key>CFBundleIdentifier</key>
-  <string>com.reglet.setup</string>
+  <string>com.reglet.app</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>Reglet Setup</string>
+  <string>Reglet</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -81,6 +83,7 @@ PLIST
 
 if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
   codesign --force --timestamp --options runtime --sign "$CODESIGN_IDENTITY" "$PAYLOAD_DIR/usr/local/bin/reglet"
+  codesign --force --timestamp --options runtime --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE/Contents/Resources/reglet"
   codesign --force --timestamp --options runtime --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE/Contents/MacOS/RegletSetup"
   codesign --force --timestamp --options runtime --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE"
   codesign --verify --strict --verbose=2 "$APP_BUNDLE"

@@ -1,11 +1,12 @@
 #!/usr/bin/env bun
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { confirm, isCancel, multiselect, outro } from '@clack/prompts';
 import { Command, InvalidArgumentError } from 'commander';
 import { parse as parseToml } from 'smol-toml';
 import {
   applyAll,
+  adoptSkill,
   configureTokenLogin,
   detectDrift,
   getAdapter,
@@ -13,6 +14,7 @@ import {
   initMasterDir,
   loadConfig,
   loadMasterDir,
+  listUnmanagedSkills,
   type McpServerDef,
   regletHome,
   restore,
@@ -23,6 +25,7 @@ import {
   type ApplyResult,
   type ProviderId,
   type ProviderInventory,
+  type SkillAdoptionScope,
 } from '@reglet/core';
 import { allAdapters } from '@reglet/core';
 import {
@@ -42,11 +45,12 @@ const contentIds = ['rules', 'skills', 'mcp'] as const;
 type ContentId = (typeof contentIds)[number];
 
 const program = new Command();
+const version = process.env.REGLET_VERSION ?? '0.1.0';
 
 program
   .name('reglet')
   .description('Manage global AI agent rules, skills, and MCP configs')
-  .version('0.1.0');
+  .version(version);
 
 program
   .command('init')
@@ -197,6 +201,51 @@ program
     const result = await importDriftedRules(target.provider);
     console.log(`${result.provider}\trules\timported\t${result.importedPath}`);
   });
+
+const skills = program.command('skills').description('Inspect and adopt provider-local skills');
+
+skills
+  .command('unmanaged')
+  .description('List provider-local skills that Reglet does not manage')
+  .option('--json', 'print machine-readable JSON for manager apps')
+  .action(async (options: { json?: boolean }) => {
+    const unmanaged = await listUnmanagedSkills();
+    if (options.json === true) {
+      printJson({ version: 1, skills: unmanaged });
+      return;
+    }
+    for (const skill of unmanaged) {
+      console.log(`${skill.provider}\t${skill.name}\t${skill.sourcePath}`);
+    }
+  });
+
+skills
+  .command('adopt')
+  .description('Copy a provider-local skill into the Reglet master')
+  .argument('<provider>', 'provider containing the local skill', parseProvider)
+  .argument('<name>', 'skill directory name')
+  .requiredOption('--scope <scope>', 'shared or provider', parseSkillScope)
+  .option('--overwrite', 'replace an existing master skill at the destination')
+  .option('--json', 'print machine-readable JSON for manager apps')
+  .action(
+    async (
+      provider: ProviderId,
+      name: string,
+      options: { scope: SkillAdoptionScope; overwrite?: boolean; json?: boolean },
+    ) => {
+      const adopted = await adoptSkill({
+        provider,
+        name,
+        scope: options.scope,
+        overwrite: options.overwrite,
+      });
+      if (options.json === true) {
+        printJson({ version: 1, adoption: adopted });
+        return;
+      }
+      console.log(`${adopted.provider}\t${adopted.name}\t${adopted.scope}\t${adopted.destination}`);
+    },
+  );
 
 program
   .command('login')
@@ -355,6 +404,11 @@ function safetyDefaults(): SafetyJson {
     notificationsEnabled: false,
     requiresExplicitConfirmation: true,
   };
+}
+
+function parseSkillScope(value: string): SkillAdoptionScope {
+  if (value === 'shared' || value === 'provider') return value;
+  throw new InvalidArgumentError(`Unknown skill scope: ${value}`);
 }
 
 function parseProvider(value: string): ProviderId {
@@ -551,18 +605,15 @@ async function buildContentPlan(
   if (content === 'skills') {
     const skillsDir = inventory.skillsDir;
     const supported = skillsDir !== null;
-    const writePaths = supported
-      ? [
-          ...(await plannedSkillImportPaths(provider, inventory.skills)),
-          skillsDir,
-        ]
-      : [];
+    const writePaths = supported ? [skillsDir] : [];
     return {
       selected: true,
       supported,
       readPaths: skillsDir !== null && inventory.skills.length > 0 ? [skillsDir] : [],
       writePaths,
-      notes: supported ? [] : [`${provider}:skills unsupported`],
+      notes: supported
+        ? ['Provider-local skills remain unmanaged until explicitly adopted']
+        : [`${provider}:skills unsupported`],
     };
   }
 
@@ -578,30 +629,6 @@ async function buildContentPlan(
     writePaths,
     notes: inventory.mcpPath === null ? [`${provider}:mcp unsupported`] : [],
   };
-}
-
-async function plannedSkillImportPaths(provider: ProviderId, skillNames: string[]): Promise<string[]> {
-  const masterSkillsDir = path.join(regletHome(), 'skills');
-  const existingNames = new Set<string>();
-  try {
-    for (const entry of await readdir(masterSkillsDir, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        existingNames.add(entry.name);
-      }
-    }
-  } catch (error) {
-    if (!isNodeError(error) || error.code !== 'ENOENT') {
-      throw error;
-    }
-  }
-
-  const paths: string[] = [];
-  for (const skillName of skillNames.sort((left, right) => left.localeCompare(right))) {
-    const targetName = uniqueName(skillName, provider, existingNames);
-    existingNames.add(targetName);
-    paths.push(path.join(masterSkillsDir, targetName));
-  }
-  return paths;
 }
 
 function plannedFile(
