@@ -143,6 +143,21 @@ struct RulesListResponse: Decodable {
   }
 }
 
+struct RuleMergeDraftResponse: Decodable {
+  let version: Int
+  let provider: String
+  let draft: String
+  let sources: [Source]
+
+  struct Source: Decodable, Identifiable {
+    let provider: String
+    let sourcePath: String
+    let bytes: Int
+
+    var id: String { "\(provider):\(sourcePath)" }
+  }
+}
+
 enum ContentKind: String, CaseIterable, Identifiable {
   case rules
   case skills
@@ -222,4 +237,20 @@ struct SkillAdoptionResponse: Decodable {
 enum SkillAdoptionScope: String {
   case shared
   case provider
+}
+
+enum RulePromptMode: String, CaseIterable, Identifiable {
+  case unified
+  case providerSpecific
+
+  var id: String { rawValue }
+
+  var label: String {
+    switch self {
+    case .unified:
+      "Unified prompt"
+    case .providerSpecific:
+      "Provider-specific prompts"
+    }
+  }
 }

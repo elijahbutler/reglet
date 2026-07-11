@@ -59,17 +59,21 @@ struct RegletCommand {
     return try decode(PlanResponse.self, from: result.stdout, command: "reglet \(arguments.joined(separator: " "))")
   }
 
-  func onboard(providers: [String], contents: [ContentKind]) async throws -> CommandResult {
+  func onboard(providers: [String], contents: [ContentKind], includeEmptyContent: Bool = false) async throws -> CommandResult {
     var arguments = ["init"]
     if !providers.isEmpty {
       arguments.append("--provider")
       arguments.append(providers.joined(separator: ","))
     }
-    if !contents.isEmpty {
+    if !contents.isEmpty || includeEmptyContent {
       arguments.append("--content")
       arguments.append(contents.map(\.rawValue).joined(separator: ","))
     }
     return try await run(arguments)
+  }
+
+  func enroll(_ target: String) async throws -> CommandResult {
+    try await run(["enroll", target])
   }
 
   func restore(provider: String) async throws -> CommandResult {
@@ -113,6 +117,17 @@ struct RegletCommand {
 
   func writeRule(path: String, content: String) async throws {
     _ = try await run(["rules", "write", path], stdin: content)
+  }
+
+  func mergeRuleDraft(providers: [String]) async throws -> RuleMergeDraftResponse {
+    var arguments = ["rules", "merge-draft"]
+    if !providers.isEmpty {
+      arguments.append("--provider")
+      arguments.append(providers.joined(separator: ","))
+    }
+    arguments.append("--json")
+    let result = try await run(arguments)
+    return try decode(RuleMergeDraftResponse.self, from: result.stdout, command: "reglet \(arguments.joined(separator: " "))")
   }
 
   func diffRules() async throws -> String {
