@@ -47,6 +47,13 @@ The macOS app will become Reglet's primary product surface. The CLI remains the 
 - Surface provider-specific overrides clearly when a scoped skill shadows a shared skill.
 - Use familiar document-style editing with explicit Save and Apply actions; never silently apply edits to provider outputs.
 
+#### Onboarding reconciliation follow-up
+
+- Show the projected master skill inventory before onboarding applies, including provider scope, shared-skill shadows, and collision renames.
+- Compare discovered provider rule files in the preview with source path, provider, matching/different status, and a bounded content preview.
+- Explain how differing provider rules will be preserved as separate master documents and composed into generated outputs before the user confirms onboarding.
+- Rebuild this preview against the current structured skills and rules contracts; do not revive the superseded selective-import implementation from PR #11.
+
 #### Sync, drift, and recovery
 
 - Add self-hosted sync setup for server URL, token, device name, connection testing, manual sync, last result, and failure details.
