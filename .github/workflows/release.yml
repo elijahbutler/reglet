@@ -17,9 +17,12 @@ jobs:
       - run: bun run typecheck
       - run: bun test
       - run: bun run build:binaries
+      - run: bun run build:macos-installer
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/reglet-darwin-arm64
             dist/reglet-darwin-x64
             dist/reglet-windows-x64.exe
+            dist/reglet-macos-*.pkg
+            dist/reglet-setup-macos-*.app.zip

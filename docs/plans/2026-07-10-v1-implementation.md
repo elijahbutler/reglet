@@ -171,6 +171,8 @@ In `packages/server` (Bun + Hono + `bun:sqlite`):
 ### Task 11: Mac installer + first-run onboarding UI
 
 Make the first test install friendly enough for a non-contributor Mac user:
+- Sprint plan: `docs/plans/2026-07-11-mac-onboarding-sprint.md`.
+- CLI setup contract implemented: `reglet scan --json` and `reglet plan --json` provide the native app with provider inventory, onboarding reads/writes, and safety defaults without mutating files.
 - Ship a signed/notarization-ready `.pkg` or `.dmg` path that installs the `reglet` binary without starting any background process.
 - Add a small macOS setup app or menu-bar style onboarding shell that calls the existing CLI/core flows rather than reimplementing provider logic.
 - First-run flow: scan installed providers → show checkboxes for Claude Code, Codex CLI, Cursor, Gemini CLI, Windsurf, and OpenCode → show content-type checkboxes for rules, skills, and MCP → preview exact files Reglet will read/write → require explicit confirmation before backup/apply.
