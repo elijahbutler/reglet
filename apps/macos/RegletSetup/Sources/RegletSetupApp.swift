@@ -107,10 +107,10 @@ struct ManagerDetail: View {
       case .providers: ProvidersManagerView(showsOnboarding: $showsOnboarding)
       case .skills: SkillsManagerView()
       case .recovery: RecoveryManagerView()
-      case .rules: InventoryManagerView(kind: .rules)
+      case .rules: RulesManagerView()
       case .mcp: InventoryManagerView(kind: .mcp)
-      case .sync: EmptyManagerView(title: "Sync", symbol: section.symbol, message: "Not configured")
-      case .activity: EmptyManagerView(title: "Activity & Drift", symbol: section.symbol, message: "No pending activity")
+      case .sync: SyncManagerView()
+      case .activity: ActivityDriftManagerView()
       }
     }
     .navigationTitle(section.title)
@@ -442,6 +442,109 @@ struct InventoryManagerView: View {
   }
 }
 
+struct RulesManagerView: View {
+  @EnvironmentObject private var model: SetupModel
+  @State private var selectedPath: String?
+  @State private var content = ""
+  @State private var savedContent = ""
+  @State private var applyPreview: String?
+
+  private var hasUnsavedChanges: Bool { content != savedContent }
+
+  var body: some View {
+    HSplitView {
+      List(model.ruleDocuments, selection: $selectedPath) { document in
+        Label(document.path, systemImage: "doc.text")
+          .tag(document.path)
+      }
+      .frame(minWidth: 190, idealWidth: 230)
+
+      VStack(spacing: 0) {
+        if let selectedPath {
+          TextEditor(text: $content)
+            .font(.system(.body, design: .monospaced))
+            .scrollContentBackground(.hidden)
+            .padding(12)
+            .accessibilityLabel("Rule document editor")
+          Divider()
+          HStack {
+            Text(hasUnsavedChanges ? "Unsaved changes" : "Saved to master")
+              .font(.caption)
+              .foregroundStyle(hasUnsavedChanges ? Color.orange : Color.secondary)
+            Spacer()
+            Button("Save") {
+              Task {
+                if await model.saveRule(path: selectedPath, content: content) {
+                  savedContent = content
+                }
+              }
+            }
+            .disabled(!hasUnsavedChanges || model.isWorking)
+            Button("Preview Apply…") {
+              Task { applyPreview = await model.previewRulesApply() }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(hasUnsavedChanges || model.isWorking)
+          }
+          .padding(12)
+          .background(.regularMaterial)
+        } else {
+          ContentUnavailableView("Select a rule document", systemImage: "doc.text", description: Text("Edits are saved to the master first, then applied explicitly."))
+        }
+      }
+      .frame(minWidth: 440)
+    }
+    .onChange(of: selectedPath) { _, newPath in
+      guard let newPath else { return }
+      Task {
+        if let loaded = await model.loadRule(path: newPath) {
+          content = loaded
+          savedContent = loaded
+        }
+      }
+    }
+    .task {
+      if selectedPath == nil, let first = model.ruleDocuments.first?.path {
+        selectedPath = first
+      }
+    }
+    .onChange(of: model.ruleDocuments.map(\.path)) { _, paths in
+      if selectedPath == nil {
+        selectedPath = paths.first
+      }
+    }
+    .sheet(isPresented: Binding(
+      get: { applyPreview != nil },
+      set: { if !$0 { applyPreview = nil } }
+    )) {
+      VStack(alignment: .leading, spacing: 16) {
+        Text("Preview Rules Apply").font(.title2.weight(.semibold))
+        Text("These provider writes will be performed. Existing files are backed up according to the normal Reglet apply policy.")
+          .foregroundStyle(.secondary)
+        ScrollView {
+          Text(applyPreview ?? "")
+            .font(.system(.body, design: .monospaced))
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
+        }
+        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+        HStack {
+          Spacer()
+          Button("Cancel") { applyPreview = nil }
+          Button("Apply to Providers") {
+            applyPreview = nil
+            Task { _ = await model.applyRules() }
+          }
+          .buttonStyle(.borderedProminent)
+        }
+      }
+      .padding(24)
+      .frame(minWidth: 680, minHeight: 480)
+    }
+  }
+}
+
 struct RecoveryManagerView: View {
   @EnvironmentObject private var model: SetupModel
   var body: some View {
@@ -457,6 +560,221 @@ struct RecoveryManagerView: View {
         }
       }
       .padding(.vertical, 4)
+    }
+  }
+}
+
+struct ActivityDriftManagerView: View {
+  @EnvironmentObject private var model: SetupModel
+
+  private var drift: [DriftRecord] { model.status?.drift ?? [] }
+  private var drifted: [DriftRecord] { drift.filter { $0.status != "clean" } }
+  private var clean: [DriftRecord] { drift.filter { $0.status == "clean" } }
+
+  var body: some View {
+    List {
+      if !drifted.isEmpty {
+        Section("Needs attention") {
+          ForEach(drifted) { record in
+            DriftRow(record: record)
+          }
+        }
+      }
+
+      Section("Managed and clean") {
+        if clean.isEmpty {
+          Text("No managed files yet. Run setup to enroll providers.")
+            .foregroundStyle(.secondary)
+        } else {
+          ForEach(clean) { record in
+            VStack(alignment: .leading, spacing: 3) {
+              HStack(spacing: 8) {
+                Text(model.providerDisplayName(record.provider))
+                SkillBadge(text: record.content, tint: .secondary)
+              }
+              Text(record.outputPath)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            }
+            .padding(.vertical, 2)
+          }
+        }
+      }
+    }
+    .overlay {
+      if model.status == nil && !model.isWorking {
+        ContentUnavailableView("Drift status unavailable", systemImage: "waveform.path.ecg", description: Text("Refresh to check managed files."))
+      } else if model.status != nil && drift.isEmpty && !model.isWorking {
+        ContentUnavailableView("Nothing is managed yet", systemImage: "waveform.path.ecg", description: Text("Enroll providers to start tracking managed files."))
+      }
+    }
+    .safeAreaInset(edge: .bottom) {
+      if let status = model.status, !drift.isEmpty {
+        HStack {
+          Image(systemName: status.driftedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+            .foregroundStyle(status.driftedCount == 0 ? Color.green : Color.orange)
+          Text(status.driftedCount == 0
+            ? "All \(drift.count) managed files match the master."
+            : "\(status.driftedCount) of \(drift.count) managed files changed outside Reglet.")
+          Spacer()
+        }
+        .font(.callout)
+        .padding()
+        .background(.regularMaterial)
+      }
+    }
+  }
+}
+
+struct DriftRow: View {
+  @EnvironmentObject private var model: SetupModel
+  let record: DriftRecord
+
+  private var isMissing: Bool { record.status == "missing" }
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 12) {
+      VStack(alignment: .leading, spacing: 3) {
+        HStack(spacing: 8) {
+          Text(model.providerDisplayName(record.provider))
+          SkillBadge(text: record.content, tint: .secondary)
+          SkillBadge(text: isMissing ? "deleted" : "edited", tint: .orange)
+        }
+        Text(record.outputPath)
+          .font(.system(.caption, design: .monospaced))
+          .foregroundStyle(.secondary)
+          .textSelection(.enabled)
+        Text(isMissing
+          ? "The managed file was removed. Re-apply recreates it from the master."
+          : "Import keeps the edits in the master; Re-apply overwrites them.")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+      }
+      Spacer()
+      Button {
+        Task { await model.importDrifted(provider: record.provider, content: record.content) }
+      } label: {
+        Label("Import to Master", systemImage: "square.and.arrow.down")
+      }
+      .disabled(isMissing || model.isWorking)
+      .help("Copy the provider's edits back into the master directory")
+      Button {
+        Task { await model.reapply(provider: record.provider, content: record.content) }
+      } label: {
+        Label("Re-apply", systemImage: "arrow.clockwise.circle")
+      }
+      .disabled(model.isWorking)
+      .help("Overwrite the provider file from the master")
+    }
+    .padding(.vertical, 4)
+  }
+}
+
+struct SyncManagerView: View {
+  @EnvironmentObject private var model: SetupModel
+  @State private var serverUrl = ""
+  @State private var token = ""
+  @State private var deviceName = ""
+  @State private var isEditingConnection = false
+
+  private var syncInfo: StatusResponse.SyncInfo? { model.status?.sync }
+  private var showsForm: Bool { !(syncInfo?.configured ?? false) || isEditingConnection }
+
+  var body: some View {
+    Form {
+      if showsForm {
+        Section("Self-hosted sync server") {
+          TextField("Server URL", text: $serverUrl, prompt: Text("https://sync.example.com"))
+            .textContentType(.URL)
+            .autocorrectionDisabled()
+          SecureField("Server token", text: $token)
+          TextField("Device name", text: $deviceName, prompt: Text("this-mac"))
+          HStack {
+            if isEditingConnection {
+              Button("Cancel") { isEditingConnection = false }
+            }
+            Spacer()
+            Button("Connect") {
+              Task {
+                if await model.configureSync(
+                  url: serverUrl,
+                  token: token,
+                  device: deviceName.isEmpty ? "device" : deviceName
+                ) {
+                  token = ""
+                  isEditingConnection = false
+                  await model.runSync()
+                }
+              }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(serverUrl.isEmpty || token.isEmpty || model.isWorking)
+          }
+        }
+        Section {
+          Text("Sync runs only when you start it. No background sync is enabled here, and the token is stored locally in ~/.reglet/.state.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      } else if let syncInfo {
+        Section("Connection") {
+          LabeledContent("Server", value: syncInfo.serverUrl)
+          LabeledContent("Device", value: syncInfo.deviceName)
+          HStack {
+            Button("Change Connection…") {
+              serverUrl = syncInfo.serverUrl
+              deviceName = syncInfo.deviceName
+              isEditingConnection = true
+            }
+            Spacer()
+            Button {
+              Task { await model.runSync() }
+            } label: {
+              Label("Sync Now", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(model.isWorking)
+          }
+        }
+
+        Section("Last sync") {
+          if let error = model.lastSyncError {
+            Label {
+              Text(error).textSelection(.enabled)
+            } icon: {
+              Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
+            }
+          } else if let result = model.lastSyncResult {
+            LabeledContent("Pulled", value: "\(result.pulled.count)")
+            LabeledContent("Pushed", value: "\(result.pushed.count)")
+            LabeledContent("Deleted", value: "\(result.deleted.count)")
+            if result.conflicts.isEmpty {
+              LabeledContent("Conflicts", value: "0")
+            } else {
+              VStack(alignment: .leading, spacing: 4) {
+                Label("\(result.conflicts.count) conflict\(result.conflicts.count == 1 ? "" : "s") saved as conflict copies", systemImage: "exclamationmark.triangle.fill")
+                  .foregroundStyle(.orange)
+                ForEach(result.conflicts, id: \.self) { conflict in
+                  Text(conflict)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                }
+              }
+            }
+          } else {
+            Text("No sync has run in this session.")
+              .foregroundStyle(.secondary)
+          }
+        }
+      }
+    }
+    .formStyle(.grouped)
+    .overlay {
+      if model.status == nil && !model.isWorking {
+        ContentUnavailableView("Sync status unavailable", systemImage: "arrow.triangle.2.circlepath", description: Text("Refresh to load sync configuration."))
+      }
     }
   }
 }

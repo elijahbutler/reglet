@@ -22,10 +22,12 @@ The macOS app will become Reglet's primary product surface. The CLI remains the 
 
 ### Next milestone: Persistent Mac Manager
 
-- Reframe `Reglet Setup.app` as the persistent Reglet app, with first-run onboarding as one entry point rather than the app's sole purpose.
-- Add a native sidebar for Providers, Rules, Skills, MCP, Sync, Activity/Drift, and Recovery.
-- Keep business rules in stable, structured CLI/core operations rather than only in SwiftUI.
-- Extend the CLI JSON contract for app screens to expose current configuration, managed and unmanaged content, sync state, drift, backups, and actionable errors.
+- [x] Reframe `Reglet Setup.app` as the persistent Reglet app, with first-run onboarding as one entry point rather than the app's sole purpose.
+- [x] Add a native sidebar for Providers, Rules, Skills, MCP, Sync, Activity/Drift, and Recovery.
+- [x] Keep business rules in stable, structured CLI/core operations rather than only in SwiftUI.
+- [x] Extend the CLI JSON contract for app screens to expose current configuration, managed and unmanaged content, sync state, drift, and actionable errors.
+- [x] Add Activity/Drift resolution, manual token sync, skills/MCP drift import, account/device pairing, and a native master-rules editor.
+- [ ] Complete and record the real-machine smoke matrix before broader Mac user testing.
 
 #### Skills
 

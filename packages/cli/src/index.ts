@@ -3,27 +3,35 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { confirm, isCancel, multiselect, outro } from '@clack/prompts';
 import { Command, InvalidArgumentError } from 'commander';
-import { parse as parseToml } from 'smol-toml';
 import {
+  accountSession,
   applyAll,
   adoptSkill,
+  claimPairing,
   configureTokenLogin,
   detectDrift,
   getAdapter,
+  importDriftedMcp,
   importDriftedRules,
+  importDriftedSkills,
   initMasterDir,
   loadConfig,
   loadMasterDir,
+  loadSyncState,
+  loginWithAccount,
   listSkills,
   listUnmanagedSkills,
   type McpServerDef,
+  readProviderMcpServers,
   regletHome,
   restore,
   revert,
   saveConfig,
+  startPairing,
   syncOnce,
   type ApplyContent,
   type ApplyResult,
+  type DriftRecord,
   type ProviderId,
   type ProviderInventory,
   type SkillAdoptionScope,
@@ -127,7 +135,17 @@ program
   .command('status')
   .description('Print enrollment and drift status')
   .option('--check', 'exit with 2 when drift is found')
-  .action(async (options: { check?: boolean }) => {
+  .option('--json', 'print machine-readable JSON for manager apps')
+  .action(async (options: { check?: boolean; json?: boolean }) => {
+    if (options.json === true) {
+      const status = await buildStatusJson();
+      printJson(status);
+      if (options.check === true && status.driftedCount > 0) {
+        process.exitCode = 2;
+      }
+      return;
+    }
+
     const config = await loadConfig();
     for (const provider of providerIds) {
       const providerConfig = config.providers[provider];
@@ -183,24 +201,94 @@ program
   .command('diff')
   .description('Preview apply actions without writing files')
   .option('-p, --provider <provider>', 'provider to diff', parseProvider)
-  .action(async (options: { provider?: ProviderId }) => {
+  .option('-c, --content <content>', 'content type to diff', parseContent)
+  .action(async (options: { provider?: ProviderId; content?: ApplyContent }) => {
     const report = await applyAll({
       providers: options.provider === undefined ? undefined : [options.provider],
+      contents: options.content === undefined ? undefined : [options.content],
       dryRun: true,
     });
     printApplyResults(report.results);
   });
 
+const rules = program.command('rules').description('Read and edit master rule documents');
+
+rules
+  .command('list')
+  .description('List master rule documents')
+  .option('--json', 'print machine-readable JSON for manager apps')
+  .action(async (options: { json?: boolean }) => {
+    const master = await loadMasterDir();
+    const documents = master.rules.map((rule) => ({ path: rule.relPath }));
+    if (options.json === true) {
+      printJson({ version: 1, documents });
+      return;
+    }
+    for (const document of documents) {
+      console.log(document.path);
+    }
+  });
+
+rules
+  .command('read')
+  .description('Print one master rule document')
+  .argument('<path>', 'path relative to the master rules directory')
+  .action(async (relativePath: string) => {
+    process.stdout.write(await readFile(masterRulePath(relativePath), 'utf8'));
+  });
+
+rules
+  .command('write')
+  .description('Replace one master rule document with UTF-8 content from stdin')
+  .argument('<path>', 'path relative to the master rules directory')
+  .action(async (relativePath: string) => {
+    const target = masterRulePath(relativePath);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, await Bun.stdin.text());
+    console.log(`rules\tsaved\t${relativePath}`);
+  });
+
 program
   .command('import')
   .description('Import drifted provider content back into the master directory')
-  .argument('<target>', 'provider:rules', parseProviderTarget)
-  .action(async (target: ProviderTarget) => {
-    if (target.content !== 'rules') {
-      throw new InvalidArgumentError('Only rules import is supported in v1');
+  .argument('<target>', 'provider:rules|skills|mcp', parseProviderTarget)
+  .option('--json', 'print machine-readable JSON for manager apps')
+  .action(async (target: ProviderTarget, options: { json?: boolean }) => {
+    if (target.content === undefined) {
+      throw new InvalidArgumentError('Specify the content to import, e.g. claude:rules');
     }
-    const result = await importDriftedRules(target.provider);
-    console.log(`${result.provider}\trules\timported\t${result.importedPath}`);
+
+    if (target.content === 'rules') {
+      const result = await importDriftedRules(target.provider);
+      if (options.json === true) {
+        printJson({ version: 1, content: 'rules', ...result });
+        return;
+      }
+      console.log(`${result.provider}\trules\timported\t${result.importedPath}`);
+      return;
+    }
+
+    if (target.content === 'skills') {
+      const result = await importDriftedSkills(target.provider);
+      if (options.json === true) {
+        printJson({ version: 1, content: 'skills', ...result });
+        return;
+      }
+      if (result.imported.length === 0) {
+        console.log(`${result.provider}\tskills\tclean\tno drifted skills to import`);
+      }
+      for (const skill of result.imported) {
+        console.log(`${result.provider}\tskills\timported\t${skill.importedPath}`);
+      }
+      return;
+    }
+
+    const result = await importDriftedMcp(target.provider);
+    if (options.json === true) {
+      printJson({ version: 1, content: 'mcp', ...result });
+      return;
+    }
+    console.log(`${result.provider}\tmcp\timported\t${result.importedPath}\tservers=${result.importedServers.join(',')}`);
   });
 
 const skills = program.command('skills').description('Inspect and adopt provider-local skills');
@@ -271,23 +359,86 @@ skills
 
 program
   .command('login')
-  .description('Configure sync login')
+  .description('Configure sync login with a server token or account credentials')
   .argument('<url>', 'sync server URL')
   .option('--token <token>', 'single-user server token')
+  .option('--email <email>', 'account email')
+  .option('--password <password>', 'account password')
   .option('--device <name>', 'device name', 'device')
-  .action(async (url: string, options: { token?: string; device: string }) => {
-    if (options.token === undefined) {
-      throw new InvalidArgumentError('Only --token login is implemented in this build');
+  .action(async (url: string, options: { token?: string; email?: string; password?: string; device: string }) => {
+    if (options.token !== undefined) {
+      await configureTokenLogin(url, options.token, options.device);
+      console.log(`sync\tlogged-in\t${url}`);
+      return;
     }
-    await configureTokenLogin(url, options.token, options.device);
-    console.log(`sync\tlogged-in\t${url}`);
+
+    if (options.email === undefined || options.password === undefined) {
+      throw new InvalidArgumentError('Pass --token, or --email and --password for account login');
+    }
+
+    await loginWithAccount({
+      serverUrl: url,
+      email: options.email,
+      password: options.password,
+      deviceName: options.device,
+      mode: 'login',
+    });
+    console.log(`sync\tlogged-in\t${url}\tdevice=${options.device}`);
+  });
+
+program
+  .command('register')
+  .description('Create a sync account and pair this device')
+  .argument('<url>', 'sync server URL')
+  .requiredOption('--email <email>', 'account email')
+  .requiredOption('--password <password>', 'account password')
+  .option('--device <name>', 'device name', 'device')
+  .action(async (url: string, options: { email: string; password: string; device: string }) => {
+    await loginWithAccount({
+      serverUrl: url,
+      email: options.email,
+      password: options.password,
+      deviceName: options.device,
+      mode: 'register',
+    });
+    console.log(`sync\tregistered\t${url}\tdevice=${options.device}`);
+  });
+
+const pair = program.command('pair').description('Pair another device to a sync account');
+
+pair
+  .command('start')
+  .description('Print a pairing code for another device to claim')
+  .argument('<url>', 'sync server URL')
+  .requiredOption('--email <email>', 'account email')
+  .requiredOption('--password <password>', 'account password')
+  .action(async (url: string, options: { email: string; password: string }) => {
+    const sessionToken = await accountSession(url, options.email, options.password, 'login');
+    const code = await startPairing(url, sessionToken);
+    console.log(`pair\tcode\t${code}\texpires in 10 minutes`);
+  });
+
+pair
+  .command('claim')
+  .description('Claim a pairing code on this device and store its sync token')
+  .argument('<url>', 'sync server URL')
+  .argument('<code>', 'pairing code from pair start')
+  .option('--device <name>', 'device name', 'device')
+  .action(async (url: string, code: string, options: { device: string }) => {
+    await claimPairing(url, code, options.device);
+    console.log(`sync\tlogged-in\t${url}\tdevice=${options.device}`);
   });
 
 program
   .command('sync')
   .description('Pull then push master directory changes')
-  .action(async () => {
+  .option('--json', 'print machine-readable JSON for manager apps')
+  .action(async (options: { json?: boolean }) => {
     const result = await syncOnce();
+    if (options.json === true) {
+      printJson({ version: 1, ...result });
+      return;
+    }
     console.log(
       `sync\tpulled=${result.pulled.length}\tpushed=${result.pushed.length}\tconflicts=${result.conflicts.length}\tdeleted=${result.deleted.length}`,
     );
@@ -371,6 +522,28 @@ interface ScanJson {
   regletHome: string;
   providers: ScanProviderJson[];
   safety: SafetyJson;
+}
+
+interface StatusProviderJson {
+  id: ProviderId;
+  displayName: string;
+  enabled: boolean;
+  contents: Record<ContentId, boolean>;
+}
+
+interface StatusSyncJson {
+  configured: boolean;
+  serverUrl: string;
+  deviceName: string;
+}
+
+interface StatusJson {
+  version: 1;
+  regletHome: string;
+  providers: StatusProviderJson[];
+  drift: DriftRecord[];
+  driftedCount: number;
+  sync: StatusSyncJson;
 }
 
 interface OnboardingPlanJson {
@@ -568,6 +741,37 @@ async function buildScanJson(): Promise<ScanJson> {
   };
 }
 
+async function buildStatusJson(): Promise<StatusJson> {
+  const config = await loadConfig();
+  const drift = await detectDrift();
+  const syncState = await loadSyncState();
+
+  return {
+    version: 1,
+    regletHome: regletHome(),
+    providers: allAdapters().map((adapter) => {
+      const providerConfig = config.providers[adapter.id];
+      return {
+        id: adapter.id,
+        displayName: adapter.displayName,
+        enabled: providerConfig.enabled,
+        contents: {
+          rules: providerConfig.rules,
+          skills: providerConfig.skills,
+          mcp: providerConfig.mcp,
+        },
+      };
+    }),
+    drift,
+    driftedCount: drift.filter((record) => record.status !== 'clean').length,
+    sync: {
+      configured: syncState.serverUrl.length > 0 && syncState.deviceToken.length > 0,
+      serverUrl: syncState.serverUrl,
+      deviceName: syncState.deviceName,
+    },
+  };
+}
+
 async function buildOnboardingPlanJson(options: BuildOnboardingPlanOptions): Promise<OnboardingPlanJson> {
   const reads: PlannedFileJson[] = [];
   const writes: PlannedFileJson[] = [];
@@ -756,108 +960,6 @@ async function importProviderMcp(provider: ProviderId): Promise<void> {
   await writeFile(targetPath, `${JSON.stringify({ mcpServers: nextServers }, null, 2)}\n`);
 }
 
-async function readProviderMcpServers(provider: ProviderId, mcpPath: string): Promise<Record<string, McpServerDef>> {
-  if (provider === 'codex') {
-    return readCodexMcpServers(mcpPath);
-  }
-
-  if (provider === 'opencode') {
-    return readOpenCodeMcpServers(mcpPath);
-  }
-
-  return readJsonMcpServers(mcpPath);
-}
-
-async function readJsonMcpServers(mcpPath: string): Promise<Record<string, McpServerDef>> {
-  const config = await readJsonObject(mcpPath);
-  if (!isRecord(config.mcpServers)) {
-    return {};
-  }
-  return normalizeMcpServers(config.mcpServers);
-}
-
-async function readCodexMcpServers(mcpPath: string): Promise<Record<string, McpServerDef>> {
-  try {
-    const parsed = parseToml(await readFile(mcpPath, 'utf8')) as unknown;
-    if (!isRecord(parsed) || !isRecord(parsed.mcp_servers)) {
-      return {};
-    }
-    return normalizeMcpServers(parsed.mcp_servers);
-  } catch (error) {
-    if (isNodeError(error) && error.code === 'ENOENT') {
-      return {};
-    }
-    throw error;
-  }
-}
-
-async function readOpenCodeMcpServers(mcpPath: string): Promise<Record<string, McpServerDef>> {
-  const config = await readJsonObject(mcpPath);
-  if (!isRecord(config.mcp)) {
-    return {};
-  }
-
-  const servers: Record<string, McpServerDef> = {};
-  for (const [name, server] of Object.entries(config.mcp)) {
-    const normalized = normalizeOpenCodeServer(server);
-    if (normalized !== null) {
-      servers[name] = normalized;
-    }
-  }
-  return servers;
-}
-
-async function readJsonObject(filePath: string): Promise<Record<string, unknown>> {
-  try {
-    const parsed = JSON.parse(await readFile(filePath, 'utf8')) as unknown;
-    return isRecord(parsed) ? parsed : {};
-  } catch (error) {
-    if (isNodeError(error) && error.code === 'ENOENT') {
-      return {};
-    }
-    throw error;
-  }
-}
-
-function normalizeMcpServers(value: Record<string, unknown>): Record<string, McpServerDef> {
-  const servers: Record<string, McpServerDef> = {};
-  for (const [name, server] of Object.entries(value)) {
-    if (isMcpServerDef(server)) {
-      servers[name] = server;
-    }
-  }
-  return servers;
-}
-
-function normalizeOpenCodeServer(value: unknown): McpServerDef | null {
-  if (!isRecord(value) || typeof value.type !== 'string') {
-    return null;
-  }
-
-  if (value.type === 'remote' && typeof value.url === 'string') {
-    return { url: value.url };
-  }
-
-  if (
-    value.type !== 'local' ||
-    !Array.isArray(value.command) ||
-    !value.command.every((item) => typeof item === 'string')
-  ) {
-    return null;
-  }
-
-  const [command, ...args] = value.command;
-  if (command === undefined) {
-    return null;
-  }
-
-  return {
-    command,
-    ...(args.length === 0 ? {} : { args }),
-    ...(isStringRecord(value.environment) ? { env: value.environment } : {}),
-  };
-}
-
 function uniqueName(name: string, provider: ProviderId, existingNames: Set<string>): string {
   if (!existingNames.has(name)) {
     return name;
@@ -875,37 +977,16 @@ function uniqueName(name: string, provider: ProviderId, existingNames: Set<strin
   return `${prefixed}-${index}`;
 }
 
-function isMcpServerDef(value: unknown): value is McpServerDef {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  return (
-    readOptionalString(value.command) &&
-    readOptionalStringArray(value.args) &&
-    isOptionalStringRecord(value.env) &&
-    readOptionalString(value.url)
-  );
-}
-
-function readOptionalString(value: unknown): boolean {
-  return value === undefined || typeof value === 'string';
-}
-
-function readOptionalStringArray(value: unknown): boolean {
-  return value === undefined || (Array.isArray(value) && value.every((item) => typeof item === 'string'));
-}
-
-function isOptionalStringRecord(value: unknown): boolean {
-  return value === undefined || isStringRecord(value);
-}
-
-function isStringRecord(value: unknown): value is Record<string, string> {
-  return isRecord(value) && Object.values(value).every((item) => typeof item === 'string');
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function masterRulePath(relativePath: string): string {
+  const normalized = path.posix.normalize(relativePath.replaceAll('\\', '/'));
+  if (normalized === '.' || normalized.startsWith('../') || path.posix.isAbsolute(normalized)) {
+    throw new InvalidArgumentError('Rule path must stay inside the master rules directory');
+  }
+  return path.join(regletHome(), 'rules', ...normalized.split('/'));
 }
 
 function sameMcpServer(left: McpServerDef | undefined, right: McpServerDef): boolean {

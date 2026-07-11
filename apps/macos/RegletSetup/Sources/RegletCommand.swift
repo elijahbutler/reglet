@@ -80,6 +80,49 @@ struct RegletCommand {
     try await run(["revert", provider])
   }
 
+  func status() async throws -> StatusResponse {
+    let result = try await run(["status", "--json"])
+    return try decode(StatusResponse.self, from: result.stdout, command: "reglet status --json")
+  }
+
+  func applyContent(provider: String, content: String) async throws -> CommandResult {
+    try await run(["apply", "--provider", provider, "--content", content])
+  }
+
+  func importDrifted(provider: String, content: String) async throws -> CommandResult {
+    try await run(["import", "\(provider):\(content)"])
+  }
+
+  func login(url: String, token: String, device: String) async throws -> CommandResult {
+    try await run(["login", url, "--token", token, "--device", device])
+  }
+
+  func syncNow() async throws -> SyncRunResponse {
+    let result = try await run(["sync", "--json"])
+    return try decode(SyncRunResponse.self, from: result.stdout, command: "reglet sync --json")
+  }
+
+  func rulesList() async throws -> RulesListResponse {
+    let result = try await run(["rules", "list", "--json"])
+    return try decode(RulesListResponse.self, from: result.stdout, command: "reglet rules list --json")
+  }
+
+  func readRule(path: String) async throws -> String {
+    try await run(["rules", "read", path]).stdout
+  }
+
+  func writeRule(path: String, content: String) async throws {
+    _ = try await run(["rules", "write", path], stdin: content)
+  }
+
+  func diffRules() async throws -> String {
+    try await run(["diff", "--content", "rules"]).stdout
+  }
+
+  func applyRules() async throws -> CommandResult {
+    try await run(["apply", "--content", "rules"])
+  }
+
   func skillsList() async throws -> SkillsOverviewResponse {
     let result = try await run(["skills", "list", "--json"])
     return try decode(SkillsOverviewResponse.self, from: result.stdout, command: "reglet skills list --json")
@@ -99,7 +142,7 @@ struct RegletCommand {
     return try decode(SkillAdoptionResponse.self, from: result.stdout, command: "reglet \(arguments.joined(separator: " "))")
   }
 
-  private func run(_ arguments: [String]) async throws -> CommandResult {
+  private func run(_ arguments: [String], stdin: String? = nil) async throws -> CommandResult {
     try await Task.detached(priority: .userInitiated) {
       let process = Process()
       process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -110,7 +153,16 @@ struct RegletCommand {
       process.standardOutput = stdoutPipe
       process.standardError = stderrPipe
 
+      let stdinPipe = Pipe()
+      if stdin != nil {
+        process.standardInput = stdinPipe
+      }
+
       try process.run()
+      if let stdin, let data = stdin.data(using: .utf8) {
+        stdinPipe.fileHandleForWriting.write(data)
+        try stdinPipe.fileHandleForWriting.close()
+      }
       process.waitUntilExit()
 
       let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""

@@ -10,6 +10,10 @@ final class SetupModel: ObservableObject {
   @Published var errorMessage: String?
   @Published var completionMessage: String?
   @Published var skillsOverview: SkillsOverviewResponse?
+  @Published var status: StatusResponse?
+  @Published var lastSyncResult: SyncRunResponse?
+  @Published var lastSyncError: String?
+  @Published var ruleDocuments: [RulesListResponse.Document] = []
   /// Keys are "provider:name"; presence = checked for adoption.
   @Published var checkedSkills: Set<String> = []
   /// Chosen scope per skill key; missing = .shared.
@@ -69,6 +73,8 @@ final class SetupModel: ObservableObject {
       let response = try await self.command.scan()
       self.scan = response
       self.skillsOverview = try await self.command.skillsList()
+      self.status = try await self.command.status()
+      self.ruleDocuments = try await self.command.rulesList().documents
       if self.selectedProviders.isEmpty {
         self.selectedProviders = Set(response.providers.filter(\.detected).map(\.id))
       }
@@ -93,6 +99,81 @@ final class SetupModel: ObservableObject {
       )
       self.completionMessage = result.stdout.isEmpty ? "Onboarding complete." : result.stdout
       self.scan = try await self.command.scan()
+    }
+  }
+
+  func refreshStatus() async {
+    await runWork {
+      self.status = try await self.command.status()
+    }
+  }
+
+  /// Re-applies one managed output from the master, replacing provider drift.
+  func reapply(provider: String, content: String) async {
+    await runWork {
+      _ = try await self.command.applyContent(provider: provider, content: content)
+      self.status = try await self.command.status()
+    }
+  }
+
+  /// Copies drifted provider content back into the master. Does not re-apply;
+  /// the drift row stays visible until the user explicitly applies.
+  func importDrifted(provider: String, content: String) async {
+    await runWork {
+      _ = try await self.command.importDrifted(provider: provider, content: content)
+      self.completionMessage = "Imported \(provider) \(content) into the master directory."
+      self.status = try await self.command.status()
+    }
+  }
+
+  func configureSync(url: String, token: String, device: String) async -> Bool {
+    await runWork {
+      _ = try await self.command.login(url: url, token: token, device: device)
+      self.status = try await self.command.status()
+    }
+  }
+
+  func runSync() async {
+    isWorking = true
+    lastSyncError = nil
+    defer { isWorking = false }
+    do {
+      lastSyncResult = try await command.syncNow()
+      status = try await command.status()
+    } catch {
+      lastSyncError = error.localizedDescription
+    }
+  }
+
+  func loadRule(path: String) async -> String? {
+    var content: String?
+    await runWork {
+      content = try await self.command.readRule(path: path)
+    }
+    return content
+  }
+
+  func saveRule(path: String, content: String) async -> Bool {
+    await runWork {
+      try await self.command.writeRule(path: path, content: content)
+      self.ruleDocuments = try await self.command.rulesList().documents
+      self.completionMessage = "Saved \(path) to the master directory."
+    }
+  }
+
+  func previewRulesApply() async -> String? {
+    var preview: String?
+    await runWork {
+      preview = try await self.command.diffRules()
+    }
+    return preview
+  }
+
+  func applyRules() async -> Bool {
+    await runWork {
+      _ = try await self.command.applyRules()
+      self.status = try await self.command.status()
+      self.completionMessage = "Applied master rules to enrolled providers."
     }
   }
 

@@ -38,18 +38,8 @@ interface DeleteFileBody {
 
 interface Session {
   userId: number;
-  token: string;
-  expiresAt: number;
 }
 
-interface PairCode {
-  userId: number;
-  code: string;
-  expiresAt: number;
-}
-
-const sessions = new Map<string, Session>();
-const pairCodes = new Map<string, PairCode>();
 const singleUserEmail = 'single-user@reglet.local';
 const singleUserPassword = 'single-user';
 const appDatabases = new WeakMap<Hono, Database>();
@@ -97,7 +87,7 @@ export function createApp(options: CreateAppOptions = {}): Hono {
       const passHash = hashSecret(body.password);
       db.query('insert into users (email, pass_hash) values (?, ?)').run(body.email, passHash);
       const row = db.query('select last_insert_rowid() as id').get() as { id: number };
-      return c.json(createSession(row.id, now));
+      return c.json(createSession(db, row.id, now));
     } catch (error) {
       if (isSqliteConstraint(error)) {
         return c.json({ error: 'user already exists' }, 409);
@@ -119,21 +109,21 @@ export function createApp(options: CreateAppOptions = {}): Hono {
       return c.json({ error: 'invalid credentials' }, 401);
     }
 
-    return c.json(createSession(user.id, now));
+    return c.json(createSession(db, user.id, now));
   });
 
   app.post('/v1/pair/start', (c) => {
-    const session = requireSession(c.req.header('authorization'), now);
+    const session = requireSession(db, c.req.header('authorization'), now);
     if (session === null) {
       return c.json({ error: 'unauthorized' }, 401);
     }
 
     const code = randomCode();
-    pairCodes.set(code, {
+    db.query('insert into pair_codes (code, user_id, expires_at) values (?, ?, ?)').run(
       code,
-      userId: session.userId,
-      expiresAt: now().getTime() + 10 * 60 * 1000,
-    });
+      session.userId,
+      now().getTime() + 10 * 60 * 1000,
+    );
     return c.json({ code });
   });
 
@@ -143,15 +133,17 @@ export function createApp(options: CreateAppOptions = {}): Hono {
       return c.json({ error: 'code and deviceName are required' }, 400);
     }
 
-    const pairCode = pairCodes.get(body.code);
-    if (pairCode === undefined || pairCode.expiresAt < now().getTime()) {
+    const pairCode = db.query('select user_id, expires_at from pair_codes where code = ?').get(body.code) as
+      | { user_id: number; expires_at: number }
+      | null;
+    if (pairCode === null || pairCode.expires_at < now().getTime()) {
       return c.json({ error: 'invalid pair code' }, 404);
     }
-    pairCodes.delete(body.code);
+    db.query('delete from pair_codes where code = ?').run(body.code);
 
     const deviceToken = randomToken();
     db.query('insert into devices (user_id, name, token_hash, created_at) values (?, ?, ?, ?)').run(
-      pairCode.userId,
+      pairCode.user_id,
       body.deviceName,
       hashToken(deviceToken),
       now().toISOString(),
@@ -304,6 +296,16 @@ create table if not exists user_seq (
   user_id integer primary key,
   seq integer not null
 );
+create table if not exists sessions (
+  token_hash text primary key,
+  user_id integer not null,
+  expires_at integer not null
+);
+create table if not exists pair_codes (
+  code text primary key,
+  user_id integer not null,
+  expires_at integer not null
+);
 `);
 }
 
@@ -329,26 +331,28 @@ function ensureSingleUser(db: Database, token: string): void {
   }
 }
 
-function createSession(userId: number, now: () => Date): JsonResponse {
+function createSession(db: Database, userId: number, now: () => Date): JsonResponse {
   const token = randomToken();
-  sessions.set(token, {
+  db.query('insert into sessions (token_hash, user_id, expires_at) values (?, ?, ?)').run(
+    hashToken(token),
     userId,
-    token,
-    expiresAt: now().getTime() + 60 * 60 * 1000,
-  });
+    now().getTime() + 60 * 60 * 1000,
+  );
   return { sessionToken: token };
 }
 
-function requireSession(header: string | undefined, now: () => Date): Session | null {
+function requireSession(db: Database, header: string | undefined, now: () => Date): Session | null {
   const token = bearerToken(header);
   if (token === null) {
     return null;
   }
-  const session = sessions.get(token);
-  if (session === undefined || session.expiresAt < now().getTime()) {
+  const session = db.query('select user_id, expires_at from sessions where token_hash = ?').get(hashToken(token)) as
+    | { user_id: number; expires_at: number }
+    | null;
+  if (session === null || session.expires_at < now().getTime()) {
     return null;
   }
-  return session;
+  return { userId: session.user_id };
 }
 
 function requireDevice(
