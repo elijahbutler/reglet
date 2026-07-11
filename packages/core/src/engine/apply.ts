@@ -3,7 +3,7 @@ import { mkdir } from 'node:fs/promises';
 import { loadConfig } from '../config.js';
 import { renderRulesFile } from '../header.js';
 import { loadManifest, saveManifest, type ManagedContent } from '../manifest.js';
-import { loadMasterDir, type MasterDir, type MasterSkill } from '../master.js';
+import { loadMasterDir, type MasterDir } from '../master.js';
 import { regletHome } from '../paths.js';
 import { allAdapters, getAdapter } from '../providers/registry.js';
 import type { ApplyResult, ProviderAdapter, ProviderId } from '../providers/types.js';
@@ -15,6 +15,7 @@ export interface ApplyAllOptions {
   providers?: ProviderId[];
   contents?: ApplyContent[];
   dryRun?: boolean;
+  home?: string;
 }
 
 export interface ApplyReport {
@@ -24,7 +25,14 @@ export interface ApplyReport {
 const allContents: ApplyContent[] = ['rules', 'skills', 'mcp'];
 
 export async function applyAll(opts: ApplyAllOptions = {}): Promise<ApplyReport> {
-  const home = regletHome();
+  const home = opts.home ?? regletHome();
+  if (opts.home !== undefined) {
+    return withRegletHome(home, () => applyAllWithHome(opts, home));
+  }
+  return applyAllWithHome(opts, home);
+}
+
+async function applyAllWithHome(opts: ApplyAllOptions, home: string): Promise<ApplyReport> {
   const config = await loadConfig(home);
   const master = await loadMasterDir(home);
   const selectedProviders = opts.providers === undefined ? allAdapters() : opts.providers.map((id) => getAdapter(id));
@@ -50,7 +58,7 @@ export async function applyAll(opts: ApplyAllOptions = {}): Promise<ApplyReport>
     if (selectedContents.includes('skills')) {
       results.push(
         ...(providerConfig.skills
-          ? await applySkills(adapter, master.skills, dryRun)
+          ? await applySkills(adapter, master, home, dryRun)
           : [skipped(adapter, 'skills', `${adapter.id}:skills unenrolled`)]),
       );
     }
@@ -73,6 +81,20 @@ export async function applyAll(opts: ApplyAllOptions = {}): Promise<ApplyReport>
   return { results };
 }
 
+async function withRegletHome<T>(home: string, callback: () => Promise<T>): Promise<T> {
+  const previous = process.env.REGLET_HOME;
+  process.env.REGLET_HOME = home;
+  try {
+    return await callback();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.REGLET_HOME;
+    } else {
+      process.env.REGLET_HOME = previous;
+    }
+  }
+}
+
 async function applyRules(adapter: ProviderAdapter, master: MasterDir, dryRun: boolean): Promise<ApplyResult> {
   const outputPath = adapter.rulesPath();
   if (outputPath === null) {
@@ -90,7 +112,17 @@ async function applyRules(adapter: ProviderAdapter, master: MasterDir, dryRun: b
   return { provider: adapter.id, content: 'rules', outputPath, status: writeResult.status };
 }
 
-async function applySkills(adapter: ProviderAdapter, masterSkills: MasterSkill[], dryRun: boolean): Promise<ApplyResult[]> {
+interface SkillApplyEntry {
+  name: string;
+  sourceDir: string;
+}
+
+async function applySkills(
+  adapter: ProviderAdapter,
+  master: MasterDir,
+  home: string,
+  dryRun: boolean,
+): Promise<ApplyResult[]> {
   const skillsDir = adapter.skillsDir();
   if (skillsDir === null) {
     return [skipped(adapter, 'skills', `${adapter.id}:skills unsupported`)];
@@ -100,14 +132,14 @@ async function applySkills(adapter: ProviderAdapter, masterSkills: MasterSkill[]
     await mkdir(skillsDir, { recursive: true });
   }
 
-  const masterSkillNames = new Set(masterSkills.map((skill) => skill.name));
+  const skills = resolveSkillsForProvider(master, adapter.id, home);
+  const masterSkillNames = new Set(skills.map((skill) => skill.name));
   const results: ApplyResult[] = [];
 
-  for (const skill of masterSkills) {
+  for (const skill of skills) {
     const outputPath = path.join(skillsDir, skill.name);
-    const sourceDir = path.join(regletHome(), 'skills', skill.name);
     const writeResult = await safeWriteDirectory({
-      sourceDir,
+      sourceDir: skill.sourceDir,
       outputPath,
       provider: adapter.id,
       dryRun,
@@ -133,6 +165,26 @@ async function applySkills(adapter: ProviderAdapter, masterSkills: MasterSkill[]
   }
 
   return results.length === 0 ? [skipped(adapter, 'skills', `${adapter.id}:skills no master skills`)] : results;
+}
+
+function resolveSkillsForProvider(master: MasterDir, provider: ProviderId, home: string): SkillApplyEntry[] {
+  const resolved = new Map<string, SkillApplyEntry>();
+
+  for (const skill of master.skills) {
+    resolved.set(skill.name, {
+      name: skill.name,
+      sourceDir: path.join(home, 'skills', skill.name),
+    });
+  }
+
+  for (const skill of master.providerSkills[provider]) {
+    resolved.set(skill.name, {
+      name: skill.name,
+      sourceDir: path.join(home, 'skills', provider, skill.name),
+    });
+  }
+
+  return Array.from(resolved.values()).sort((left, right) => left.name.localeCompare(right.name));
 }
 
 function skipped(adapter: ProviderAdapter, content: ManagedContent, message: string): ApplyResult {

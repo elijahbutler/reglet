@@ -148,6 +148,73 @@ describe('applyAll', () => {
     expect(await readFile(path.join(foreignSkillDir, 'SKILL.md'), 'utf8')).toBe('do not touch');
   });
 
+  test('applies shared skills plus only matching provider-specific skills', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await enableProviders(home, ['claude', 'codex']);
+    await mkdir(path.join(home, 'rules'), { recursive: true });
+    await mkdir(path.join(home, 'skills', 'shared'), { recursive: true });
+    await mkdir(path.join(home, 'skills', 'claude', 'claude-only'), { recursive: true });
+    await mkdir(path.join(home, 'skills', 'codex', 'codex-only'), { recursive: true });
+    await writeFile(path.join(home, 'skills', 'shared', 'SKILL.md'), 'shared');
+    await writeFile(path.join(home, 'skills', 'claude', 'claude-only', 'SKILL.md'), 'claude only');
+    await writeFile(path.join(home, 'skills', 'codex', 'codex-only', 'SKILL.md'), 'codex only');
+
+    await applyAll({ providers: ['claude', 'codex'], contents: ['skills'] });
+
+    expect(await readFile(path.join(providerHome, '.claude', 'skills', 'shared', 'SKILL.md'), 'utf8')).toBe('shared');
+    expect(await readFile(path.join(providerHome, '.claude', 'skills', 'claude-only', 'SKILL.md'), 'utf8')).toBe(
+      'claude only',
+    );
+    await expect(
+      readFile(path.join(providerHome, '.claude', 'skills', 'codex-only', 'SKILL.md'), 'utf8'),
+    ).rejects.toThrow();
+    expect(await readFile(path.join(providerHome, '.agents', 'skills', 'shared', 'SKILL.md'), 'utf8')).toBe('shared');
+    expect(await readFile(path.join(providerHome, '.agents', 'skills', 'codex-only', 'SKILL.md'), 'utf8')).toBe(
+      'codex only',
+    );
+    await expect(
+      readFile(path.join(providerHome, '.agents', 'skills', 'claude-only', 'SKILL.md'), 'utf8'),
+    ).rejects.toThrow();
+  });
+
+  test('provider-specific skills override shared skills with the same name', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await enableProviders(home, ['claude', 'codex']);
+    await mkdir(path.join(home, 'rules'), { recursive: true });
+    await mkdir(path.join(home, 'skills', 'alpha'), { recursive: true });
+    await mkdir(path.join(home, 'skills', 'codex', 'alpha'), { recursive: true });
+    await writeFile(path.join(home, 'skills', 'alpha', 'SKILL.md'), 'shared alpha');
+    await writeFile(path.join(home, 'skills', 'codex', 'alpha', 'SKILL.md'), 'codex alpha');
+
+    await applyAll({ providers: ['claude', 'codex'], contents: ['skills'] });
+
+    expect(await readFile(path.join(providerHome, '.claude', 'skills', 'alpha', 'SKILL.md'), 'utf8')).toBe(
+      'shared alpha',
+    );
+    expect(await readFile(path.join(providerHome, '.agents', 'skills', 'alpha', 'SKILL.md'), 'utf8')).toBe(
+      'codex alpha',
+    );
+  });
+
+  test('removes provider-managed skills when a shared skill becomes provider-specific elsewhere', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await enableProviders(home, ['claude', 'codex']);
+    await mkdir(path.join(home, 'rules'), { recursive: true });
+    await mkdir(path.join(home, 'skills', 'alpha'), { recursive: true });
+    await writeFile(path.join(home, 'skills', 'alpha', 'SKILL.md'), 'shared alpha');
+
+    await applyAll({ providers: ['claude', 'codex'], contents: ['skills'] });
+    await rm(path.join(home, 'skills', 'alpha'), { recursive: true, force: true });
+    await mkdir(path.join(home, 'skills', 'codex', 'alpha'), { recursive: true });
+    await writeFile(path.join(home, 'skills', 'codex', 'alpha', 'SKILL.md'), 'codex alpha');
+    await applyAll({ providers: ['claude', 'codex'], contents: ['skills'] });
+
+    await expect(readFile(path.join(providerHome, '.claude', 'skills', 'alpha', 'SKILL.md'), 'utf8')).rejects.toThrow();
+    expect(await readFile(path.join(providerHome, '.agents', 'skills', 'alpha', 'SKILL.md'), 'utf8')).toBe(
+      'codex alpha',
+    );
+  });
+
   test('merges claude and gemini mcp while preserving unmanaged keys', async () => {
     const { home, providerHome } = await useTempHomes();
     await enableProviders(home, ['claude', 'gemini']);

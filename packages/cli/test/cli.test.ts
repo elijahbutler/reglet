@@ -121,8 +121,8 @@ describe('reglet CLI', () => {
     expect(plan.writes).toContainEqual({
       provider: 'claude',
       content: 'skills',
-      path: path.join(home, 'skills', 'alpha'),
-      scope: 'master',
+      path: path.join(providerHome, '.claude', 'skills'),
+      scope: 'provider',
       operation: 'write',
       reason: 'manage claude:skills',
     });
@@ -134,7 +134,7 @@ describe('reglet CLI', () => {
     await expect(readFile(path.join(home, 'rules', 'imported-claude.md'), 'utf8')).rejects.toThrow();
   });
 
-  test('init --yes enrolls detected providers, imports rules, and applies outputs', async () => {
+  test('init --yes leaves existing provider skills local while importing rules and MCP', async () => {
     const { home, providerHome } = await useTempHomes();
     const claudeRules = path.join(providerHome, '.claude', 'CLAUDE.md');
     await mkdir(path.dirname(claudeRules), { recursive: true });
@@ -162,7 +162,8 @@ describe('reglet CLI', () => {
     await runCli(['init', '--yes'], home, providerHome);
 
     expect(await readFile(path.join(home, 'rules', 'imported-claude.md'), 'utf8')).toBe('existing claude rules\n');
-    expect(await readFile(path.join(home, 'skills', 'alpha', 'SKILL.md'), 'utf8')).toBe('alpha skill\n');
+    await expect(readFile(path.join(home, 'skills', 'alpha', 'SKILL.md'), 'utf8')).rejects.toThrow();
+    expect(await readFile(path.join(providerHome, '.claude', 'skills', 'alpha', 'SKILL.md'), 'utf8')).toBe('alpha skill\n');
     expect(JSON.parse(await readFile(path.join(home, 'mcp', 'servers.json'), 'utf8'))).toEqual({
       mcpServers: {
         existingServer: {
