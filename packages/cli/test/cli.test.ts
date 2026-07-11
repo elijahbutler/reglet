@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -10,6 +10,7 @@ const cliPath = path.resolve(import.meta.dir, '..', 'src', 'index.ts');
 
 let currentHome: string | undefined;
 let currentProviderHome: string | undefined;
+let currentExtraHomes: string[] = [];
 
 afterEach(async () => {
   if (currentHome !== undefined) {
@@ -20,6 +21,10 @@ afterEach(async () => {
     await rm(currentProviderHome, { recursive: true, force: true });
     currentProviderHome = undefined;
   }
+  for (const home of currentExtraHomes) {
+    await rm(home, { recursive: true, force: true });
+  }
+  currentExtraHomes = [];
 });
 
 async function useTempHomes(): Promise<{ home: string; providerHome: string }> {
@@ -326,6 +331,48 @@ describe('reglet CLI', () => {
       ],
     });
     expect(await Bun.file(path.join(home, 'rules', '00-general.md')).exists()).toBe(false);
+  });
+
+  test('rules merge-draft finds user-local AI runners when PATH is minimal', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const claudeRules = path.join(providerHome, '.claude', 'CLAUDE.md');
+    const codexRules = path.join(providerHome, '.codex', 'AGENTS.md');
+    await mkdir(path.dirname(claudeRules), { recursive: true });
+    await mkdir(path.dirname(codexRules), { recursive: true });
+    await writeFile(claudeRules, 'Prefer concise answers.\n');
+    await writeFile(codexRules, 'Never use npm.\n');
+
+    const fakeHome = await mkdtemp(path.join(tmpdir(), 'reglet-cli-runner-home-'));
+    currentExtraHomes.push(fakeHome);
+    const fakeCodex = path.join(fakeHome, '.local', 'bin', 'codex');
+    await mkdir(path.dirname(fakeCodex), { recursive: true });
+    await writeFile(
+      fakeCodex,
+      [
+        '#!/bin/sh',
+        'if [ "$1" = "--version" ]; then',
+        '  echo "codex 0.0.0"',
+        '  exit 0',
+        'fi',
+        'echo "Merged from fake codex."',
+        '',
+      ].join('\n'),
+    );
+    await chmod(fakeCodex, 0o755);
+
+    const result = await runCli(
+      ['rules', 'merge-draft', '--provider', 'claude,codex', '--json'],
+      home,
+      providerHome,
+      {
+        HOME: fakeHome,
+        PATH: [path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter),
+      },
+    );
+    const merged = JSON.parse(result.stdout) as { provider: string; draft: string };
+
+    expect(merged.provider).toBe('codex');
+    expect(merged.draft).toBe('Merged from fake codex.\n');
   });
 
   test('rules merge-draft requires at least two non-empty provider rule files', async () => {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { execFile, spawn } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { confirm, isCancel, multiselect, outro } from '@clack/prompts';
@@ -959,8 +959,9 @@ async function detectMergeRunner(): Promise<AiMergeRunner | null> {
   ];
 
   for (const candidate of candidates) {
-    if (await commandExists(candidate.command)) {
-      return candidate;
+    const command = await resolveCommand(candidate.command);
+    if (command !== null) {
+      return { ...candidate, command };
     }
   }
   return null;
@@ -1030,9 +1031,53 @@ async function runAiMerge(runner: AiMergeRunner, prompt: string): Promise<string
   });
 }
 
+async function resolveCommand(command: string): Promise<string | null> {
+  if (await commandExists(command)) {
+    return command;
+  }
+
+  for (const candidatePath of fallbackCommandPaths(command)) {
+    if (await executableExists(candidatePath) && await commandExists(candidatePath)) {
+      return candidatePath;
+    }
+  }
+
+  return null;
+}
+
+function fallbackCommandPaths(command: string): string[] {
+  const home = process.env.HOME;
+  const dirs = [
+    ...(process.env.PATH?.split(path.delimiter) ?? []),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    '/usr/bin',
+    '/bin',
+    ...(home === undefined ? [] : [
+      path.join(home, '.local', 'bin'),
+      path.join(home, '.bun', 'bin'),
+      path.join(home, '.npm-global', 'bin'),
+      path.join(home, '.deno', 'bin'),
+      path.join(home, '.cargo', 'bin'),
+      path.join(home, '.codex', 'packages', 'standalone', 'current', 'bin'),
+    ]),
+  ];
+  return Array.from(new Set(dirs.filter((dir) => dir.length > 0).map((dir) => path.join(dir, command))));
+}
+
+async function executableExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath, 0x01);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function commandExists(command: string): Promise<boolean> {
   try {
-    await execFileAsync('/usr/bin/env', [command, '--version'], { timeout: 5_000, maxBuffer: 64 * 1024 });
+    const args = path.isAbsolute(command) ? ['--version'] : [command, '--version'];
+    await execFileAsync(path.isAbsolute(command) ? command : '/usr/bin/env', args, { timeout: 5_000, maxBuffer: 64 * 1024 });
     return true;
   } catch {
     return false;
