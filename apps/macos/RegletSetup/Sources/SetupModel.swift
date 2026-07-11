@@ -14,6 +14,9 @@ final class SetupModel: ObservableObject {
   @Published var lastSyncResult: SyncRunResponse?
   @Published var lastSyncError: String?
   @Published var ruleDocuments: [RulesListResponse.Document] = []
+  @Published var update: AppUpdate?
+  @Published var updateMessage: String?
+  @Published var isCheckingForUpdates = false
   /// Keys are "provider:name"; presence = checked for adoption.
   @Published var checkedSkills: Set<String> = []
   /// Chosen scope per skill key; missing = .shared.
@@ -22,6 +25,8 @@ final class SetupModel: ObservableObject {
   @Published var overwriteFlags: Set<String> = []
 
   private let command = RegletCommand()
+  private let updateChecker = UpdateChecker()
+  private let dismissedUpdateVersionKey = "dismissedUpdateVersion"
 
   var unmanagedSkills: [UnmanagedSkill] {
     skillsOverview?.unmanaged ?? []
@@ -65,7 +70,48 @@ final class SetupModel: ObservableObject {
   func load() {
     Task {
       await refreshScan()
+      await checkForUpdates(silent: true)
     }
+  }
+
+  func checkForUpdates(silent: Bool = false) async {
+    isCheckingForUpdates = true
+    if !silent {
+      updateMessage = nil
+    }
+    defer { isCheckingForUpdates = false }
+
+    do {
+      switch try await updateChecker.check() {
+      case let .available(availableUpdate):
+        let dismissedVersion = UserDefaults.standard.string(forKey: dismissedUpdateVersionKey)
+        if !silent || dismissedVersion != availableUpdate.version {
+          update = availableUpdate
+        }
+      case let .upToDate(currentVersion):
+        update = nil
+        if !silent {
+          updateMessage = "Reglet \(currentVersion) is up to date."
+        }
+      }
+    } catch {
+      if !silent {
+        updateMessage = error.localizedDescription
+      }
+    }
+  }
+
+  func openLatestRelease() {
+    guard let update else { return }
+    UpdateChecker.openRelease(update)
+    dismissUpdate()
+  }
+
+  func dismissUpdate() {
+    if let update {
+      UserDefaults.standard.set(update.version, forKey: dismissedUpdateVersionKey)
+    }
+    update = nil
   }
 
   func refreshScan() async {
