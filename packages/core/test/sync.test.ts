@@ -3,11 +3,16 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { configureTokenLogin, syncOnce, tryMergeText } from '../src/sync/engine.js';
-import { createApp } from '../../../packages/server/src/app.js';
+import { closeApp, createApp } from '../../../packages/server/src/app.js';
 
 let currentDirs: string[] = [];
+let currentApps: Array<ReturnType<typeof createApp>> = [];
 
 afterEach(async () => {
+  for (const app of currentApps) {
+    closeApp(app);
+  }
+  currentApps = [];
   for (const dir of currentDirs) {
     await rm(dir, { recursive: true, force: true });
   }
@@ -25,7 +30,7 @@ async function tempDir(prefix: string): Promise<string> {
 describe('sync engine', () => {
   test('syncs a local edit from one client to another through the server', async () => {
     const serverDb = path.join(await tempDir('reglet-sync-server-'), 'db.sqlite');
-    const app = createApp({ dbPath: serverDb, singleUserToken: 'sync-token' });
+    const app = useApp(createApp({ dbPath: serverDb, singleUserToken: 'sync-token' }));
     const fetchImpl = appFetch(app);
     const homeA = await tempDir('reglet-sync-a-');
     const homeB = await tempDir('reglet-sync-b-');
@@ -45,7 +50,7 @@ describe('sync engine', () => {
 
   test('clean pull applies remote files into an empty local master', async () => {
     const serverDb = path.join(await tempDir('reglet-sync-server-'), 'db.sqlite');
-    const app = createApp({ dbPath: serverDb, singleUserToken: 'sync-token' });
+    const app = useApp(createApp({ dbPath: serverDb, singleUserToken: 'sync-token' }));
     const fetchImpl = appFetch(app);
     const homeA = await tempDir('reglet-sync-a-');
     const homeB = await tempDir('reglet-sync-b-');
@@ -67,7 +72,7 @@ describe('sync engine', () => {
 
   test('merges non-overlapping text edits and retries push after remote conflict', async () => {
     const serverDb = path.join(await tempDir('reglet-sync-server-'), 'db.sqlite');
-    const app = createApp({ dbPath: serverDb, singleUserToken: 'sync-token' });
+    const app = useApp(createApp({ dbPath: serverDb, singleUserToken: 'sync-token' }));
     const fetchImpl = appFetch(app);
     const homeA = await tempDir('reglet-sync-a-');
     const homeB = await tempDir('reglet-sync-b-');
@@ -100,6 +105,11 @@ describe('sync engine', () => {
     expect(tryMergeText(base, local, remote)).toBeNull();
   });
 });
+
+function useApp(app: ReturnType<typeof createApp>): ReturnType<typeof createApp> {
+  currentApps.push(app);
+  return app;
+}
 
 async function writeBasicMaster(home: string, rules: string): Promise<void> {
   await mkdir(path.join(home, 'rules'), { recursive: true });

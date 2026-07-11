@@ -2,11 +2,16 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { createApp } from '../src/app.js';
+import { closeApp, createApp } from '../src/app.js';
 
 let currentDbDir: string | undefined;
+let currentApp: ReturnType<typeof createApp> | undefined;
 
 afterEach(async () => {
+  if (currentApp !== undefined) {
+    closeApp(currentApp);
+    currentApp = undefined;
+  }
   if (currentDbDir !== undefined) {
     await rm(currentDbDir, { recursive: true, force: true });
     currentDbDir = undefined;
@@ -20,7 +25,7 @@ async function tempDbPath(): Promise<string> {
 
 describe('sync server API', () => {
   test('registers, logs in, pairs, stores files, reports conflicts, changes, and deletes', async () => {
-    const app = createApp({ dbPath: await tempDbPath() });
+    const app = useApp(createApp({ dbPath: await tempDbPath() }));
 
     const register = await postJson(app, '/v1/auth/register', {
       email: 'user@example.test',
@@ -117,7 +122,7 @@ describe('sync server API', () => {
   });
 
   test('accepts single-user token mode without registration', async () => {
-    const app = createApp({ dbPath: await tempDbPath(), singleUserToken: 'dev-token' });
+    const app = useApp(createApp({ dbPath: await tempDbPath(), singleUserToken: 'dev-token' }));
 
     const put = await putJson(
       app,
@@ -135,12 +140,17 @@ describe('sync server API', () => {
   });
 
   test('serves health and root endpoints', async () => {
-    const app = createApp({ dbPath: await tempDbPath() });
+    const app = useApp(createApp({ dbPath: await tempDbPath() }));
 
     expect(await (await app.request('/healthz')).json()).toEqual({ ok: true });
     expect(await (await app.request('/')).text()).toContain('Reglet sync server');
   });
 });
+
+function useApp(app: ReturnType<typeof createApp>): ReturnType<typeof createApp> {
+  currentApp = app;
+  return app;
+}
 
 async function postJson(app: ReturnType<typeof createApp>, url: string, body: unknown): Promise<JsonResult> {
   return requestJson(app, url, 'POST', body);

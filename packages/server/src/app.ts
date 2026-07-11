@@ -52,6 +52,7 @@ const sessions = new Map<string, Session>();
 const pairCodes = new Map<string, PairCode>();
 const singleUserEmail = 'single-user@reglet.local';
 const singleUserPassword = 'single-user';
+const appDatabases = new WeakMap<Hono, Database>();
 
 export function createApp(options: CreateAppOptions = {}): Hono {
   const db = new Database(options.dbPath ?? ':memory:');
@@ -62,6 +63,7 @@ export function createApp(options: CreateAppOptions = {}): Hono {
   }
 
   const app = new Hono();
+  appDatabases.set(app, db);
 
   app.get('/', (c) =>
     c.html(`<!doctype html>
@@ -259,6 +261,11 @@ export function createApp(options: CreateAppOptions = {}): Hono {
   });
 
   return app;
+}
+
+export function closeApp(app: Hono): void {
+  appDatabases.get(app)?.close();
+  appDatabases.delete(app);
 }
 
 function initializeSchema(db: Database): void {
