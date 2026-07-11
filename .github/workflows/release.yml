@@ -1,0 +1,25 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-binaries:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+      - run: bun run build:binaries
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/reglet-darwin-arm64
+            dist/reglet-darwin-x64
+            dist/reglet-windows-x64.exe

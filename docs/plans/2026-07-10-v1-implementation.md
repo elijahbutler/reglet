@@ -163,8 +163,18 @@ In `packages/server` (Bun + Hono + `bun:sqlite`):
 - `reglet sync --watch` handled by daemon hook (wire the Task 7 no-op hook to push after apply, pull on interval 60s).
 - Tests: two sandboxed clients against an in-process server — edit on A → sync → appears on B; concurrent divergent edits → conflict copy created; cursor persistence.
 
-### Task 10: Docs + packaging polish
+### Task 10: Packaging polish
 
-- README full rewrite (install, quickstart, provider table, daemon, sync, self-host section linking docs/self-hosting.md), `docs/providers.md` (paths + caveats: cursor rules unsupported, windsurf skills, codex TOML comments), CONTRIBUTING stub.
 - npm publish config for `reglet` package (files, bin shebang, `bun build --compile` script targets mac arm64/x64 + windows x64 in `scripts/build-binaries.sh`).
 - GitHub Actions release workflow building the three binaries on tag (compile step only; no publishing secrets assumed — attach to GitHub Release).
+
+### Task 11: BranchForge-style documentation pass
+
+Mirror the documentation structure and graphic treatment of `https://github.com/elijahbutler/branchforge`:
+- README structure: title, banner SVG, short product statement, status block, `Why`, `How It Works` with lifecycle SVG, `Quick Start`, `CLI`, `Repository Layout`, `Docs`, `Development`, `License`.
+- Graphics in `docs/assets/`: `reglet-banner.svg` and `reglet-lifecycle.svg`, matching BranchForge's clean SVG style while using Reglet-specific concepts (master dir → provider adapters → generated outputs → drift/sync loop).
+- Focused docs split: `docs/installation.md`, `docs/usage.md`, `docs/architecture.md`, `docs/development.md`, plus `docs/providers.md` and `docs/self-hosting.md`.
+- README full rewrite: install, quickstart, provider table, daemon, sync, self-host section linking docs/self-hosting.md.
+- Provider caveats in `docs/providers.md`: Cursor global rules unsupported, Windsurf skills unsupported, Codex TOML comments are not preserved by the current converter.
+- CONTRIBUTING stub aligned with the development doc.
+- Final verification: all README commands should be smoke-tested against the built CLI or clearly marked as planned/experimental.

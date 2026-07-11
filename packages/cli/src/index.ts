@@ -1,0 +1,672 @@
+#!/usr/bin/env bun
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { confirm, isCancel, multiselect, outro } from '@clack/prompts';
+import { Command, InvalidArgumentError } from 'commander';
+import { parse as parseToml } from 'smol-toml';
+import {
+  applyAll,
+  configureTokenLogin,
+  copyDirRecursive,
+  detectDrift,
+  getAdapter,
+  importDriftedRules,
+  initMasterDir,
+  loadConfig,
+  loadMasterDir,
+  type McpServerDef,
+  regletHome,
+  restore,
+  revert,
+  saveConfig,
+  syncOnce,
+  type ApplyContent,
+  type ApplyResult,
+  type ProviderId,
+} from '@reglet/core';
+import { allAdapters } from '@reglet/core';
+import {
+  daemonServiceSpec,
+  daemonStatus,
+  daemonUninstallSpec,
+  installDaemon,
+  runDaemon,
+  startDaemon,
+  stopDaemon,
+  uninstallDaemon,
+} from './daemon.js';
+
+const providerIds = ['claude', 'codex', 'cursor', 'gemini', 'windsurf', 'opencode'] as const;
+const contentIds = ['rules', 'skills', 'mcp'] as const;
+
+type ContentId = (typeof contentIds)[number];
+
+const program = new Command();
+
+program
+  .name('reglet')
+  .description('Manage global AI agent rules, skills, and MCP configs')
+  .version('0.1.0');
+
+program
+  .command('init')
+  .description('Create the master directory and optionally enroll detected providers')
+  .option('-y, --yes', 'run non-interactively and enroll detected providers')
+  .option('-p, --provider <provider...>', 'provider(s) to enroll/import', parseProviderList)
+  .option('-c, --content <content...>', 'content type(s) to import/apply', parseContentList)
+  .action(async (options: { yes?: boolean; provider?: ProviderId[]; content?: ApplyContent[] }) => {
+    await initMasterDir();
+    if (options.yes === true || options.provider !== undefined || options.content !== undefined) {
+      const providers = options.provider ?? (await detectedProviderIds());
+      const contents = options.content ?? [...contentIds];
+      await runOnboarding(providers, contents);
+    } else if (process.stdin.isTTY) {
+      await runInteractiveOnboarding();
+    }
+    console.log(`Initialized ${regletHome()}`);
+  });
+
+program
+  .command('scan')
+  .description('Print detected providers and existing inventory')
+  .action(async () => {
+    for (const adapter of allAdapters()) {
+      const detected = await adapter.detect();
+      const inventory = await adapter.inventory();
+      console.log(`${adapter.id}\t${detected ? 'detected' : 'missing'}\trules=${inventory.rulesExists ? 'yes' : 'no'}\tskills=${inventory.skills.length}\tmcp=${inventory.mcpServers.length}`);
+    }
+  });
+
+program
+  .command('apply')
+  .description('Apply master rules, skills, and MCP config to enrolled providers')
+  .option('-p, --provider <provider>', 'provider to apply', parseProvider)
+  .option('-c, --content <content>', 'content type to apply', parseContent)
+  .option('--dry-run', 'report planned writes without changing files')
+  .action(async (options: { provider?: ProviderId; content?: ApplyContent; dryRun?: boolean }) => {
+    const report = await applyAll({
+      providers: options.provider === undefined ? undefined : [options.provider],
+      contents: options.content === undefined ? undefined : [options.content],
+      dryRun: options.dryRun,
+    });
+    printApplyResults(report.results);
+  });
+
+program
+  .command('status')
+  .description('Print enrollment and drift status')
+  .option('--check', 'exit with 2 when drift is found')
+  .action(async (options: { check?: boolean }) => {
+    const config = await loadConfig();
+    for (const provider of providerIds) {
+      const providerConfig = config.providers[provider];
+      console.log(
+        `${provider}\t${providerConfig.enabled ? 'enabled' : 'disabled'}\trules=${providerConfig.rules ? 'on' : 'off'}\tskills=${providerConfig.skills ? 'on' : 'off'}\tmcp=${providerConfig.mcp ? 'on' : 'off'}`,
+      );
+    }
+
+    const drift = await detectDrift();
+    const drifted = drift.filter((record) => record.status !== 'clean');
+    for (const record of drift) {
+      console.log(`drift\t${record.provider}\t${record.content}\t${record.status}\t${record.outputPath}`);
+    }
+
+    if (options.check === true && drifted.length > 0) {
+      process.exitCode = 2;
+    }
+  });
+
+program
+  .command('enroll')
+  .description('Enroll a provider or provider content type')
+  .argument('<target>', 'provider or provider:rules|skills|mcp', parseProviderTarget)
+  .action(async (target: ProviderTarget) => {
+    await setEnrollment(target, true);
+  });
+
+program
+  .command('unenroll')
+  .description('Unenroll a provider or provider content type')
+  .argument('<target>', 'provider or provider:rules|skills|mcp', parseProviderTarget)
+  .action(async (target: ProviderTarget) => {
+    await setEnrollment(target, false);
+  });
+
+program
+  .command('restore')
+  .description('Restore backed-up provider files for a provider or all providers')
+  .argument('[provider]', 'provider to restore', parseProvider)
+  .action(async (provider?: ProviderId) => {
+    printRevertResults(await restore(provider));
+  });
+
+program
+  .command('revert')
+  .description('Restore all backed-up provider files and remove Reglet-created outputs')
+  .argument('[provider]', 'provider to revert', parseProvider)
+  .action(async (provider?: ProviderId) => {
+    printRevertResults(await revert(provider));
+  });
+
+program
+  .command('diff')
+  .description('Preview apply actions without writing files')
+  .option('-p, --provider <provider>', 'provider to diff', parseProvider)
+  .action(async (options: { provider?: ProviderId }) => {
+    const report = await applyAll({
+      providers: options.provider === undefined ? undefined : [options.provider],
+      dryRun: true,
+    });
+    printApplyResults(report.results);
+  });
+
+program
+  .command('import')
+  .description('Import drifted provider content back into the master directory')
+  .argument('<target>', 'provider:rules', parseProviderTarget)
+  .action(async (target: ProviderTarget) => {
+    if (target.content !== 'rules') {
+      throw new InvalidArgumentError('Only rules import is supported in v1');
+    }
+    const result = await importDriftedRules(target.provider);
+    console.log(`${result.provider}\trules\timported\t${result.importedPath}`);
+  });
+
+program
+  .command('login')
+  .description('Configure sync login')
+  .argument('<url>', 'sync server URL')
+  .option('--token <token>', 'single-user server token')
+  .option('--device <name>', 'device name', 'device')
+  .action(async (url: string, options: { token?: string; device: string }) => {
+    if (options.token === undefined) {
+      throw new InvalidArgumentError('Only --token login is implemented in this build');
+    }
+    await configureTokenLogin(url, options.token, options.device);
+    console.log(`sync\tlogged-in\t${url}`);
+  });
+
+program
+  .command('sync')
+  .description('Pull then push master directory changes')
+  .action(async () => {
+    const result = await syncOnce();
+    console.log(
+      `sync\tpulled=${result.pulled.length}\tpushed=${result.pushed.length}\tconflicts=${result.conflicts.length}\tdeleted=${result.deleted.length}`,
+    );
+    for (const conflict of result.conflicts) {
+      console.log(`conflict\t${conflict}`);
+    }
+  });
+
+const daemon = program.command('daemon').description('Run or manage the background daemon');
+
+daemon
+  .command('run')
+  .description('Run the foreground file watcher daemon')
+  .action(async () => {
+    await runDaemon();
+  });
+
+daemon
+  .command('start')
+  .description('Start the detached daemon')
+  .action(async () => {
+    const pid = await startDaemon();
+    console.log(`daemon\trunning\t${pid}`);
+  });
+
+daemon
+  .command('stop')
+  .description('Stop the detached daemon')
+  .action(async () => {
+    console.log(`daemon\t${(await stopDaemon()) ? 'stopped' : 'not-running'}`);
+  });
+
+daemon
+  .command('status')
+  .description('Print daemon status')
+  .action(async () => {
+    console.log(`daemon\t${await daemonStatus()}`);
+  });
+
+daemon
+  .command('install')
+  .description('Install the daemon as a login service')
+  .option('--dry-run', 'print the service command without installing')
+  .action(async (options: { dryRun?: boolean }) => {
+    const spec = options.dryRun === true ? daemonServiceSpec(process.platform, osHome()) : await installDaemon();
+    console.log(`daemon\tinstall\t${spec.command.join(' ')}`);
+  });
+
+daemon
+  .command('uninstall')
+  .description('Uninstall the daemon login service')
+  .option('--dry-run', 'print the service command without uninstalling')
+  .action(async (options: { dryRun?: boolean }) => {
+    const spec = options.dryRun === true ? daemonUninstallSpec(process.platform, osHome()) : await uninstallDaemon();
+    console.log(`daemon\tuninstall\t${spec.command.join(' ')}`);
+  });
+
+try {
+  await program.parseAsync();
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+}
+
+interface ProviderTarget {
+  provider: ProviderId;
+  content?: ContentId;
+}
+
+function parseProvider(value: string): ProviderId {
+  if (providerIds.includes(value as ProviderId)) {
+    return value as ProviderId;
+  }
+  throw new InvalidArgumentError(`Unknown provider: ${value}`);
+}
+
+function parseContent(value: string): ApplyContent {
+  if (contentIds.includes(value as ContentId)) {
+    return value as ApplyContent;
+  }
+  throw new InvalidArgumentError(`Unknown content type: ${value}`);
+}
+
+function parseProviderList(value: string, previous: ProviderId[] = []): ProviderId[] {
+  return [...previous, ...value.split(',').filter((item) => item.length > 0).map(parseProvider)];
+}
+
+function parseContentList(value: string, previous: ApplyContent[] = []): ApplyContent[] {
+  return [...previous, ...value.split(',').filter((item) => item.length > 0).map(parseContent)];
+}
+
+function parseProviderTarget(value: string): ProviderTarget {
+  const [providerRaw, contentRaw] = value.split(':');
+  if (providerRaw === undefined || providerRaw.length === 0) {
+    throw new InvalidArgumentError(`Invalid target: ${value}`);
+  }
+  const provider = parseProvider(providerRaw);
+  if (contentRaw === undefined) {
+    return { provider };
+  }
+  return { provider, content: parseContent(contentRaw) };
+}
+
+async function runOnboarding(providers: ProviderId[], contents: ApplyContent[]): Promise<void> {
+  const config = await loadConfig();
+  for (const provider of providers) {
+    config.providers[provider].enabled = true;
+    for (const content of contentIds) {
+      config.providers[provider][content] = contents.includes(content);
+    }
+    if (contents.includes('rules')) {
+      await importProviderRules(provider);
+    }
+    if (contents.includes('skills')) {
+      await importProviderSkills(provider);
+    }
+    if (contents.includes('mcp')) {
+      await importProviderMcp(provider);
+    }
+  }
+  await saveConfig(config);
+  await applyAll({ providers, contents });
+}
+
+async function runInteractiveOnboarding(): Promise<void> {
+  const detected = await detectedProviderIds();
+  if (detected.length === 0) {
+    outro('No provider directories detected. Created the master directory only.');
+    return;
+  }
+
+  const providers = await multiselect({
+    message: 'Select providers to enroll',
+    options: detected.map((provider) => ({
+      value: provider,
+      label: `${provider} (${getAdapter(provider).displayName})`,
+    })),
+    required: true,
+  });
+  if (isCancel(providers)) {
+    outro('Onboarding cancelled.');
+    return;
+  }
+
+  const contents = await multiselect({
+    message: 'Select content types to import and manage',
+    options: contentIds.map((content) => ({ value: content, label: content })),
+    initialValues: ['rules', 'skills', 'mcp'],
+    required: true,
+  });
+  if (isCancel(contents)) {
+    outro('Onboarding cancelled.');
+    return;
+  }
+
+  const shouldApply = await confirm({
+    message: `Import selected content and apply to ${providers.length} provider(s)?`,
+    initialValue: true,
+  });
+  if (isCancel(shouldApply) || !shouldApply) {
+    outro('Onboarding cancelled.');
+    return;
+  }
+
+  await runOnboarding(normalizeProviderSelections(providers), normalizeContentSelections(contents));
+  outro('Onboarding complete.');
+}
+
+function normalizeProviderSelections(values: readonly string[]): ProviderId[] {
+  return values.map(parseProvider);
+}
+
+function normalizeContentSelections(values: readonly string[]): ApplyContent[] {
+  return values.map(parseContent);
+}
+
+async function detectedProviderIds(): Promise<ProviderId[]> {
+  const providers: ProviderId[] = [];
+  for (const adapter of allAdapters()) {
+    if (await adapter.detect()) {
+      providers.push(adapter.id);
+    }
+  }
+  return providers;
+}
+
+async function setEnrollment(target: ProviderTarget, enabled: boolean): Promise<void> {
+  const config = await loadConfig();
+  if (target.content === undefined) {
+    config.providers[target.provider].enabled = enabled;
+  } else {
+    config.providers[target.provider][target.content] = enabled;
+  }
+  await saveConfig(config);
+  console.log(`${enabled ? 'Enrolled' : 'Unenrolled'} ${formatTarget(target)}`);
+}
+
+async function importProviderRules(provider: ProviderId): Promise<void> {
+  const adapter = getAdapter(provider);
+  const rulesPath = adapter.rulesPath();
+  if (rulesPath === null) {
+    return;
+  }
+
+  try {
+    const content = await readFile(rulesPath, 'utf8');
+    const targetPath = path.join(regletHome(), 'rules', `imported-${provider}.md`);
+    await mkdir(path.dirname(targetPath), { recursive: true });
+    await writeFile(targetPath, content, { flag: 'wx' });
+  } catch (error) {
+    if (!isNodeError(error) || (error.code !== 'ENOENT' && error.code !== 'EEXIST')) {
+      throw error;
+    }
+  }
+}
+
+async function importProviderSkills(provider: ProviderId): Promise<void> {
+  const adapter = getAdapter(provider);
+  const skillsDir = adapter.skillsDir();
+  if (skillsDir === null) {
+    return;
+  }
+
+  let entries;
+  try {
+    entries = await readdir(skillsDir, { withFileTypes: true });
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') {
+      return;
+    }
+    throw error;
+  }
+
+  const masterSkillsDir = path.join(regletHome(), 'skills');
+  const existingNames = new Set<string>();
+  try {
+    for (const entry of await readdir(masterSkillsDir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        existingNames.add(entry.name);
+      }
+    }
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const targetName = uniqueName(entry.name, provider, existingNames);
+    existingNames.add(targetName);
+    await copyDirRecursive(path.join(skillsDir, entry.name), path.join(masterSkillsDir, targetName));
+  }
+}
+
+async function importProviderMcp(provider: ProviderId): Promise<void> {
+  const adapter = getAdapter(provider);
+  const mcpPath = adapter.mcpPath();
+  if (mcpPath === null) {
+    return;
+  }
+
+  const importedServers = await readProviderMcpServers(provider, mcpPath);
+  if (Object.keys(importedServers).length === 0) {
+    return;
+  }
+
+  const master = await loadMasterDir();
+  const existingNames = new Set(Object.keys(master.mcpServers));
+  const nextServers: Record<string, McpServerDef> = { ...master.mcpServers };
+
+  for (const [name, server] of Object.entries(importedServers).sort(([left], [right]) => left.localeCompare(right))) {
+    const targetName = sameMcpServer(nextServers[name], server) ? name : uniqueName(name, provider, existingNames);
+    existingNames.add(targetName);
+    nextServers[targetName] = server;
+  }
+
+  const targetPath = path.join(regletHome(), 'mcp', 'servers.json');
+  await mkdir(path.dirname(targetPath), { recursive: true });
+  await writeFile(targetPath, `${JSON.stringify({ mcpServers: nextServers }, null, 2)}\n`);
+}
+
+async function readProviderMcpServers(provider: ProviderId, mcpPath: string): Promise<Record<string, McpServerDef>> {
+  if (provider === 'codex') {
+    return readCodexMcpServers(mcpPath);
+  }
+
+  if (provider === 'opencode') {
+    return readOpenCodeMcpServers(mcpPath);
+  }
+
+  return readJsonMcpServers(mcpPath);
+}
+
+async function readJsonMcpServers(mcpPath: string): Promise<Record<string, McpServerDef>> {
+  const config = await readJsonObject(mcpPath);
+  if (!isRecord(config.mcpServers)) {
+    return {};
+  }
+  return normalizeMcpServers(config.mcpServers);
+}
+
+async function readCodexMcpServers(mcpPath: string): Promise<Record<string, McpServerDef>> {
+  try {
+    const parsed = parseToml(await readFile(mcpPath, 'utf8')) as unknown;
+    if (!isRecord(parsed) || !isRecord(parsed.mcp_servers)) {
+      return {};
+    }
+    return normalizeMcpServers(parsed.mcp_servers);
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') {
+      return {};
+    }
+    throw error;
+  }
+}
+
+async function readOpenCodeMcpServers(mcpPath: string): Promise<Record<string, McpServerDef>> {
+  const config = await readJsonObject(mcpPath);
+  if (!isRecord(config.mcp)) {
+    return {};
+  }
+
+  const servers: Record<string, McpServerDef> = {};
+  for (const [name, server] of Object.entries(config.mcp)) {
+    const normalized = normalizeOpenCodeServer(server);
+    if (normalized !== null) {
+      servers[name] = normalized;
+    }
+  }
+  return servers;
+}
+
+async function readJsonObject(filePath: string): Promise<Record<string, unknown>> {
+  try {
+    const parsed = JSON.parse(await readFile(filePath, 'utf8')) as unknown;
+    return isRecord(parsed) ? parsed : {};
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') {
+      return {};
+    }
+    throw error;
+  }
+}
+
+function normalizeMcpServers(value: Record<string, unknown>): Record<string, McpServerDef> {
+  const servers: Record<string, McpServerDef> = {};
+  for (const [name, server] of Object.entries(value)) {
+    if (isMcpServerDef(server)) {
+      servers[name] = server;
+    }
+  }
+  return servers;
+}
+
+function normalizeOpenCodeServer(value: unknown): McpServerDef | null {
+  if (!isRecord(value) || typeof value.type !== 'string') {
+    return null;
+  }
+
+  if (value.type === 'remote' && typeof value.url === 'string') {
+    return { url: value.url };
+  }
+
+  if (
+    value.type !== 'local' ||
+    !Array.isArray(value.command) ||
+    !value.command.every((item) => typeof item === 'string')
+  ) {
+    return null;
+  }
+
+  const [command, ...args] = value.command;
+  if (command === undefined) {
+    return null;
+  }
+
+  return {
+    command,
+    ...(args.length === 0 ? {} : { args }),
+    ...(isStringRecord(value.environment) ? { env: value.environment } : {}),
+  };
+}
+
+function uniqueName(name: string, provider: ProviderId, existingNames: Set<string>): string {
+  if (!existingNames.has(name)) {
+    return name;
+  }
+
+  const prefixed = `${provider}-${name}`;
+  if (!existingNames.has(prefixed)) {
+    return prefixed;
+  }
+
+  let index = 2;
+  while (existingNames.has(`${prefixed}-${index}`)) {
+    index += 1;
+  }
+  return `${prefixed}-${index}`;
+}
+
+function isMcpServerDef(value: unknown): value is McpServerDef {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    readOptionalString(value.command) &&
+    readOptionalStringArray(value.args) &&
+    isOptionalStringRecord(value.env) &&
+    readOptionalString(value.url)
+  );
+}
+
+function readOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === 'string';
+}
+
+function readOptionalStringArray(value: unknown): boolean {
+  return value === undefined || (Array.isArray(value) && value.every((item) => typeof item === 'string'));
+}
+
+function isOptionalStringRecord(value: unknown): boolean {
+  return value === undefined || isStringRecord(value);
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return isRecord(value) && Object.values(value).every((item) => typeof item === 'string');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function sameMcpServer(left: McpServerDef | undefined, right: McpServerDef): boolean {
+  return left !== undefined && JSON.stringify(sortJson(left)) === JSON.stringify(sortJson(right));
+}
+
+function sortJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sortJson);
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, sortJson(item)]),
+  );
+}
+
+function printApplyResults(results: ApplyResult[]): void {
+  for (const result of results) {
+    const suffix = result.message === undefined ? result.outputPath : result.message;
+    console.log(`${result.provider}\t${result.content}\t${result.status}\t${suffix}`);
+  }
+}
+
+function printRevertResults(results: { outputPath: string; provider: string; action: string }[]): void {
+  for (const result of results) {
+    console.log(`${result.provider}\t${result.action}\t${result.outputPath}`);
+  }
+}
+
+function formatTarget(target: ProviderTarget): string {
+  return target.content === undefined ? target.provider : `${target.provider}:${target.content}`;
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error;
+}
+
+function osHome(): string {
+  return process.env.HOME ?? process.env.USERPROFILE ?? '';
+}

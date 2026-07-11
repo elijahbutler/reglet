@@ -7,6 +7,7 @@
 - [ ] Drift detection + import/unenroll flow, injected agent-instruction header
 - [ ] Background daemon (macOS launchd, Windows scheduled task) with auto-apply
 - [ ] Self-hostable sync server (Bun + Hono + SQLite, single Docker container) with device pairing and versioned per-file snapshots (3-way merge, conflict copies)
+- [ ] Final documentation pass mirroring BranchForge's README/docs/assets structure with Reglet-specific banner and lifecycle SVGs
 
 ## v2 and beyond
 
