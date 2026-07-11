@@ -4,6 +4,7 @@
   "workspaces": ["packages/*"],
   "scripts": {
     "build:binaries": "bash scripts/build-binaries.sh",
+    "build:macos-installer": "bash scripts/build-macos-installer.sh",
     "typecheck": "tsc --build",
     "lint": "eslint .",
     "test": "bun test"

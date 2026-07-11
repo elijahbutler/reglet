@@ -40,6 +40,100 @@ async function runCli(args: string[], home: string, providerHome: string): Promi
 }
 
 describe('reglet CLI', () => {
+  test('scan --json reports provider inventory and safety defaults', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const claudeRules = path.join(providerHome, '.claude', 'CLAUDE.md');
+    await mkdir(path.dirname(claudeRules), { recursive: true });
+    await writeFile(claudeRules, 'existing claude rules\n');
+
+    const result = await runCli(['scan', '--json'], home, providerHome);
+    const scan = JSON.parse(result.stdout) as {
+      version: number;
+      regletHome: string;
+      safety: {
+        daemonEnabled: boolean;
+        syncEnabled: boolean;
+        notificationsEnabled: boolean;
+        requiresExplicitConfirmation: boolean;
+      };
+      providers: {
+        id: string;
+        detected: boolean;
+        inventory: {
+          rulesPath: string | null;
+          rulesExists: boolean;
+        };
+      }[];
+    };
+
+    expect(scan.version).toBe(1);
+    expect(scan.regletHome).toBe(home);
+    expect(scan.safety).toEqual({
+      daemonEnabled: false,
+      syncEnabled: false,
+      notificationsEnabled: false,
+      requiresExplicitConfirmation: true,
+    });
+    const claude = scan.providers.find((provider) => provider.id === 'claude');
+    expect(claude).toMatchObject({
+      detected: true,
+      inventory: {
+        rulesPath: claudeRules,
+        rulesExists: true,
+      },
+    });
+  });
+
+  test('plan --json previews first-run reads and writes without changing files', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const claudeRules = path.join(providerHome, '.claude', 'CLAUDE.md');
+    await mkdir(path.join(providerHome, '.claude', 'skills', 'alpha'), { recursive: true });
+    await writeFile(claudeRules, 'existing claude rules\n');
+    await writeFile(path.join(providerHome, '.claude', 'skills', 'alpha', 'SKILL.md'), 'alpha skill\n');
+
+    const result = await runCli(['plan', '--provider', 'claude', '--content', 'rules,skills', '--json'], home, providerHome);
+    const plan = JSON.parse(result.stdout) as {
+      version: number;
+      mode: string;
+      reads: { path: string; scope: string; operation: string }[];
+      writes: { path: string; scope: string; operation: string }[];
+      safety: { daemonEnabled: boolean; syncEnabled: boolean; notificationsEnabled: boolean };
+    };
+
+    expect(plan.version).toBe(1);
+    expect(plan.mode).toBe('onboarding');
+    expect(plan.reads).toContainEqual({
+      provider: 'claude',
+      content: 'rules',
+      path: claudeRules,
+      scope: 'provider',
+      operation: 'read',
+      reason: 'import claude:rules',
+    });
+    expect(plan.writes).toContainEqual({
+      provider: 'claude',
+      content: 'rules',
+      path: path.join(home, 'rules', 'imported-claude.md'),
+      scope: 'master',
+      operation: 'write',
+      reason: 'manage claude:rules',
+    });
+    expect(plan.writes).toContainEqual({
+      provider: 'claude',
+      content: 'skills',
+      path: path.join(home, 'skills', 'alpha'),
+      scope: 'master',
+      operation: 'write',
+      reason: 'manage claude:skills',
+    });
+    expect(plan.safety).toMatchObject({
+      daemonEnabled: false,
+      syncEnabled: false,
+      notificationsEnabled: false,
+    });
+    await expect(readFile(path.join(home, 'rules', 'imported-claude.md'), 'utf8')).rejects.toThrow();
+  });
+
   test('init --yes enrolls detected providers, imports rules, and applies outputs', async () => {
     const { home, providerHome } = await useTempHomes();
     const claudeRules = path.join(providerHome, '.claude', 'CLAUDE.md');

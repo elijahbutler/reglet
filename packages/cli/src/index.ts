@@ -23,6 +23,7 @@ import {
   type ApplyContent,
   type ApplyResult,
   type ProviderId,
+  type ProviderInventory,
 } from '@reglet/core';
 import { allAdapters } from '@reglet/core';
 import {
@@ -69,12 +70,38 @@ program
 program
   .command('scan')
   .description('Print detected providers and existing inventory')
-  .action(async () => {
+  .option('--json', 'print machine-readable JSON for setup apps')
+  .action(async (options: { json?: boolean }) => {
+    if (options.json === true) {
+      printJson(await buildScanJson());
+      return;
+    }
+
     for (const adapter of allAdapters()) {
       const detected = await adapter.detect();
       const inventory = await adapter.inventory();
       console.log(`${adapter.id}\t${detected ? 'detected' : 'missing'}\trules=${inventory.rulesExists ? 'yes' : 'no'}\tskills=${inventory.skills.length}\tmcp=${inventory.mcpServers.length}`);
     }
+  });
+
+program
+  .command('plan')
+  .description('Preview first-run onboarding reads and writes without changing files')
+  .option('-p, --provider <provider...>', 'provider(s) to include', parseProviderList)
+  .option('-c, --content <content...>', 'content type(s) to include', parseContentList)
+  .option('--json', 'print machine-readable JSON for setup apps')
+  .action(async (options: { provider?: ProviderId[]; content?: ApplyContent[]; json?: boolean }) => {
+    const plan = await buildOnboardingPlanJson({
+      providers: options.provider ?? (await detectedProviderIds()),
+      contents: options.content ?? [...contentIds],
+    });
+
+    if (options.json === true) {
+      printJson(plan);
+      return;
+    }
+
+    printOnboardingPlan(plan);
   });
 
 program
@@ -260,6 +287,77 @@ interface ProviderTarget {
   content?: ContentId;
 }
 
+interface ScanProviderJson {
+  id: ProviderId;
+  displayName: string;
+  detected: boolean;
+  enabled: boolean;
+  contents: Record<ContentId, boolean>;
+  inventory: ProviderInventory;
+}
+
+interface ScanJson {
+  version: 1;
+  regletHome: string;
+  providers: ScanProviderJson[];
+  safety: SafetyJson;
+}
+
+interface OnboardingPlanJson {
+  version: 1;
+  mode: 'onboarding';
+  regletHome: string;
+  providers: PlannedProviderJson[];
+  reads: PlannedFileJson[];
+  writes: PlannedFileJson[];
+  safety: SafetyJson;
+}
+
+interface PlannedProviderJson {
+  id: ProviderId;
+  displayName: string;
+  detected: boolean;
+  contents: Partial<Record<ContentId, PlannedContentJson>>;
+}
+
+interface PlannedContentJson {
+  selected: boolean;
+  supported: boolean;
+  readPaths: string[];
+  writePaths: string[];
+  notes: string[];
+}
+
+interface PlannedFileJson {
+  provider: ProviderId;
+  content: ContentId;
+  path: string;
+  scope: 'master' | 'provider';
+  operation: 'read' | 'write';
+  reason: string;
+}
+
+interface SafetyJson {
+  daemonEnabled: false;
+  syncEnabled: false;
+  notificationsEnabled: false;
+  requiresExplicitConfirmation: true;
+}
+
+interface BuildOnboardingPlanOptions {
+  providers: ProviderId[];
+  contents: ApplyContent[];
+}
+
+function safetyDefaults(): SafetyJson {
+  return {
+    daemonEnabled: false,
+    syncEnabled: false,
+    notificationsEnabled: false,
+    requiresExplicitConfirmation: true,
+  };
+}
+
 function parseProvider(value: string): ProviderId {
   if (providerIds.includes(value as ProviderId)) {
     return value as ProviderId;
@@ -365,6 +463,182 @@ function normalizeProviderSelections(values: readonly string[]): ProviderId[] {
 
 function normalizeContentSelections(values: readonly string[]): ApplyContent[] {
   return values.map(parseContent);
+}
+
+async function buildScanJson(): Promise<ScanJson> {
+  const config = await loadConfig();
+  const providers: ScanProviderJson[] = [];
+
+  for (const adapter of allAdapters()) {
+    const providerConfig = config.providers[adapter.id];
+    providers.push({
+      id: adapter.id,
+      displayName: adapter.displayName,
+      detected: await adapter.detect(),
+      enabled: providerConfig.enabled,
+      contents: {
+        rules: providerConfig.rules,
+        skills: providerConfig.skills,
+        mcp: providerConfig.mcp,
+      },
+      inventory: await adapter.inventory(),
+    });
+  }
+
+  return {
+    version: 1,
+    regletHome: regletHome(),
+    providers,
+    safety: safetyDefaults(),
+  };
+}
+
+async function buildOnboardingPlanJson(options: BuildOnboardingPlanOptions): Promise<OnboardingPlanJson> {
+  const reads: PlannedFileJson[] = [];
+  const writes: PlannedFileJson[] = [];
+  const providers: PlannedProviderJson[] = [];
+
+  for (const provider of options.providers) {
+    const adapter = getAdapter(provider);
+    const inventory = await adapter.inventory();
+    const plannedProvider: PlannedProviderJson = {
+      id: provider,
+      displayName: adapter.displayName,
+      detected: await adapter.detect(),
+      contents: {},
+    };
+
+    for (const content of options.contents) {
+      const contentPlan = await buildContentPlan(provider, content, inventory);
+      plannedProvider.contents[content] = contentPlan;
+      reads.push(...contentPlan.readPaths.map((filePath) => plannedFile(provider, content, filePath, 'provider', 'read')));
+      writes.push(...contentPlan.writePaths.map((filePath) => plannedFile(provider, content, filePath, plannedScope(filePath), 'write')));
+    }
+
+    providers.push(plannedProvider);
+  }
+
+  return {
+    version: 1,
+    mode: 'onboarding',
+    regletHome: regletHome(),
+    providers,
+    reads,
+    writes,
+    safety: safetyDefaults(),
+  };
+}
+
+async function buildContentPlan(
+  provider: ProviderId,
+  content: ApplyContent,
+  inventory: ProviderInventory,
+): Promise<PlannedContentJson> {
+  if (content === 'rules') {
+    const readPaths = inventory.rulesPath === null || !inventory.rulesExists ? [] : [inventory.rulesPath];
+    const writePaths = [
+      path.join(regletHome(), 'rules', `imported-${provider}.md`),
+      ...(inventory.rulesPath === null ? [] : [inventory.rulesPath]),
+    ];
+    return {
+      selected: true,
+      supported: inventory.rulesPath !== null,
+      readPaths,
+      writePaths,
+      notes: inventory.rulesPath === null ? [`${provider}:rules unsupported`] : [],
+    };
+  }
+
+  if (content === 'skills') {
+    const skillsDir = inventory.skillsDir;
+    const supported = skillsDir !== null;
+    const writePaths = supported
+      ? [
+          ...(await plannedSkillImportPaths(provider, inventory.skills)),
+          skillsDir,
+        ]
+      : [];
+    return {
+      selected: true,
+      supported,
+      readPaths: skillsDir !== null && inventory.skills.length > 0 ? [skillsDir] : [],
+      writePaths,
+      notes: supported ? [] : [`${provider}:skills unsupported`],
+    };
+  }
+
+  const readPaths = inventory.mcpPath === null || inventory.mcpServers.length === 0 ? [] : [inventory.mcpPath];
+  const writePaths = [
+    path.join(regletHome(), 'mcp', 'servers.json'),
+    ...(inventory.mcpPath === null ? [] : [inventory.mcpPath]),
+  ];
+  return {
+    selected: true,
+    supported: inventory.mcpPath !== null,
+    readPaths,
+    writePaths,
+    notes: inventory.mcpPath === null ? [`${provider}:mcp unsupported`] : [],
+  };
+}
+
+async function plannedSkillImportPaths(provider: ProviderId, skillNames: string[]): Promise<string[]> {
+  const masterSkillsDir = path.join(regletHome(), 'skills');
+  const existingNames = new Set<string>();
+  try {
+    for (const entry of await readdir(masterSkillsDir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        existingNames.add(entry.name);
+      }
+    }
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  const paths: string[] = [];
+  for (const skillName of skillNames.sort((left, right) => left.localeCompare(right))) {
+    const targetName = uniqueName(skillName, provider, existingNames);
+    existingNames.add(targetName);
+    paths.push(path.join(masterSkillsDir, targetName));
+  }
+  return paths;
+}
+
+function plannedFile(
+  provider: ProviderId,
+  content: ContentId,
+  filePath: string,
+  scope: 'master' | 'provider',
+  operation: 'read' | 'write',
+): PlannedFileJson {
+  return {
+    provider,
+    content,
+    path: filePath,
+    scope,
+    operation,
+    reason: operation === 'read' ? `import ${provider}:${content}` : `manage ${provider}:${content}`,
+  };
+}
+
+function plannedScope(filePath: string): 'master' | 'provider' {
+  return path.relative(regletHome(), filePath).startsWith('..') ? 'provider' : 'master';
+}
+
+function printOnboardingPlan(plan: OnboardingPlanJson): void {
+  console.log(`plan\t${plan.mode}\tproviders=${plan.providers.length}\treads=${plan.reads.length}\twrites=${plan.writes.length}`);
+  for (const read of plan.reads) {
+    console.log(`read\t${read.provider}\t${read.content}\t${read.path}`);
+  }
+  for (const write of plan.writes) {
+    console.log(`write\t${write.provider}\t${write.content}\t${write.path}`);
+  }
+  console.log('safety\tdaemon=off\tsync=off\tnotifications=off');
+}
+
+function printJson(value: unknown): void {
+  console.log(`${JSON.stringify(value, null, 2)}\n`);
 }
 
 async function detectedProviderIds(): Promise<ProviderId[]> {
