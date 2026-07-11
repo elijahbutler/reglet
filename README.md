@@ -4,7 +4,7 @@
 
 Reglet keeps global AI agent rules, skills, and MCP server configs in one local master directory, then converts them into the right format for each installed coding tool.
 
-> **Status:** experimental v0.1. Core master-dir loading, provider adapters, safe apply, drift detection, daemon scaffolding, self-hosted sync server, and a basic sync client are implemented. Interactive onboarding, packaging polish, and deeper sync merge behavior remain in progress.
+> **Status:** experimental v0.1. Core master-dir loading, provider adapters, safe apply, drift detection, interactive onboarding, daemon watching, self-hosted sync server, basic sync client, release packaging, and BranchForge-style docs are implemented. Deeper sync merge semantics and manual real-machine smoke testing remain in progress.
 
 ## Why
 
@@ -47,7 +47,7 @@ bun packages/cli/src/index.ts scan
 bun packages/cli/src/index.ts apply
 ```
 
-The `--yes` mode is non-interactive and intended for tests/scripts. Interactive onboarding is still in progress.
+The `--yes` mode is non-interactive and intended for tests/scripts. Run `reglet init` without flags for interactive provider/content selection.
 
 ## CLI
 

@@ -36,7 +36,7 @@ Non-interactive test/script mode:
 bun packages/cli/src/index.ts init --yes
 ```
 
-`init --yes` enrolls detected providers and imports detected rules, skills, and MCP servers. Interactive selective onboarding remains in progress.
+`init --yes` enrolls detected providers and imports detected rules, skills, and MCP servers. Run `init` without flags for interactive selective onboarding, or use `--provider` and `--content` for scripted selective onboarding.
 
 ## Background Daemon
 

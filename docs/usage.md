@@ -8,6 +8,21 @@ reglet scan
 
 This prints detected provider directories and inventory counts without changing files.
 
+## Onboard Selectively
+
+Interactive:
+
+```bash
+reglet init
+```
+
+Scripted:
+
+```bash
+reglet init --provider claude --content rules
+reglet init --provider claude,codex --content rules,mcp
+```
+
 ## Apply Master Config
 
 ```bash
