@@ -39,7 +39,7 @@ cask "reglet" do
   desc "Local-first control plane for AI agent rules, skills, and MCP configs"
   homepage "https://github.com/elijahbutler/reglet"
 
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
 
   app "Reglet.app"
   binary "#{appdir}/Reglet.app/Contents/Resources/reglet"
