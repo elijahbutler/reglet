@@ -35,6 +35,16 @@ Reglet writes generated provider files through the safe writer, creating a first
 
 Shared skills live in `~/.reglet/skills/<skill-name>/` and apply to every enrolled provider with skills support. Provider-specific skills live in `~/.reglet/skills/<provider>/<skill-name>/`, such as `~/.reglet/skills/codex/my-skill/`, and apply only to that provider. A provider-specific skill with the same name as a shared skill overrides the shared version for that provider.
 
+Provider-local skills are never imported automatically. Review and adopt them explicitly:
+
+```bash
+reglet skills unmanaged
+reglet skills adopt claude my-skill --scope shared
+reglet skills adopt claude my-skill --scope provider
+```
+
+Adoption copies the skill into the master without deleting the provider-local source. Existing master destinations are reported as conflicts; use `--overwrite` only after reviewing the destination.
+
 ## Drift
 
 ```bash

@@ -126,6 +126,7 @@ describe('reglet CLI', () => {
       operation: 'write',
       reason: 'manage claude:skills',
     });
+    expect(plan.writes.some((write) => write.path === path.join(home, 'skills', 'alpha'))).toBe(false);
     expect(plan.safety).toMatchObject({
       daemonEnabled: false,
       syncEnabled: false,
@@ -330,6 +331,41 @@ describe('reglet CLI', () => {
     expect(config).toContain('[providers.codex]');
     expect(config).toContain('enabled = true');
     expect(config).toContain('mcp = false');
+  });
+
+  test('lists and adopts unmanaged provider skills through JSON commands', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const source = path.join(providerHome, '.claude', 'skills', 'local-alpha');
+    await mkdir(source, { recursive: true });
+    await writeFile(path.join(source, 'SKILL.md'), 'local alpha\n');
+    await runCli(['init'], home, providerHome);
+    await runCli(['enroll', 'claude'], home, providerHome);
+
+    const listed = JSON.parse((await runCli(['skills', 'unmanaged', '--json'], home, providerHome)).stdout) as {
+      version: number;
+      skills: { provider: string; name: string; sharedConflict: string; providerConflict: string }[];
+    };
+    expect(listed).toMatchObject({
+      version: 1,
+      skills: [{ provider: 'claude', name: 'local-alpha', sharedConflict: 'none', providerConflict: 'none' }],
+    });
+
+    const adopted = JSON.parse(
+      (await runCli(['skills', 'adopt', 'claude', 'local-alpha', '--scope', 'provider', '--json'], home, providerHome))
+        .stdout,
+    ) as { adoption: { scope: string; destination: string; affectedProviders: string[] } };
+    expect(adopted.adoption).toEqual({
+      provider: 'claude',
+      name: 'local-alpha',
+      scope: 'provider',
+      sourcePath: source,
+      destination: path.join(home, 'skills', 'claude', 'local-alpha'),
+      overwritten: false,
+      affectedProviders: ['claude'],
+    });
+    expect(await readFile(path.join(home, 'skills', 'claude', 'local-alpha', 'SKILL.md'), 'utf8')).toBe(
+      'local alpha\n',
+    );
   });
 
   test('login --token writes sync state with device name', async () => {

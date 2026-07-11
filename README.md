@@ -40,11 +40,17 @@ Recommended macOS install:
 
 ```bash
 brew tap elijahbutler/reglet
-brew trust --formula elijahbutler/reglet/reglet
-brew install reglet
+brew install --cask elijahbutler/reglet/reglet
 ```
 
-This installs the CLI only. It does not install a daemon, start a background process, configure sync, or write provider files.
+This installs `Reglet.app` and exposes its bundled CLI as `reglet`. It does not install a daemon, start a background process, configure sync, or write provider files without confirmation.
+
+CLI-only install:
+
+```bash
+brew trust --formula elijahbutler/reglet/reglet
+brew install --formula elijahbutler/reglet/reglet
+```
 
 GitHub Releases also include raw CLI binaries:
 
@@ -52,7 +58,7 @@ GitHub Releases also include raw CLI binaries:
 https://github.com/elijahbutler/reglet/releases
 ```
 
-The native `.pkg` installer path is blocked until Reglet has Apple Developer ID signing and notarization. Unsigned packages are not suitable for broad Mac distribution.
+Public app distribution still requires Apple Developer ID signing and notarization. Unsigned builds are not suitable for broad Mac distribution.
 
 Source checkout:
 

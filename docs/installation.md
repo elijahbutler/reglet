@@ -14,11 +14,17 @@ Recommended macOS install:
 
 ```bash
 brew tap elijahbutler/reglet
-brew trust --formula elijahbutler/reglet/reglet
-brew install reglet
+brew install --cask elijahbutler/reglet/reglet
 ```
 
-This installs the `reglet` CLI only. It does **not** install, load, or start the Reglet daemon. It does **not** configure sync or write provider files.
+The cask installs `Reglet.app` in `/Applications` and exposes the app's bundled CLI as `reglet`. It does **not** install, load, or start the Reglet daemon, configure sync, or write provider files until you confirm those actions in the app.
+
+For a CLI-only installation:
+
+```bash
+brew trust --formula elijahbutler/reglet/reglet
+brew install --formula elijahbutler/reglet/reglet
+```
 
 ## GitHub Release Binaries
 
@@ -28,7 +34,7 @@ Raw binaries are available from GitHub Releases:
 https://github.com/elijahbutler/reglet/releases
 ```
 
-The native `.pkg` installer path is blocked until Reglet has Apple Developer ID signing and notarization. Unsigned packages trigger Gatekeeper malware-verification warnings and should not be used for broad distribution.
+The app and `.pkg` must be signed and notarized with an Apple Developer ID before broad distribution. Unsigned builds trigger Gatekeeper malware-verification warnings.
 
 ## From Checkout
 
@@ -60,11 +66,9 @@ bun packages/cli/src/index.ts init --yes
 
 `init --yes` enrolls detected providers and imports detected rules, skills, and MCP servers. Run `init` without flags for interactive selective onboarding, or use `--provider` and `--content` for scripted selective onboarding.
 
-## Mac Setup App Target
+## Mac App
 
-The current install path is still CLI-first. The Mac-friendly path is now tracked in `docs/plans/2026-07-11-mac-onboarding-sprint.md`.
-
-The setup app will use the same CLI engine through a machine-readable contract:
+The app uses the same CLI engine through a machine-readable contract:
 
 ```bash
 reglet scan --json

@@ -25,6 +25,10 @@ struct RegletCommand {
     if let override = ProcessInfo.processInfo.environment["REGLET_BINARY"] {
       return override
     }
+    if let bundled = Bundle.main.url(forResource: "reglet", withExtension: nil)?.path,
+       FileManager.default.isExecutableFile(atPath: bundled) {
+      return bundled
+    }
     if FileManager.default.isExecutableFile(atPath: "/usr/local/bin/reglet") {
       return "/usr/local/bin/reglet"
     }
@@ -74,6 +78,17 @@ struct RegletCommand {
 
   func revert(provider: String) async throws -> CommandResult {
     try await run(["revert", provider])
+  }
+
+  func unmanagedSkills() async throws -> UnmanagedSkillsResponse {
+    let result = try await run(["skills", "unmanaged", "--json"])
+    return try decode(UnmanagedSkillsResponse.self, from: result.stdout, command: "reglet skills unmanaged --json")
+  }
+
+  func adoptSkill(_ skill: UnmanagedSkill, scope: SkillAdoptionScope) async throws -> SkillAdoptionResponse {
+    let arguments = ["skills", "adopt", skill.provider, skill.name, "--scope", scope.rawValue, "--json"]
+    let result = try await run(arguments)
+    return try decode(SkillAdoptionResponse.self, from: result.stdout, command: "reglet \(arguments.joined(separator: " "))")
   }
 
   private func run(_ arguments: [String]) async throws -> CommandResult {

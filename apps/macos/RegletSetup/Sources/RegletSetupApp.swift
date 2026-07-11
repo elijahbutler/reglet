@@ -20,6 +20,298 @@ struct RegletSetupApp: App {
 
 struct ContentView: View {
   @EnvironmentObject private var model: SetupModel
+  @State private var selection: ManagerSection? = .providers
+  @State private var showsOnboarding = false
+
+  var body: some View {
+    NavigationSplitView {
+      List(ManagerSection.allCases, selection: $selection) { section in
+        Label(section.title, systemImage: section.symbol)
+          .tag(section)
+      }
+      .navigationTitle("Reglet")
+      .safeAreaInset(edge: .bottom) {
+        Button {
+          showsOnboarding = true
+        } label: {
+          Label("Set Up Providers", systemImage: "plus.circle")
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .padding()
+      }
+    } detail: {
+      ManagerDetail(section: selection ?? .providers, showsOnboarding: $showsOnboarding)
+    }
+    .sheet(isPresented: $showsOnboarding) {
+      OnboardingView()
+        .environmentObject(model)
+        .frame(minWidth: 880, minHeight: 620)
+    }
+    .overlay(alignment: .bottom) {
+      if model.isWorking {
+        ProgressView()
+          .controlSize(.small)
+          .padding(12)
+          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+          .padding()
+      }
+    }
+    .alert("Reglet command failed", isPresented: Binding(
+      get: { model.errorMessage != nil },
+      set: { if !$0 { model.errorMessage = nil } }
+    )) {
+      Button("OK") { model.errorMessage = nil }
+    } message: {
+      Text(model.errorMessage ?? "")
+    }
+  }
+}
+
+enum ManagerSection: String, CaseIterable, Identifiable {
+  case providers, rules, skills, mcp, sync, activity, recovery
+
+  var id: String { rawValue }
+  var title: String {
+    switch self {
+    case .providers: "Providers"
+    case .rules: "Rules"
+    case .skills: "Skills"
+    case .mcp: "MCP"
+    case .sync: "Sync"
+    case .activity: "Activity & Drift"
+    case .recovery: "Recovery"
+    }
+  }
+  var symbol: String {
+    switch self {
+    case .providers: "macwindow.on.rectangle"
+    case .rules: "doc.text"
+    case .skills: "hammer"
+    case .mcp: "server.rack"
+    case .sync: "arrow.triangle.2.circlepath"
+    case .activity: "waveform.path.ecg"
+    case .recovery: "clock.arrow.circlepath"
+    }
+  }
+}
+
+struct ManagerDetail: View {
+  @EnvironmentObject private var model: SetupModel
+  let section: ManagerSection
+  @Binding var showsOnboarding: Bool
+
+  var body: some View {
+    Group {
+      switch section {
+      case .providers: ProvidersManagerView(showsOnboarding: $showsOnboarding)
+      case .skills: SkillsManagerView()
+      case .recovery: RecoveryManagerView()
+      case .rules: InventoryManagerView(kind: .rules)
+      case .mcp: InventoryManagerView(kind: .mcp)
+      case .sync: EmptyManagerView(title: "Sync", symbol: section.symbol, message: "Not configured")
+      case .activity: EmptyManagerView(title: "Activity & Drift", symbol: section.symbol, message: "No pending activity")
+      }
+    }
+    .navigationTitle(section.title)
+    .toolbar {
+      ToolbarItem {
+        Button {
+          Task { await model.refreshScan() }
+        } label: {
+          Label("Refresh", systemImage: "arrow.clockwise")
+        }
+        .disabled(model.isWorking)
+      }
+    }
+  }
+}
+
+struct ProvidersManagerView: View {
+  @EnvironmentObject private var model: SetupModel
+  @Binding var showsOnboarding: Bool
+
+  var body: some View {
+    List {
+      Section("Installed Providers") {
+        ForEach(model.scan?.providers ?? []) { provider in
+          HStack(spacing: 12) {
+            Image(systemName: provider.detected ? "checkmark.circle.fill" : "circle.dashed")
+              .foregroundStyle(provider.detected ? Color.green : Color.secondary)
+              .accessibilityLabel(provider.detected ? "Detected" : "Not detected")
+            VStack(alignment: .leading, spacing: 3) {
+              Text(provider.displayName)
+              Text(provider.enabled ? "Managed" : (provider.detected ? "Available" : "Not installed"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if provider.enabled {
+              Text([provider.contents.rules ? "Rules" : nil, provider.contents.skills ? "Skills" : nil, provider.contents.mcp ? "MCP" : nil].compactMap { $0 }.joined(separator: " · "))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+          }
+          .padding(.vertical, 4)
+        }
+      }
+    }
+    .overlay {
+      if model.scan == nil && !model.isWorking {
+        ContentUnavailableView("Provider status unavailable", systemImage: "macwindow", description: Text("Refresh to scan this Mac."))
+      }
+    }
+    .safeAreaInset(edge: .bottom) {
+      HStack {
+        Spacer()
+        Button {
+          showsOnboarding = true
+        } label: {
+          Label("Configure Providers", systemImage: "slider.horizontal.3")
+        }
+        .buttonStyle(.borderedProminent)
+      }
+      .padding()
+      .background(.regularMaterial)
+    }
+  }
+}
+
+struct SkillsManagerView: View {
+  @EnvironmentObject private var model: SetupModel
+  @State private var selectedSkill: UnmanagedSkill?
+
+  var body: some View {
+    List {
+      Section("Provider-local skills") {
+        ForEach(model.unmanagedSkills) { skill in
+          Button {
+            selectedSkill = skill
+          } label: {
+            HStack {
+              VStack(alignment: .leading, spacing: 3) {
+                Text(skill.name).foregroundStyle(.primary)
+                Text(skill.provider).font(.caption).foregroundStyle(.secondary)
+              }
+              Spacer()
+              Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .padding(.vertical, 4)
+        }
+      }
+    }
+    .overlay {
+      if model.unmanagedSkills.isEmpty && !model.isWorking {
+        ContentUnavailableView("No local skills to review", systemImage: "checkmark.circle", description: Text("Provider-local skills remain untouched until adopted."))
+      }
+    }
+    .sheet(item: $selectedSkill) { skill in
+      SkillAdoptionView(skill: skill)
+        .environmentObject(model)
+    }
+  }
+}
+
+struct SkillAdoptionView: View {
+  @EnvironmentObject private var model: SetupModel
+  @Environment(\.dismiss) private var dismiss
+  let skill: UnmanagedSkill
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 20) {
+      Label(skill.name, systemImage: "hammer")
+        .font(.title2.weight(.semibold))
+      PathSummary(label: "Source", value: skill.sourcePath)
+      Divider()
+      PathSummary(label: "Shared destination", value: skill.sharedDestination)
+      Text(skill.sharedConflict == "none" ? "No conflict" : "Destination already exists")
+        .font(.caption).foregroundStyle(skill.sharedConflict == "none" ? Color.secondary : Color.red)
+      Text("Affects: \(skill.affectedProviders.isEmpty ? "No enrolled providers" : skill.affectedProviders.joined(separator: ", "))")
+        .font(.caption).foregroundStyle(.secondary)
+      PathSummary(label: "Provider destination", value: skill.providerDestination)
+      Text(skill.providerConflict == "none" ? "No conflict" : "Destination already exists")
+        .font(.caption).foregroundStyle(skill.providerConflict == "none" ? Color.secondary : Color.red)
+      Spacer()
+      HStack {
+        Button("Keep Local Only") { dismiss() }
+        Spacer()
+        Button("This Provider") {
+          Task { await model.adoptSkill(skill, scope: .provider); dismiss() }
+        }
+        .disabled(skill.providerConflict != "none" || model.isWorking)
+        Button("Share With All") {
+          Task { await model.adoptSkill(skill, scope: .shared); dismiss() }
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(skill.sharedConflict != "none" || model.isWorking)
+      }
+    }
+    .padding(24)
+    .frame(width: 620, height: 480)
+  }
+}
+
+struct PathSummary: View {
+  let label: String
+  let value: String
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(label).font(.caption).foregroundStyle(.secondary)
+      Text(value).font(.system(.body, design: .monospaced)).textSelection(.enabled)
+    }
+  }
+}
+
+struct InventoryManagerView: View {
+  @EnvironmentObject private var model: SetupModel
+  let kind: ContentKind
+  var body: some View {
+    List(model.scan?.providers.filter { $0.enabled } ?? []) { provider in
+      VStack(alignment: .leading, spacing: 4) {
+        Text(provider.displayName)
+        Text(kind == .rules ? (provider.inventory.rulesPath ?? "Unsupported") : (provider.inventory.mcpPath ?? "Unsupported"))
+          .font(.system(.caption, design: .monospaced))
+          .foregroundStyle(.secondary)
+          .textSelection(.enabled)
+      }
+      .padding(.vertical, 4)
+    }
+  }
+}
+
+struct RecoveryManagerView: View {
+  @EnvironmentObject private var model: SetupModel
+  var body: some View {
+    List(model.scan?.providers.filter { $0.enabled } ?? []) { provider in
+      HStack {
+        Text(provider.displayName)
+        Spacer()
+        Button { Task { await model.restore(provider: provider.id) } } label: {
+          Label("Restore", systemImage: "clock.arrow.circlepath")
+        }
+        Button { Task { await model.revert(provider: provider.id) } } label: {
+          Label("Revert", systemImage: "arrow.uturn.backward")
+        }
+      }
+      .padding(.vertical, 4)
+    }
+  }
+}
+
+struct EmptyManagerView: View {
+  let title: String
+  let symbol: String
+  let message: String
+  var body: some View {
+    ContentUnavailableView(title, systemImage: symbol, description: Text(message))
+  }
+}
+
+struct OnboardingView: View {
+  @EnvironmentObject private var model: SetupModel
   @State private var step = 0
 
   var body: some View {

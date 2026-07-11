@@ -9,6 +9,7 @@ final class SetupModel: ObservableObject {
   @Published var isWorking = false
   @Published var errorMessage: String?
   @Published var completionMessage: String?
+  @Published var unmanagedSkills: [UnmanagedSkill] = []
 
   private let command = RegletCommand()
 
@@ -30,6 +31,7 @@ final class SetupModel: ObservableObject {
     await runWork {
       let response = try await self.command.scan()
       self.scan = response
+      self.unmanagedSkills = try await self.command.unmanagedSkills().skills
       if self.selectedProviders.isEmpty {
         self.selectedProviders = Set(response.providers.filter(\.detected).map(\.id))
       }
@@ -68,6 +70,15 @@ final class SetupModel: ObservableObject {
     await runWork {
       let result = try await self.command.revert(provider: provider)
       self.completionMessage = result.stdout.isEmpty ? "Revert complete." : result.stdout
+      self.scan = try await self.command.scan()
+    }
+  }
+
+  func adoptSkill(_ skill: UnmanagedSkill, scope: SkillAdoptionScope) async {
+    await runWork {
+      let response = try await self.command.adoptSkill(skill, scope: scope)
+      self.completionMessage = "Adopted \(response.adoption.name) into \(response.adoption.destination)."
+      self.unmanagedSkills = try await self.command.unmanagedSkills().skills
       self.scan = try await self.command.scan()
     }
   }

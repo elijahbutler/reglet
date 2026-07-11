@@ -96,3 +96,41 @@ enum ContentKind: String, CaseIterable, Identifiable {
     }
   }
 }
+
+struct UnmanagedSkillsResponse: Decodable {
+  let version: Int
+  let skills: [UnmanagedSkill]
+}
+
+struct UnmanagedSkill: Decodable, Identifiable {
+  let provider: String
+  let name: String
+  let sourcePath: String
+  let sharedDestination: String
+  let providerDestination: String
+  let sharedConflict: String
+  let providerConflict: String
+  let affectedProviders: [String]
+
+  var id: String { "\(provider):\(name)" }
+}
+
+struct SkillAdoptionResponse: Decodable {
+  let version: Int
+  let adoption: Adoption
+
+  struct Adoption: Decodable {
+    let provider: String
+    let name: String
+    let scope: String
+    let sourcePath: String
+    let destination: String
+    let overwritten: Bool
+    let affectedProviders: [String]
+  }
+}
+
+enum SkillAdoptionScope: String {
+  case shared
+  case provider
+}
