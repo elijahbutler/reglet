@@ -11,8 +11,8 @@
   - [x] CLI setup contract for native UI: `reglet scan --json` and `reglet plan --json`
   - [x] Native SwiftUI setup app shell using Reglet CLI/core as the engine
   - [ ] First-run flow: welcome/safety, provider selection, content selection, exact file preview, backup/apply confirmation, status/restore
-  - [x] GitHub Release packaging path: downloadable `.pkg` and setup app zip that install the binary and setup app without starting any daemon
-  - [ ] Signed/notarized `.pkg` or `.dmg` distribution
+  - [x] Homebrew tap distribution for CLI alpha installs
+  - [ ] Signed/notarized `.pkg` or `.dmg` distribution (blocked until Apple Developer ID exists)
   - [ ] Real Mac smoke pass across fresh machine, existing provider configs, backup inspection, restore, drift detection, uninstall, and explicit daemon/sync opt-in
 - [ ] Final documentation pass mirroring BranchForge's README/docs/assets structure with Reglet-specific banner and lifecycle SVGs
 
