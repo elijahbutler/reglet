@@ -36,6 +36,9 @@ Screens:
 - Provider scan with detected/missing states.
 - Content selection for rules, skills, and MCP per provider.
 - Individual skill selection before transferring provider skills into the unified directory.
+- Full provider skill inventory grouped by provider.
+- Projected unified skill list after install, including collision renames.
+- System prompt reconciliation that shows found prompts, matching/different status, and the unified rule files Reglet will create.
 - File preview grouped by read and write operations.
 - Confirmation that creates backups and applies changes.
 - Completion/status view with restore and revert actions.

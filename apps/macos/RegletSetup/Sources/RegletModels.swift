@@ -36,6 +36,8 @@ struct PlanResponse: Decodable {
   let mode: String
   let regletHome: String
   let providers: [Provider]
+  let unifiedSkills: [UnifiedSkill]
+  let rules: RulesReconciliation
   let reads: [PlannedFile]
   let writes: [PlannedFile]
   let safety: Safety
@@ -50,9 +52,42 @@ struct PlanResponse: Decodable {
   struct PlannedContent: Decodable {
     let selected: Bool
     let supported: Bool
+    let items: [String]?
     let readPaths: [String]
     let writePaths: [String]
     let notes: [String]
+  }
+}
+
+struct UnifiedSkill: Decodable, Identifiable {
+  let name: String
+  let status: String
+  let sourceProvider: String?
+  let sourceName: String?
+
+  var id: String {
+    "\(status):\(sourceProvider ?? "master"):\(sourceName ?? name):\(name)"
+  }
+}
+
+struct RulesReconciliation: Decodable {
+  let status: String
+  let strategy: String
+  let sources: [RuleSource]
+  let unifiedFiles: [String]
+}
+
+struct RuleSource: Decodable, Identifiable {
+  let provider: String
+  let displayName: String
+  let path: String
+  let hash: String
+  let byteLength: Int
+  let lineCount: Int
+  let preview: String
+
+  var id: String {
+    "\(provider):\(path)"
   }
 }
 

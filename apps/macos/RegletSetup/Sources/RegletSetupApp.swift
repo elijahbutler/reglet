@@ -266,21 +266,32 @@ struct SkillSelectionView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
-      Label("Skills to Transfer", systemImage: "square.stack.3d.up")
+      Label("Provider Skills Found", systemImage: "square.stack.3d.up")
         .font(.headline)
+      Text("Choose which provider skills are copied into the unified directory.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
       if model.availableSkillTargets.isEmpty {
         Text("No provider skills were found for the selected providers.")
           .foregroundStyle(.secondary)
       } else {
         ScrollView {
-          VStack(alignment: .leading, spacing: 8) {
-            ForEach(model.availableSkillTargets) { target in
-              Toggle(isOn: skillBinding(target.id)) {
-                VStack(alignment: .leading, spacing: 2) {
-                  Text(target.skillName)
-                  Text(target.providerName)
+          VStack(alignment: .leading, spacing: 14) {
+            ForEach(model.detectedProviders.filter { model.selectedProviders.contains($0.id) }) { provider in
+              VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                  Text(provider.displayName)
+                    .font(.subheadline.weight(.semibold))
+                  Spacer()
+                  Text("\(provider.inventory.skills.count)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                }
+                ForEach(provider.inventory.skills.sorted(), id: \.self) { skill in
+                  Toggle(isOn: skillBinding("\(provider.id):\(skill)")) {
+                    Text(skill)
+                      .lineLimit(1)
+                  }
                 }
               }
             }
@@ -308,14 +319,29 @@ struct SkillSelectionView: View {
 
 struct PreviewView: View {
   @EnvironmentObject private var model: SetupModel
+  @State private var selectedTab = "summary"
   let back: () -> Void
   let apply: () -> Void
 
   var body: some View {
     VStack(spacing: 0) {
-      FileList(title: "Files Reglet will read", files: model.plan?.reads ?? [])
-      Divider()
-      FileList(title: "Files Reglet will write after confirmation", files: model.plan?.writes ?? [])
+      Picker("Preview", selection: $selectedTab) {
+        Text("Summary").tag("summary")
+        Text("Files").tag("files")
+      }
+      .pickerStyle(.segmented)
+      .frame(width: 260)
+      .padding(.top, 16)
+
+      if selectedTab == "summary" {
+        OnboardingSummaryView(plan: model.plan)
+      } else {
+        VStack(spacing: 0) {
+          FileList(title: "Files Reglet will read", files: model.plan?.reads ?? [])
+          Divider()
+          FileList(title: "Files Reglet will write after confirmation", files: model.plan?.writes ?? [])
+        }
+      }
       Divider()
       HStack {
         Button("Back", action: back)
@@ -333,6 +359,161 @@ struct PreviewView: View {
       .padding(20)
       .background(.regularMaterial)
     }
+  }
+}
+
+struct OnboardingSummaryView: View {
+  let plan: PlanResponse?
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 22) {
+        UnifiedSkillsView(skills: plan?.unifiedSkills ?? [])
+        RulesReconciliationView(rules: plan?.rules)
+      }
+      .padding(20)
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+}
+
+struct UnifiedSkillsView: View {
+  let skills: [UnifiedSkill]
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      HStack {
+        Label("Unified Skills After Install", systemImage: "square.stack.3d.up")
+          .font(.headline)
+        Spacer()
+        Text("\(skills.count)")
+          .foregroundStyle(.secondary)
+      }
+      if skills.isEmpty {
+        ContentUnavailableView("No skills", systemImage: "square.dashed", description: Text("No selected or existing skills will be in the unified directory."))
+      } else {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 10)], alignment: .leading, spacing: 10) {
+          ForEach(skills) { skill in
+            VStack(alignment: .leading, spacing: 4) {
+              Text(skill.name)
+                .font(.headline)
+                .lineLimit(1)
+              Text(skillSubtitle(skill))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+          }
+        }
+      }
+    }
+  }
+
+  private func skillSubtitle(_ skill: UnifiedSkill) -> String {
+    if skill.status == "existing" {
+      return "Already in unified directory"
+    }
+    if skill.status == "renamed", let provider = skill.sourceProvider, let sourceName = skill.sourceName {
+      return "\(provider) / \(sourceName), renamed to avoid a collision"
+    }
+    if let provider = skill.sourceProvider, let sourceName = skill.sourceName {
+      return "\(provider) / \(sourceName)"
+    }
+    return skill.status
+  }
+}
+
+struct RulesReconciliationView: View {
+  let rules: RulesReconciliation?
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack {
+        Label("System Prompt Reconciliation", systemImage: "doc.text.below.ecg")
+          .font(.headline)
+        Spacer()
+        Text(statusLabel)
+          .foregroundStyle(statusColor)
+      }
+      Text(rules?.strategy ?? "No rules plan is available yet.")
+        .foregroundStyle(.secondary)
+
+      if let rules, !rules.unifiedFiles.isEmpty {
+        VStack(alignment: .leading, spacing: 6) {
+          Text("Unified rule files after install")
+            .font(.subheadline.weight(.semibold))
+          ForEach(rules.unifiedFiles, id: \.self) { file in
+            Text(file)
+              .font(.system(.caption, design: .monospaced))
+              .textSelection(.enabled)
+          }
+        }
+      }
+
+      if let rules, !rules.sources.isEmpty {
+        VStack(alignment: .leading, spacing: 10) {
+          Text("Found provider prompts")
+            .font(.subheadline.weight(.semibold))
+          ForEach(rules.sources) { source in
+            RuleSourceRow(source: source)
+          }
+        }
+      }
+    }
+  }
+
+  private var statusLabel: String {
+    switch rules?.status {
+    case "different":
+      "Differences found"
+    case "identical":
+      "Matching"
+    case "single":
+      "Single source"
+    case "none":
+      "None found"
+    default:
+      "Unknown"
+    }
+  }
+
+  private var statusColor: Color {
+    rules?.status == "different" ? .orange : .secondary
+  }
+}
+
+struct RuleSourceRow: View {
+  let source: RuleSource
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack {
+        Text(source.displayName)
+          .font(.headline)
+        Spacer()
+        Text("\(source.lineCount) lines")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      Text(source.path)
+        .font(.system(.caption, design: .monospaced))
+        .foregroundStyle(.secondary)
+        .textSelection(.enabled)
+      if !source.preview.isEmpty {
+        Text(source.preview)
+          .font(.system(.caption, design: .monospaced))
+          .lineLimit(6)
+          .textSelection(.enabled)
+          .padding(8)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .background(.background.opacity(0.45), in: RoundedRectangle(cornerRadius: 6))
+      }
+    }
+    .padding(10)
+    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
   }
 }
 

@@ -95,6 +95,8 @@ describe('reglet CLI', () => {
     const plan = JSON.parse(result.stdout) as {
       version: number;
       mode: string;
+      unifiedSkills: { name: string; status: string; sourceProvider: string | null; sourceName: string | null }[];
+      rules: { status: string; sources: { provider: string; hash: string; preview: string }[]; unifiedFiles: string[] };
       reads: { path: string; scope: string; operation: string }[];
       writes: { path: string; scope: string; operation: string }[];
       safety: { daemonEnabled: boolean; syncEnabled: boolean; notificationsEnabled: boolean };
@@ -102,6 +104,21 @@ describe('reglet CLI', () => {
 
     expect(plan.version).toBe(1);
     expect(plan.mode).toBe('onboarding');
+    expect(plan.unifiedSkills).toContainEqual({
+      name: 'alpha',
+      status: 'selected',
+      sourceProvider: 'claude',
+      sourceName: 'alpha',
+    });
+    expect(plan.rules).toMatchObject({
+      status: 'single',
+      unifiedFiles: ['imported-claude.md'],
+    });
+    expect(plan.rules.sources[0]).toMatchObject({
+      provider: 'claude',
+      preview: 'existing claude rules',
+    });
+    expect(plan.rules.sources[0]?.hash).toHaveLength(64);
     expect(plan.reads).toContainEqual({
       provider: 'claude',
       content: 'rules',

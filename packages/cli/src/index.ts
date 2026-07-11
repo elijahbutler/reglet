@@ -19,6 +19,7 @@ import {
   restore,
   revert,
   saveConfig,
+  sha256String,
   syncOnce,
   type ApplyContent,
   type ApplyResult,
@@ -318,9 +319,35 @@ interface OnboardingPlanJson {
   mode: 'onboarding';
   regletHome: string;
   providers: PlannedProviderJson[];
+  unifiedSkills: PlannedUnifiedSkillJson[];
+  rules: RulesReconciliationJson;
   reads: PlannedFileJson[];
   writes: PlannedFileJson[];
   safety: SafetyJson;
+}
+
+interface PlannedUnifiedSkillJson {
+  name: string;
+  status: 'existing' | 'selected' | 'renamed';
+  sourceProvider: ProviderId | null;
+  sourceName: string | null;
+}
+
+interface RulesReconciliationJson {
+  status: 'none' | 'single' | 'identical' | 'different';
+  strategy: string;
+  sources: RuleSourceJson[];
+  unifiedFiles: string[];
+}
+
+interface RuleSourceJson {
+  provider: ProviderId;
+  displayName: string;
+  path: string;
+  hash: string;
+  byteLength: number;
+  lineCount: number;
+  preview: string;
 }
 
 interface PlannedProviderJson {
@@ -576,10 +603,12 @@ async function buildOnboardingPlanJson(options: BuildOnboardingPlanOptions): Pro
   const reads: PlannedFileJson[] = [];
   const writes: PlannedFileJson[] = [];
   const providers: PlannedProviderJson[] = [];
+  const providerInventories = new Map<ProviderId, ProviderInventory>();
 
   for (const provider of options.providers) {
     const adapter = getAdapter(provider);
     const inventory = await adapter.inventory();
+    providerInventories.set(provider, inventory);
     const plannedProvider: PlannedProviderJson = {
       id: provider,
       displayName: adapter.displayName,
@@ -602,10 +631,137 @@ async function buildOnboardingPlanJson(options: BuildOnboardingPlanOptions): Pro
     mode: 'onboarding',
     regletHome: regletHome(),
     providers,
+    unifiedSkills: options.contents.includes('skills')
+      ? await buildUnifiedSkillsPlan(options.providers, providerInventories, options.skillSelections)
+      : await existingUnifiedSkillsPlan(),
+    rules: options.contents.includes('rules')
+      ? await buildRulesReconciliation(options.providers, providerInventories)
+      : await existingRulesReconciliation(),
     reads,
     writes,
     safety: safetyDefaults(),
   };
+}
+
+async function existingUnifiedSkillsPlan(): Promise<PlannedUnifiedSkillJson[]> {
+  const master = await loadMasterDir();
+  return master.skills.map((skill) => ({
+    name: skill.name,
+    status: 'existing',
+    sourceProvider: null,
+    sourceName: null,
+  }));
+}
+
+async function buildUnifiedSkillsPlan(
+  providers: ProviderId[],
+  providerInventories: Map<ProviderId, ProviderInventory>,
+  skillSelections: SkillSelections | undefined,
+): Promise<PlannedUnifiedSkillJson[]> {
+  const unifiedSkills = await existingUnifiedSkillsPlan();
+  const existingNames = new Set(unifiedSkills.map((skill) => skill.name));
+
+  for (const provider of providers) {
+    const inventory = providerInventories.get(provider);
+    if (inventory === undefined) {
+      continue;
+    }
+
+    for (const skillName of selectedSkillsForProvider(provider, inventory.skills, skillSelections).sort((left, right) => left.localeCompare(right))) {
+      const targetName = uniqueName(skillName, provider, existingNames);
+      existingNames.add(targetName);
+      unifiedSkills.push({
+        name: targetName,
+        status: targetName === skillName ? 'selected' : 'renamed',
+        sourceProvider: provider,
+        sourceName: skillName,
+      });
+    }
+  }
+
+  return unifiedSkills.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+async function existingRulesReconciliation(): Promise<RulesReconciliationJson> {
+  const master = await loadMasterDir();
+  return {
+    status: master.rules.length === 0 ? 'none' : 'single',
+    strategy: 'Existing unified rule files are kept as-is.',
+    sources: [],
+    unifiedFiles: master.rules.map((rule) => rule.relPath),
+  };
+}
+
+async function buildRulesReconciliation(
+  providers: ProviderId[],
+  providerInventories: Map<ProviderId, ProviderInventory>,
+): Promise<RulesReconciliationJson> {
+  const master = await loadMasterDir();
+  const sources: RuleSourceJson[] = [];
+
+  for (const provider of providers) {
+    const inventory = providerInventories.get(provider);
+    if (inventory?.rulesPath === null || inventory?.rulesExists !== true) {
+      continue;
+    }
+
+    try {
+      const content = await readFile(inventory.rulesPath, 'utf8');
+      sources.push({
+        provider,
+        displayName: getAdapter(provider).displayName,
+        path: inventory.rulesPath,
+        hash: sha256String(content),
+        byteLength: Buffer.byteLength(content),
+        lineCount: content.length === 0 ? 0 : content.split(/\r\n|\r|\n/).length,
+        preview: previewText(content),
+      });
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  }
+
+  const uniqueHashes = new Set(sources.map((source) => source.hash));
+  const status: RulesReconciliationJson['status'] = sources.length === 0
+    ? 'none'
+    : sources.length === 1
+      ? 'single'
+      : uniqueHashes.size === 1
+        ? 'identical'
+        : 'different';
+
+  return {
+    status,
+    strategy: rulesStrategy(status),
+    sources,
+    unifiedFiles: [
+      ...master.rules.map((rule) => rule.relPath),
+      ...sources.map((source) => `imported-${source.provider}.md`),
+    ],
+  };
+}
+
+function previewText(content: string): string {
+  const normalized = content.trim();
+  if (normalized.length <= 360) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 360).trimEnd()}\n...`;
+}
+
+function rulesStrategy(status: RulesReconciliationJson['status']): string {
+  switch (status) {
+  case 'none':
+    return 'No provider system prompts were found; existing unified rules are kept.';
+  case 'single':
+    return 'One provider system prompt will be imported into the unified rules directory.';
+  case 'identical':
+    return 'Matching provider prompts are shown together and imported as provider-labeled files for traceability.';
+  case 'different':
+    return 'Different provider prompts are preserved as separate imported rule files, then composed together in the unified output so no instructions are dropped.';
+  }
 }
 
 async function buildContentPlan(

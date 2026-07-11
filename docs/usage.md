@@ -26,6 +26,14 @@ reglet init --provider claude --content skills --skill claude:skill-creator
 
 When importing skills, interactive onboarding shows individual provider skills before copying them into `~/.reglet/skills`. Scripted onboarding can use `--skill provider:name` one or more times, or as a comma-separated list. If no `--skill` flag is provided, all selected providers' skills are imported.
 
+The onboarding plan also exposes the projected unified skill directory and system prompt reconciliation:
+
+```bash
+reglet plan --provider claude,codex --content rules,skills --json
+```
+
+If provider system prompts differ, Reglet preserves them as separate `rules/imported-<provider>.md` files and composes them together in generated provider outputs. This avoids dropping instructions while keeping the merged source editable in `~/.reglet/rules/`.
+
 ## Apply Master Config
 
 ```bash
