@@ -821,8 +821,24 @@ struct OnboardingView: View {
   @EnvironmentObject private var model: SetupModel
   @State private var step = 0
 
+  private var showsPromptStep: Bool {
+    model.selectedContents.contains(.rules)
+  }
+
   private var showsSkillsStep: Bool {
     !model.selectedProviderUnmanagedSkills.isEmpty
+  }
+
+  private var nextAfterSelection: Int {
+    showsPromptStep ? 2 : (showsSkillsStep ? 3 : 4)
+  }
+
+  private var nextAfterPrompts: Int {
+    showsSkillsStep ? 3 : 4
+  }
+
+  private var previewBackStep: Int {
+    showsSkillsStep ? 3 : (showsPromptStep ? 2 : 1)
   }
 
   var body: some View {
@@ -839,24 +855,29 @@ struct OnboardingView: View {
           SelectionView {
             Task {
               await model.refreshPlan()
-              step = showsSkillsStep ? 2 : 3
+              step = nextAfterSelection
             }
           }
         case 2:
-          SkillsStepView(
+          PromptHandlingStepView(
             back: { step = 1 },
-            continueAction: { step = 3 }
+            continueAction: { step = nextAfterPrompts }
           )
         case 3:
+          SkillsStepView(
+            back: { step = showsPromptStep ? 2 : 1 },
+            continueAction: { step = 4 }
+          )
+        case 4:
           PreviewView(
-            back: { step = showsSkillsStep ? 2 : 1 },
+            back: { step = previewBackStep },
             apply: {
               Task {
                 guard await model.applySelection() else { return }
                 if !model.checkedSkills.isEmpty {
                   await model.adoptSelectedSkills(limitedTo: model.selectedProviders)
                 }
-                step = 4
+                step = 5
               }
             }
           )
@@ -891,7 +912,7 @@ struct OnboardingView: View {
 struct HeaderView: View {
   let step: Int
 
-  private let steps = ["Safety", "Choose", "Skills", "Preview", "Done"]
+  private let steps = ["Safety", "Choose", "Prompts", "Skills", "Preview", "Done"]
 
   var body: some View {
     HStack(spacing: 16) {
@@ -912,7 +933,7 @@ struct HeaderView: View {
         }
       }
       .pickerStyle(.segmented)
-      .frame(width: 360)
+      .frame(width: 460)
       .disabled(true)
     }
     .padding(20)
@@ -1063,6 +1084,135 @@ struct SelectionView: View {
   }
 }
 
+struct PromptHandlingStepView: View {
+  @EnvironmentObject private var model: SetupModel
+  let back: () -> Void
+  let continueAction: () -> Void
+
+  private var availableSources: [RuleComparison] {
+    model.availableRuleMergeProviders
+  }
+
+  private var canGenerate: Bool {
+    model.rulePromptMode == .unified && model.selectedRuleMergeProviders.count >= 2 && !model.isWorking
+  }
+
+  private var canContinue: Bool {
+    if model.rulePromptMode == .providerSpecific {
+      return !model.isWorking
+    }
+    return !model.editableRuleMergeDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.isWorking
+  }
+
+  var body: some View {
+    VStack(spacing: 0) {
+      Form {
+        Section("System prompt handling") {
+          Picker("Mode", selection: $model.rulePromptMode) {
+            ForEach(RulePromptMode.allCases) { mode in
+              Text(mode.label).tag(mode)
+            }
+          }
+          .pickerStyle(.radioGroup)
+
+          if model.rulePromptMode == .providerSpecific {
+            Text("Reglet will preserve selected providers' existing prompt files as separate master documents and compose them during apply.")
+              .foregroundStyle(.secondary)
+          } else {
+            Text("Reglet will save one reviewed unified draft to 00-general.md and skip importing provider-specific prompt files.")
+              .foregroundStyle(.secondary)
+          }
+        }
+
+        if model.rulePromptMode == .unified {
+          Section {
+            if availableSources.count < 2 {
+              Text("At least two selected providers need existing prompt files before Reglet can generate a merge.")
+                .foregroundStyle(.secondary)
+            } else {
+              ForEach(availableSources) { source in
+                Toggle(isOn: mergeSourceBinding(source.provider)) {
+                  VStack(alignment: .leading, spacing: 2) {
+                    Text(model.providerDisplayName(source.provider))
+                    Text(source.sourcePath)
+                      .font(.system(.caption, design: .monospaced))
+                      .foregroundStyle(.secondary)
+                      .textSelection(.enabled)
+                  }
+                }
+              }
+            }
+          } header: {
+            Text("Sources to merge")
+          } footer: {
+            Text("The AI task receives only these local prompt files and returns a draft; nothing is saved until final Apply.")
+          }
+
+          Section("Unified draft") {
+            if let draft = model.ruleMergeDraft {
+              LabeledContent("Generated with", value: draft.provider)
+              Text("\(draft.sources.count) source prompts merged.")
+                .foregroundStyle(.secondary)
+            } else {
+              Text("Generate a draft, then review and edit it here before continuing.")
+                .foregroundStyle(.secondary)
+            }
+
+            TextEditor(text: $model.editableRuleMergeDraft)
+              .font(.system(.body, design: .monospaced))
+              .frame(minHeight: 180)
+              .accessibilityLabel("Unified system prompt draft")
+
+            if let error = model.ruleMergeError {
+              Label(error, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .textSelection(.enabled)
+            }
+
+            HStack {
+              Spacer()
+              Button {
+                Task { await model.generateRuleMergeDraft() }
+              } label: {
+                Label(model.ruleMergeDraft == nil ? "Generate AI Draft" : "Retry AI Merge", systemImage: "wand.and.stars")
+              }
+              .disabled(!canGenerate)
+            }
+          }
+        }
+      }
+      .formStyle(.grouped)
+      Divider()
+      HStack {
+        Button("Back", action: back)
+        Spacer()
+        Button {
+          continueAction()
+        } label: {
+          Label("Continue", systemImage: "arrow.right")
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(!canContinue)
+      }
+      .padding(20)
+      .background(.regularMaterial)
+    }
+  }
+
+  private func mergeSourceBinding(_ provider: String) -> Binding<Bool> {
+    Binding(
+      get: { model.selectedRuleMergeProviders.contains(provider) },
+      set: { isSelected in
+        if isSelected {
+          model.selectedRuleMergeProviders.insert(provider)
+        } else {
+          model.selectedRuleMergeProviders.remove(provider)
+        }
+      }
+    )
+  }
+}
+
 struct SkillsStepView: View {
   @EnvironmentObject private var model: SetupModel
   let back: () -> Void
@@ -1128,6 +1278,31 @@ struct PreviewView: View {
     }
   }
 
+  private var displayedWrites: [PlannedFile] {
+    var writes = model.plan?.writes ?? []
+    if model.rulePromptMode == .unified && model.selectedContents.contains(.rules) {
+      writes = writes.filter { !($0.content == "rules" && $0.scope == "master" && $0.path.contains("/imported-")) }
+      writes.insert(
+        PlannedFile(
+          provider: "reglet",
+          content: "rules",
+          path: "\(model.scan?.regletHome ?? "~/.reglet")/rules/00-general.md",
+          scope: "master",
+          operation: "write",
+          reason: "save unified prompt draft"
+        ),
+        at: 0
+      )
+    }
+    return writes
+  }
+
+  private var hasBlockedUnifiedDraft: Bool {
+    model.rulePromptMode == .unified
+      && model.selectedContents.contains(.rules)
+      && model.editableRuleMergeDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
   var body: some View {
     VStack(spacing: 0) {
       List {
@@ -1136,7 +1311,7 @@ struct PreviewView: View {
         }
 
         Section("Files Reglet will write after confirmation") {
-          FileRows(files: model.plan?.writes ?? [])
+          FileRows(files: displayedWrites)
         }
 
         Section {
@@ -1152,7 +1327,23 @@ struct PreviewView: View {
         } header: {
           Text("Provider rule reconciliation")
         } footer: {
-          Text("Different provider rules are preserved as separate master documents, then composed into generated provider outputs during apply.")
+          Text(model.rulePromptMode == .unified
+            ? "The unified draft is saved as one master prompt. Provider-specific source prompts are not imported as separate master documents in this mode."
+            : "Different provider rules are preserved as separate master documents, then composed into generated provider outputs during apply.")
+        }
+
+        if model.selectedContents.contains(.rules) {
+          Section("System prompt decision") {
+            if model.rulePromptMode == .unified {
+              Label("Unified prompt draft will be saved to 00-general.md", systemImage: "doc.text")
+              Text(model.editableRuleMergeDraft.isEmpty ? "No draft yet." : model.editableRuleMergeDraft)
+                .font(.system(.caption, design: .monospaced))
+                .lineLimit(8)
+                .textSelection(.enabled)
+            } else {
+              Label("Provider-specific prompt documents will be preserved", systemImage: "rectangle.stack")
+            }
+          }
         }
 
         Section {
@@ -1178,7 +1369,7 @@ struct PreviewView: View {
       HStack {
         Button("Back", action: back)
         Spacer()
-        Text(hasBlockedAdoption ? "Resolve blocked skill adoptions before applying." : "Daemon, sync, and notifications remain off.")
+        Text(statusMessage)
           .foregroundStyle(.secondary)
         Button {
           apply()
@@ -1186,11 +1377,21 @@ struct PreviewView: View {
           Label("Create Backups and Apply", systemImage: "checkmark.circle")
         }
         .buttonStyle(.borderedProminent)
-        .disabled(model.isWorking || hasBlockedAdoption)
+        .disabled(model.isWorking || hasBlockedAdoption || hasBlockedUnifiedDraft)
       }
       .padding(20)
       .background(.regularMaterial)
     }
+  }
+
+  private var statusMessage: String {
+    if hasBlockedAdoption {
+      return "Resolve blocked skill adoptions before applying."
+    }
+    if hasBlockedUnifiedDraft {
+      return "Generate or enter a unified prompt draft before applying."
+    }
+    return "Daemon, sync, and notifications remain off."
   }
 }
 

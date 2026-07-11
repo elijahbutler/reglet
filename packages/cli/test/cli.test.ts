@@ -28,12 +28,18 @@ async function useTempHomes(): Promise<{ home: string; providerHome: string }> {
   return { home: currentHome, providerHome: currentProviderHome };
 }
 
-async function runCli(args: string[], home: string, providerHome: string): Promise<{ stdout: string; stderr: string }> {
+async function runCli(
+  args: string[],
+  home: string,
+  providerHome: string,
+  extraEnv: Record<string, string> = {},
+): Promise<{ stdout: string; stderr: string }> {
   const result = await execFileAsync('bun', [cliPath, ...args], {
     env: {
       ...process.env,
       REGLET_HOME: home,
       REGLET_PROVIDER_HOME: providerHome,
+      ...extraEnv,
     },
   });
   return { stdout: result.stdout, stderr: result.stderr };
@@ -280,6 +286,59 @@ describe('reglet CLI', () => {
 
     expect(plan.reconciliation.rules).toEqual([]);
     expect(await Bun.file(path.join(home, 'rules')).exists()).toBe(false);
+  });
+
+  test('rules merge-draft --json invokes a local AI runner and does not write master files', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const claudeRules = path.join(providerHome, '.claude', 'CLAUDE.md');
+    const codexRules = path.join(providerHome, '.codex', 'AGENTS.md');
+    await mkdir(path.dirname(claudeRules), { recursive: true });
+    await mkdir(path.dirname(codexRules), { recursive: true });
+    await writeFile(claudeRules, 'Prefer concise answers.\n');
+    await writeFile(codexRules, 'Never use npm.\n');
+
+    const result = await runCli(
+      ['rules', 'merge-draft', '--provider', 'claude,codex', '--json'],
+      home,
+      providerHome,
+      {
+        REGLET_RULES_MERGE_COMMAND_JSON: JSON.stringify([
+          'bun',
+          '-e',
+          'await Bun.stdin.text(); console.log("Prefer concise answers.\\nNever use npm.")',
+        ]),
+      },
+    );
+    const merged = JSON.parse(result.stdout) as {
+      version: number;
+      provider: string;
+      draft: string;
+      sources: { provider: string; sourcePath: string; bytes: number }[];
+    };
+
+    expect(merged).toEqual({
+      version: 1,
+      provider: 'custom',
+      draft: 'Prefer concise answers.\nNever use npm.\n',
+      sources: [
+        { provider: 'claude', sourcePath: claudeRules, bytes: Buffer.byteLength('Prefer concise answers.\n') },
+        { provider: 'codex', sourcePath: codexRules, bytes: Buffer.byteLength('Never use npm.\n') },
+      ],
+    });
+    expect(await Bun.file(path.join(home, 'rules', '00-general.md')).exists()).toBe(false);
+  });
+
+  test('rules merge-draft requires at least two non-empty provider rule files', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const claudeRules = path.join(providerHome, '.claude', 'CLAUDE.md');
+    await mkdir(path.dirname(claudeRules), { recursive: true });
+    await writeFile(claudeRules, 'Only one source.\n');
+
+    await expect(
+      runCli(['rules', 'merge-draft', '--provider', 'claude,codex', '--json'], home, providerHome, {
+        REGLET_RULES_MERGE_COMMAND_JSON: JSON.stringify(['bun', '-e', 'console.log("unused")']),
+      }),
+    ).rejects.toMatchObject({ code: 1 });
   });
 
   test('init --yes leaves existing provider skills local while importing rules and MCP', async () => {

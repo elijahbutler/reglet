@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
+import { execFile, spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { confirm, isCancel, multiselect, outro } from '@clack/prompts';
 import { Command, InvalidArgumentError } from 'commander';
 import {
@@ -51,6 +53,7 @@ import {
 const providerIds = ['claude', 'codex', 'cursor', 'gemini', 'windsurf', 'opencode'] as const;
 const contentIds = ['rules', 'skills', 'mcp'] as const;
 const rulesPreviewLimit = 800;
+const execFileAsync = promisify(execFile);
 
 type ContentId = (typeof contentIds)[number];
 
@@ -247,6 +250,20 @@ rules
     await mkdir(path.dirname(target), { recursive: true });
     await writeFile(target, await Bun.stdin.text());
     console.log(`rules\tsaved\t${relativePath}`);
+  });
+
+rules
+  .command('merge-draft')
+  .description('Generate a reviewable unified rules draft from selected provider rules without writing files')
+  .requiredOption('-p, --provider <provider...>', 'provider rule sources to merge', parseProviderList)
+  .option('--json', 'print machine-readable JSON for setup apps')
+  .action(async (options: { provider: ProviderId[]; json?: boolean }) => {
+    const result = await generateRulesMergeDraft(options.provider);
+    if (options.json === true) {
+      printJson({ version: 1, ...result });
+      return;
+    }
+    process.stdout.write(result.draft);
   });
 
 program
@@ -571,6 +588,25 @@ interface RuleComparisonJson {
   truncated: boolean;
 }
 
+interface RuleMergeSourceJson {
+  provider: ProviderId;
+  sourcePath: string;
+  bytes: number;
+}
+
+interface RuleMergeDraftJson {
+  provider: string;
+  draft: string;
+  sources: RuleMergeSourceJson[];
+}
+
+interface AiMergeRunner {
+  provider: string;
+  command: string;
+  args: string[];
+  promptAsArgument: boolean;
+}
+
 interface PlannedProviderJson {
   id: ProviderId;
   displayName: string;
@@ -850,6 +886,157 @@ async function buildRuleComparison(provider: ProviderId, inventory: ProviderInve
     preview: sourceContent.slice(0, rulesPreviewLimit),
     truncated: sourceContent.length > rulesPreviewLimit,
   };
+}
+
+async function generateRulesMergeDraft(providers: ProviderId[]): Promise<RuleMergeDraftJson> {
+  const uniqueProviders = Array.from(new Set(providers));
+  const sources: (RuleMergeSourceJson & { content: string })[] = [];
+
+  for (const provider of uniqueProviders) {
+    const rulesPath = getAdapter(provider).rulesPath();
+    if (rulesPath === null) {
+      continue;
+    }
+    const content = await readOptionalFile(rulesPath);
+    if (content === null || content.trim().length === 0) {
+      continue;
+    }
+    sources.push({
+      provider,
+      sourcePath: rulesPath,
+      bytes: Buffer.byteLength(content, 'utf8'),
+      content,
+    });
+  }
+
+  if (sources.length < 2) {
+    throw new Error('Select at least two providers with non-empty rule files before generating a unified draft.');
+  }
+
+  const runner = mergeRunnerFromEnvironment() ?? (await detectMergeRunner());
+  if (runner === null) {
+    throw new Error('No supported local AI CLI was found. Install Codex, Claude, or Gemini CLI, then retry.');
+  }
+
+  const prompt = buildRulesMergePrompt(sources);
+  const draft = (await runAiMerge(runner, prompt)).trim();
+  if (draft.length === 0) {
+    throw new Error(`${runner.provider} returned an empty draft. Retry or choose provider-specific prompts.`);
+  }
+
+  return {
+    provider: runner.provider,
+    draft: `${draft}\n`,
+    sources: sources.map(({ provider, sourcePath, bytes }) => ({ provider, sourcePath, bytes })),
+  };
+}
+
+function buildRulesMergePrompt(sources: (RuleMergeSourceJson & { content: string })[]): string {
+  const sections = sources
+    .map((source) => [
+      `--- ${source.provider} (${source.sourcePath}) ---`,
+      source.content.trim(),
+    ].join('\n'))
+    .join('\n\n');
+
+  return [
+    'You are helping compile local AI-agent system prompts into one Reglet unified prompt.',
+    'Merge the selected provider prompts into a concise Markdown draft for ~/.reglet/rules/00-general.md.',
+    'Preserve concrete behavioral instructions, safety constraints, workflow preferences, and provider-neutral details.',
+    'Remove duplicates, contradictions, generated-file warnings, provider-specific file-management boilerplate, and stale onboarding prose.',
+    'When instructions conflict, keep the stricter or more explicit instruction and phrase it provider-neutrally.',
+    'Return only the merged Markdown draft. Do not wrap it in code fences. Do not include analysis.',
+    '',
+    sections,
+  ].join('\n');
+}
+
+async function detectMergeRunner(): Promise<AiMergeRunner | null> {
+  const candidates: AiMergeRunner[] = [
+    { provider: 'codex', command: 'codex', args: ['exec', '-s', 'read-only'], promptAsArgument: true },
+    { provider: 'claude', command: 'claude', args: ['-p'], promptAsArgument: true },
+    { provider: 'gemini', command: 'gemini', args: ['-p'], promptAsArgument: true },
+  ];
+
+  for (const candidate of candidates) {
+    if (await commandExists(candidate.command)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function mergeRunnerFromEnvironment(): AiMergeRunner | null {
+  const raw = process.env.REGLET_RULES_MERGE_COMMAND_JSON;
+  if (raw === undefined || raw.trim().length === 0) {
+    return null;
+  }
+
+  const parsed = JSON.parse(raw) as unknown;
+  if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === 'string') || parsed.length === 0) {
+    throw new Error('REGLET_RULES_MERGE_COMMAND_JSON must be a JSON string array such as ["codex","exec","-s","read-only"].');
+  }
+
+  const [command, ...args] = parsed;
+  if (command === undefined || command.length === 0) {
+    throw new Error('REGLET_RULES_MERGE_COMMAND_JSON must include a command.');
+  }
+
+  return {
+    provider: 'custom',
+    command,
+    args,
+    promptAsArgument: false,
+  };
+}
+
+async function runAiMerge(runner: AiMergeRunner, prompt: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(runner.command, runner.promptAsArgument ? [...runner.args, prompt] : runner.args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const timeout = setTimeout(() => {
+      child.kill('SIGTERM');
+      reject(new Error(`${runner.provider} merge timed out after 120 seconds.`));
+    }, 120_000);
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+
+    child.stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
+    child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+    child.on('error', (error) => {
+      clearTimeout(timeout);
+      if (isNodeError(error) && error.code === 'ENOENT') {
+        reject(new Error(`${runner.provider} CLI was not found. Install it or choose provider-specific prompts.`));
+        return;
+      }
+      reject(error);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      const stdout = Buffer.concat(stdoutChunks).toString('utf8');
+      const stderr = Buffer.concat(stderrChunks).toString('utf8');
+      if (code !== 0) {
+        reject(new Error(`${runner.provider} merge failed: ${stderr.trim() || `exit ${code ?? 'unknown'}`}`));
+        return;
+      }
+      resolve(stdout);
+    });
+
+    if (!runner.promptAsArgument) {
+      child.stdin.write(prompt);
+    }
+    child.stdin.end();
+  });
+}
+
+async function commandExists(command: string): Promise<boolean> {
+  try {
+    await execFileAsync('/usr/bin/env', [command, '--version'], { timeout: 5_000, maxBuffer: 64 * 1024 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function readOptionalFile(filePath: string): Promise<string | null> {

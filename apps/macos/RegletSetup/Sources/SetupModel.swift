@@ -23,6 +23,11 @@ final class SetupModel: ObservableObject {
   @Published var skillScopes: [String: SkillAdoptionScope] = [:]
   /// Keyed by "provider:name"; presence = overwrite conflicting destination.
   @Published var overwriteFlags: Set<String> = []
+  @Published var rulePromptMode: RulePromptMode = .unified
+  @Published var selectedRuleMergeProviders: Set<String> = []
+  @Published var ruleMergeDraft: RuleMergeDraftResponse?
+  @Published var editableRuleMergeDraft = ""
+  @Published var ruleMergeError: String?
 
   private let command = RegletCommand()
   private let updateChecker = UpdateChecker()
@@ -39,6 +44,12 @@ final class SetupModel: ObservableObject {
   /// Unmanaged skills that belong to a currently selected provider.
   var selectedProviderUnmanagedSkills: [UnmanagedSkill] {
     unmanagedSkills.filter { selectedProviders.contains($0.provider) }
+  }
+
+  var availableRuleMergeProviders: [RuleComparison] {
+    (plan?.reconciliation.rules ?? [])
+      .filter { selectedProviders.contains($0.provider) && !$0.preview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+      .sorted { $0.provider < $1.provider }
   }
 
   func providerDisplayName(_ id: String) -> String {
@@ -61,6 +72,7 @@ final class SetupModel: ObservableObject {
     checkedSkills = checkedSkills.filter { !$0.hasPrefix(prefix) }
     skillScopes = skillScopes.filter { !$0.key.hasPrefix(prefix) }
     overwriteFlags = overwriteFlags.filter { !$0.hasPrefix(prefix) }
+    selectedRuleMergeProviders.remove(provider)
   }
 
   var canContinue: Bool {
@@ -133,18 +145,63 @@ final class SetupModel: ObservableObject {
         providers: Array(self.selectedProviders).sorted(),
         contents: Array(self.selectedContents).sorted { $0.rawValue < $1.rawValue }
       )
+      let available = Set(self.availableRuleMergeProviders.map(\.provider))
+      self.selectedRuleMergeProviders = self.selectedRuleMergeProviders.intersection(available)
+      if self.selectedRuleMergeProviders.isEmpty {
+        self.selectedRuleMergeProviders = available
+      }
     }
   }
 
   @discardableResult
   func applySelection() async -> Bool {
     await runWork {
+      if self.rulePromptMode == .unified && self.selectedContents.contains(.rules) {
+        let draft = self.editableRuleMergeDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if draft.isEmpty {
+          throw SetupError.message("Generate or enter a unified prompt draft before applying.")
+        }
+        let nonRuleContents = self.selectedContents.filter { $0 != .rules }
+        _ = try await self.command.onboard(
+          providers: Array(self.selectedProviders).sorted(),
+          contents: Array(nonRuleContents).sorted { $0.rawValue < $1.rawValue },
+          includeEmptyContent: true
+        )
+        try await self.command.writeRule(path: "00-general.md", content: self.editableRuleMergeDraft)
+        for provider in self.selectedProviders.sorted() {
+          _ = try await self.command.enroll("\(provider):rules")
+        }
+        _ = try await self.command.applyRules()
+        self.completionMessage = "Onboarding complete. Unified prompt draft was saved and applied."
+        self.scan = try await self.command.scan()
+        return
+      }
       let result = try await self.command.onboard(
         providers: Array(self.selectedProviders).sorted(),
         contents: Array(self.selectedContents).sorted { $0.rawValue < $1.rawValue }
       )
       self.completionMessage = result.stdout.isEmpty ? "Onboarding complete." : result.stdout
       self.scan = try await self.command.scan()
+    }
+  }
+
+  func generateRuleMergeDraft() async {
+    isWorking = true
+    ruleMergeError = nil
+    errorMessage = nil
+    defer { isWorking = false }
+
+    guard selectedRuleMergeProviders.count >= 2 else {
+      ruleMergeError = "Select at least two provider prompts to merge."
+      return
+    }
+
+    do {
+      let draft = try await command.mergeRuleDraft(providers: Array(selectedRuleMergeProviders).sorted())
+      ruleMergeDraft = draft
+      editableRuleMergeDraft = draft.draft
+    } catch {
+      ruleMergeError = error.localizedDescription
     }
   }
 
@@ -311,6 +368,17 @@ final class SetupModel: ObservableObject {
     } catch {
       errorMessage = error.localizedDescription
       return false
+    }
+  }
+}
+
+enum SetupError: LocalizedError {
+  case message(String)
+
+  var errorDescription: String? {
+    switch self {
+    case let .message(message):
+      message
     }
   }
 }
