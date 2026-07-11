@@ -38,6 +38,7 @@ struct PlanResponse: Decodable {
   let providers: [Provider]
   let reads: [PlannedFile]
   let writes: [PlannedFile]
+  let reconciliation: Reconciliation
   let safety: Safety
 
   struct Provider: Decodable, Identifiable {
@@ -53,6 +54,23 @@ struct PlanResponse: Decodable {
     let readPaths: [String]
     let writePaths: [String]
     let notes: [String]
+  }
+
+  struct Reconciliation: Decodable {
+    let rules: [RuleComparison]
+  }
+}
+
+struct RuleComparison: Decodable, Identifiable {
+  let provider: String
+  let sourcePath: String
+  let destinationPath: String
+  let state: String
+  let preview: String
+  let truncated: Bool
+
+  var id: String {
+    "\(provider):\(sourcePath):\(destinationPath)"
   }
 }
 
