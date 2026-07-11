@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420" role="img" aria-labelledby="title desc">
+  <title id="title">Reglet banner</title>
+  <desc id="desc">Reglet unifies AI agent rules, skills, and MCP servers across local coding tools.</desc>
+  <rect width="1280" height="420" fill="#111827"/>
+  <rect x="0" y="286" width="1280" height="134" fill="#1f2937"/>
+  <path d="M0 300 C160 250 300 330 470 286 C640 242 760 276 930 226 C1090 180 1190 214 1280 174 L1280 420 L0 420 Z" fill="#0f766e"/>
+  <path d="M0 74 C170 116 292 40 450 86 C628 138 760 62 934 96 C1098 128 1188 78 1280 102" fill="none" stroke="#22d3ee" stroke-width="3" opacity="0.38"/>
+
+  <text x="82" y="82" fill="#d1d5db" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="700">Reglet</text>
+  <text x="82" y="158" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="58" font-weight="700">One source of truth.</text>
+  <text x="82" y="226" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="58" font-weight="700">Every local agent.</text>
+  <text x="82" y="286" fill="#dbeafe" font-family="Arial, Helvetica, sans-serif" font-size="24">Rules, skills, MCP servers, drift detection, daemon apply, and self-hosted sync.</text>
+
+  <g transform="translate(824 84)">
+    <rect x="0" y="0" width="356" height="250" rx="18" fill="#f9fafb"/>
+    <text x="34" y="42" fill="#111827" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700">master</text>
+    <text x="148" y="42" fill="#111827" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700">adapters</text>
+    <text x="260" y="42" fill="#111827" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700">agents</text>
+    <circle cx="60" cy="126" r="22" fill="#111827"/>
+    <rect x="124" y="72" width="82" height="34" rx="8" fill="#2563eb"/>
+    <rect x="124" y="114" width="82" height="34" rx="8" fill="#0891b2"/>
+    <rect x="124" y="156" width="82" height="34" rx="8" fill="#16a34a"/>
+    <circle cx="288" cy="82" r="18" fill="#7c3aed"/>
+    <circle cx="288" cy="126" r="18" fill="#f59e0b"/>
+    <circle cx="288" cy="170" r="18" fill="#dc2626"/>
+    <path d="M82 126 L124 89 M82 126 L124 131 M82 126 L124 173 M206 89 L270 82 M206 131 L270 126 M206 173 L270 170" fill="none" stroke="#374151" stroke-width="5" stroke-linecap="round"/>
+    <rect x="44" y="212" width="268" height="12" rx="6" fill="#e5e7eb"/>
+    <rect x="44" y="212" width="206" height="12" rx="6" fill="#14b8a6"/>
+  </g>
+</svg>

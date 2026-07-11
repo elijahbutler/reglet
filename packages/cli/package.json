@@ -3,7 +3,22 @@
   "version": "0.1.0",
   "type": "module",
   "bin": { "reglet": "src/index.ts" },
+  "files": [
+    "src",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build:binaries": "cd ../.. && bash scripts/build-binaries.sh"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  },
   "dependencies": {
-    "@reglet/core": "workspace:*"
+    "@clack/prompts": "^0.11.0",
+    "@reglet/core": "workspace:*",
+    "chokidar": "^4.0.0",
+    "commander": "^14.0.0",
+    "smol-toml": "^1.6.1"
   }
 }

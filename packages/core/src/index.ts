@@ -11,3 +11,6 @@ export * from './master.js';
 export * from './paths.js';
 export * from './providers/registry.js';
 export * from './providers/types.js';
+export * from './sync/client.js';
+export * from './sync/engine.js';
+export * from './sync/state.js';
