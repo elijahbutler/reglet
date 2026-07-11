@@ -148,10 +148,33 @@ struct RegletCommand {
       process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
       process.arguments = [executable] + arguments
 
-      let stdoutPipe = Pipe()
-      let stderrPipe = Pipe()
-      process.standardOutput = stdoutPipe
-      process.standardError = stderrPipe
+      let captureDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("reglet-command-\(UUID().uuidString)", isDirectory: true)
+      try FileManager.default.createDirectory(at: captureDirectory, withIntermediateDirectories: true)
+      defer { try? FileManager.default.removeItem(at: captureDirectory) }
+
+      let stdoutURL = captureDirectory.appendingPathComponent("stdout")
+      let stderrURL = captureDirectory.appendingPathComponent("stderr")
+      guard FileManager.default.createFile(
+        atPath: stdoutURL.path,
+        contents: nil,
+        attributes: [.posixPermissions: 0o600]
+      ), FileManager.default.createFile(
+        atPath: stderrURL.path,
+        contents: nil,
+        attributes: [.posixPermissions: 0o600]
+      ) else {
+        throw RegletCommandError.invalidOutput(command: "reglet \(arguments.joined(separator: " "))", details: "could not create command capture files")
+      }
+
+      let stdoutHandle = try FileHandle(forWritingTo: stdoutURL)
+      let stderrHandle = try FileHandle(forWritingTo: stderrURL)
+      defer {
+        try? stdoutHandle.close()
+        try? stderrHandle.close()
+      }
+      process.standardOutput = stdoutHandle
+      process.standardError = stderrHandle
 
       let stdinPipe = Pipe()
       if stdin != nil {
@@ -159,12 +182,6 @@ struct RegletCommand {
       }
 
       try process.run()
-      let stdoutTask = Task.detached(priority: .userInitiated) {
-        stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-      }
-      let stderrTask = Task.detached(priority: .userInitiated) {
-        stderrPipe.fileHandleForReading.readDataToEndOfFile()
-      }
 
       if let stdin, let data = stdin.data(using: .utf8) {
         stdinPipe.fileHandleForWriting.write(data)
@@ -172,8 +189,10 @@ struct RegletCommand {
       }
       process.waitUntilExit()
 
-      let stdout = String(data: await stdoutTask.value, encoding: .utf8) ?? ""
-      let stderr = String(data: await stderrTask.value, encoding: .utf8) ?? ""
+      try stdoutHandle.close()
+      try stderrHandle.close()
+      let stdout = String(data: try Data(contentsOf: stdoutURL), encoding: .utf8) ?? ""
+      let stderr = String(data: try Data(contentsOf: stderrURL), encoding: .utf8) ?? ""
       let result = CommandResult(stdout: stdout, stderr: stderr, status: process.terminationStatus)
       if result.status != 0 {
         throw RegletCommandError.failed(
@@ -193,7 +212,10 @@ struct RegletCommand {
     do {
       return try JSONDecoder().decode(type, from: data)
     } catch {
-      throw RegletCommandError.invalidOutput(command: command, details: error.localizedDescription)
+      throw RegletCommandError.invalidOutput(
+        command: command,
+        details: "\(String(reflecting: error)); stdout bytes=\(data.count)"
+      )
     }
   }
 }
