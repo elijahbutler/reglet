@@ -21,7 +21,14 @@ enum RegletCommandError: LocalizedError {
 }
 
 struct RegletCommand {
+  private let executableOverride: String?
+
+  init(executable: String? = nil) {
+    executableOverride = executable
+  }
+
   var executable: String {
+    if let executableOverride { return executableOverride }
     if let override = ProcessInfo.processInfo.environment["REGLET_BINARY"] {
       return override
     }

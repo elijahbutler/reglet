@@ -13,6 +13,11 @@ let package = Package(
     .executableTarget(
       name: "RegletSetup",
       path: "Sources"
+    ),
+    .testTarget(
+      name: "RegletSetupTests",
+      dependencies: ["RegletSetup"],
+      path: "Tests"
     )
   ]
 )

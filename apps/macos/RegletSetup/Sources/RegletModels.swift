@@ -239,6 +239,35 @@ enum SkillAdoptionScope: String {
   case provider
 }
 
+enum OnboardingStep: Int, CaseIterable {
+  case safety, selection, prompts, skills, preview, done
+}
+
+struct OnboardingRoute: Equatable {
+  let includesPrompts: Bool
+  let includesSkills: Bool
+
+  func next(after step: OnboardingStep) -> OnboardingStep {
+    switch step {
+    case .safety: .selection
+    case .selection: includesPrompts ? .prompts : (includesSkills ? .skills : .preview)
+    case .prompts: includesSkills ? .skills : .preview
+    case .skills: .preview
+    case .preview: .done
+    case .done: .selection
+    }
+  }
+
+  func back(from step: OnboardingStep) -> OnboardingStep {
+    switch step {
+    case .prompts: .selection
+    case .skills: includesPrompts ? .prompts : .selection
+    case .preview: includesSkills ? .skills : (includesPrompts ? .prompts : .selection)
+    default: .safety
+    }
+  }
+}
+
 enum RulePromptMode: String, CaseIterable, Identifiable {
   case unified
   case providerSpecific
