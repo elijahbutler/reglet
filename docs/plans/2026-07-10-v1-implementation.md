@@ -168,7 +168,18 @@ In `packages/server` (Bun + Hono + `bun:sqlite`):
 - npm publish config for `reglet` package (files, bin shebang, `bun build --compile` script targets mac arm64/x64 + windows x64 in `scripts/build-binaries.sh`).
 - GitHub Actions release workflow building the three binaries on tag (compile step only; no publishing secrets assumed — attach to GitHub Release).
 
-### Task 11: BranchForge-style documentation pass
+### Task 11: Mac installer + first-run onboarding UI
+
+Make the first test install friendly enough for a non-contributor Mac user:
+- Ship a signed/notarization-ready `.pkg` or `.dmg` path that installs the `reglet` binary without starting any background process.
+- Add a small macOS setup app or menu-bar style onboarding shell that calls the existing CLI/core flows rather than reimplementing provider logic.
+- First-run flow: scan installed providers → show checkboxes for Claude Code, Codex CLI, Cursor, Gemini CLI, Windsurf, and OpenCode → show content-type checkboxes for rules, skills, and MCP → preview exact files Reglet will read/write → require explicit confirmation before backup/apply.
+- Safety defaults: daemon install/start is off, sync is off, notifications are off, and the UI states that no provider files are modified until the user confirms.
+- Include restore/revert access in the UI so first-time users can recover without remembering CLI commands.
+- Add a smoke-test checklist for real Mac installs: fresh machine, existing provider configs, backup inspection, apply preview, restore, drift detection, and uninstall.
+- Do not block CLI alpha testing on this task, but do block broader Mac user testing on it.
+
+### Task 12: BranchForge-style documentation pass
 
 Mirror the documentation structure and graphic treatment of `https://github.com/elijahbutler/branchforge`:
 - README structure: title, banner SVG, short product statement, status block, `Why`, `How It Works` with lifecycle SVG, `Quick Start`, `CLI`, `Repository Layout`, `Docs`, `Development`, `License`.
