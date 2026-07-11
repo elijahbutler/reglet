@@ -142,6 +142,16 @@ describe('reglet CLI', () => {
       mode: string;
       reads: { path: string; scope: string; operation: string }[];
       writes: { path: string; scope: string; operation: string }[];
+      reconciliation: {
+        rules: {
+          provider: string;
+          sourcePath: string;
+          destinationPath: string;
+          state: string;
+          preview: string;
+          truncated: boolean;
+        }[];
+      };
       safety: { daemonEnabled: boolean; syncEnabled: boolean; notificationsEnabled: boolean };
     };
 
@@ -177,7 +187,99 @@ describe('reglet CLI', () => {
       syncEnabled: false,
       notificationsEnabled: false,
     });
+    expect(plan.reconciliation.rules).toEqual([
+      {
+        provider: 'claude',
+        sourcePath: claudeRules,
+        destinationPath: path.join(home, 'rules', 'imported-claude.md'),
+        state: 'new',
+        preview: 'existing claude rules\n',
+        truncated: false,
+      },
+    ]);
     await expect(readFile(path.join(home, 'rules', 'imported-claude.md'), 'utf8')).rejects.toThrow();
+  });
+
+  test('plan --json reconciles selected provider rules without creating master files', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const claudeRules = path.join(providerHome, '.claude', 'CLAUDE.md');
+    const codexRules = path.join(providerHome, '.codex', 'AGENTS.md');
+    const opencodeRules = path.join(providerHome, '.config', 'opencode', 'AGENTS.md');
+    const longRules = `${'x'.repeat(900)}\n`;
+    await mkdir(path.dirname(claudeRules), { recursive: true });
+    await mkdir(path.dirname(codexRules), { recursive: true });
+    await mkdir(path.dirname(opencodeRules), { recursive: true });
+    await mkdir(path.join(home, 'rules'), { recursive: true });
+    await writeFile(claudeRules, 'same rules\n');
+    await writeFile(codexRules, 'codex provider rules\n');
+    await writeFile(opencodeRules, longRules);
+    await writeFile(path.join(home, 'rules', 'imported-claude.md'), 'same rules\n');
+    await writeFile(path.join(home, 'rules', 'imported-codex.md'), 'old codex rules\n');
+
+    const result = await runCli(
+      ['plan', '--provider', 'claude,codex,opencode,windsurf', '--content', 'rules', '--json'],
+      home,
+      providerHome,
+    );
+    const plan = JSON.parse(result.stdout) as {
+      version: number;
+      reads: { provider: string; content: string; path: string }[];
+      writes: { provider: string; content: string; path: string }[];
+      reconciliation: {
+        rules: {
+          provider: string;
+          sourcePath: string;
+          destinationPath: string;
+          state: 'new' | 'matching' | 'different';
+          preview: string;
+          truncated: boolean;
+        }[];
+      };
+    };
+
+    expect(plan.version).toBe(1);
+    expect(plan.reconciliation.rules).toHaveLength(3);
+    expect(plan.reconciliation.rules.find((rule) => rule.provider === 'claude')).toEqual({
+      provider: 'claude',
+      sourcePath: claudeRules,
+      destinationPath: path.join(home, 'rules', 'imported-claude.md'),
+      state: 'matching',
+      preview: 'same rules\n',
+      truncated: false,
+    });
+    expect(plan.reconciliation.rules.find((rule) => rule.provider === 'codex')).toEqual({
+      provider: 'codex',
+      sourcePath: codexRules,
+      destinationPath: path.join(home, 'rules', 'imported-codex.md'),
+      state: 'different',
+      preview: 'codex provider rules\n',
+      truncated: false,
+    });
+    const opencode = plan.reconciliation.rules.find((rule) => rule.provider === 'opencode');
+    expect(opencode).toMatchObject({
+      provider: 'opencode',
+      sourcePath: opencodeRules,
+      destinationPath: path.join(home, 'rules', 'imported-opencode.md'),
+      state: 'new',
+      truncated: true,
+    });
+    expect(opencode?.preview).toHaveLength(800);
+    expect(plan.reconciliation.rules.some((rule) => rule.provider === 'windsurf')).toBe(false);
+    expect(await Bun.file(path.join(home, 'rules', 'imported-opencode.md')).exists()).toBe(false);
+    expect(await Bun.file(path.join(home, 'rules', 'imported-windsurf.md')).exists()).toBe(false);
+  });
+
+  test('plan --json omits rule reconciliation when rules are not selected and leaves master absent', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const claudeRules = path.join(providerHome, '.claude', 'CLAUDE.md');
+    await mkdir(path.dirname(claudeRules), { recursive: true });
+    await writeFile(claudeRules, 'rules not selected\n');
+
+    const result = await runCli(['plan', '--provider', 'claude', '--content', 'skills', '--json'], home, providerHome);
+    const plan = JSON.parse(result.stdout) as { reconciliation: { rules: unknown[] } };
+
+    expect(plan.reconciliation.rules).toEqual([]);
+    expect(await Bun.file(path.join(home, 'rules')).exists()).toBe(false);
   });
 
   test('init --yes leaves existing provider skills local while importing rules and MCP', async () => {

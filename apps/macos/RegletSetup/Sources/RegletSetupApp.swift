@@ -1103,16 +1103,82 @@ struct PreviewView: View {
   let back: () -> Void
   let apply: () -> Void
 
+  private var selectedAdoptions: [UnmanagedSkill] {
+    model.selectedProviderUnmanagedSkills
+      .filter { model.checkedSkills.contains($0.id) }
+      .sorted { $0.id < $1.id }
+  }
+
+  private var duplicateAdoptionDestinations: Set<String> {
+    let destinations = selectedAdoptions.map { skill in
+      model.skillScope(skill.id) == .shared ? skill.sharedDestination : skill.providerDestination
+    }
+    let counts = Dictionary(destinations.map { ($0, 1) }, uniquingKeysWith: +)
+    return Set(counts.compactMap { $0.value > 1 ? $0.key : nil })
+  }
+
+  private var selectedSharedSkillNames: Set<String> {
+    Set(selectedAdoptions.compactMap { model.skillScope($0.id) == .shared ? $0.name : nil })
+  }
+
+  private var hasBlockedAdoption: Bool {
+    selectedAdoptions.contains { skill in
+      let destination = model.skillScope(skill.id) == .shared ? skill.sharedDestination : skill.providerDestination
+      return !model.canAdopt(skill) || duplicateAdoptionDestinations.contains(destination)
+    }
+  }
+
   var body: some View {
     VStack(spacing: 0) {
-      FileList(title: "Files Reglet will read", files: model.plan?.reads ?? [])
-      Divider()
-      FileList(title: "Files Reglet will write after confirmation", files: model.plan?.writes ?? [])
+      List {
+        Section("Files Reglet will read") {
+          FileRows(files: model.plan?.reads ?? [])
+        }
+
+        Section("Files Reglet will write after confirmation") {
+          FileRows(files: model.plan?.writes ?? [])
+        }
+
+        Section {
+          let rules = model.plan?.reconciliation.rules ?? []
+          if rules.isEmpty {
+            Text("No provider rule files were selected for reconciliation.")
+              .foregroundStyle(.secondary)
+          } else {
+            ForEach(rules) { comparison in
+              RuleComparisonRow(comparison: comparison)
+            }
+          }
+        } header: {
+          Text("Provider rule reconciliation")
+        } footer: {
+          Text("Different provider rules are preserved as separate master documents, then composed into generated provider outputs during apply.")
+        }
+
+        Section {
+          SkillInventoryPreview(
+            selectedAdoptions: selectedAdoptions,
+            duplicateDestinations: duplicateAdoptionDestinations,
+            selectedSharedSkillNames: selectedSharedSkillNames
+          )
+        } header: {
+          Text("Projected skill inventory")
+        } footer: {
+          Text("Unchecked provider-local skills stay local. Conflicting checked adoptions are blocked unless Overwrite is enabled in the Skills step.")
+        }
+
+        Section("Safety") {
+          Label("Daemon remains off", systemImage: "checkmark.shield")
+          Label("Sync remains off", systemImage: "arrow.triangle.2.circlepath")
+          Label("Notifications remain off", systemImage: "bell.slash")
+        }
+      }
+      .listStyle(.inset)
       Divider()
       HStack {
         Button("Back", action: back)
         Spacer()
-        Text("Daemon, sync, and notifications remain off.")
+        Text(hasBlockedAdoption ? "Resolve blocked skill adoptions before applying." : "Daemon, sync, and notifications remain off.")
           .foregroundStyle(.secondary)
         Button {
           apply()
@@ -1120,7 +1186,7 @@ struct PreviewView: View {
           Label("Create Backups and Apply", systemImage: "checkmark.circle")
         }
         .buttonStyle(.borderedProminent)
-        .disabled(model.isWorking)
+        .disabled(model.isWorking || hasBlockedAdoption)
       }
       .padding(20)
       .background(.regularMaterial)
@@ -1128,37 +1194,206 @@ struct PreviewView: View {
   }
 }
 
-struct FileList: View {
-  let title: String
+struct FileRows: View {
   let files: [PlannedFile]
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text(title)
-        .font(.headline)
-      if files.isEmpty {
-        ContentUnavailableView("No files", systemImage: "doc", description: Text("Nothing is needed for this step."))
-      } else {
-        List(files) { file in
-          VStack(alignment: .leading, spacing: 4) {
-            HStack {
-              Text(file.provider)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-              Text(file.content)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            Text(file.path)
-              .font(.system(.body, design: .monospaced))
-              .textSelection(.enabled)
-          }
-          .padding(.vertical, 4)
-        }
-        .listStyle(.inset)
+    if files.isEmpty {
+      Text("No files.")
+        .foregroundStyle(.secondary)
+    } else {
+      ForEach(files) { file in
+        PlannedFileRow(file: file)
       }
     }
-    .padding(20)
+  }
+}
+
+struct PlannedFileRow: View {
+  let file: PlannedFile
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack(spacing: 8) {
+        Text(file.provider)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        Text(file.content)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        Text(file.scope)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      Text(file.path)
+        .font(.system(.body, design: .monospaced))
+        .textSelection(.enabled)
+    }
+    .padding(.vertical, 3)
+  }
+}
+
+struct RuleComparisonRow: View {
+  @EnvironmentObject private var model: SetupModel
+  let comparison: RuleComparison
+
+  private var status: (String, String, Color) {
+    switch comparison.state {
+    case "new":
+      ("doc.badge.plus", "New master rule document", .blue)
+    case "matching":
+      ("checkmark.circle", "Matches existing master document", .green)
+    default:
+      ("exclamationmark.triangle", "Different from existing master document", .orange)
+    }
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 8) {
+        Image(systemName: status.0)
+          .foregroundStyle(status.2)
+          .accessibilityLabel(status.1)
+        Text(model.providerDisplayName(comparison.provider))
+          .font(.headline)
+        Text(status.1)
+          .foregroundStyle(.secondary)
+      }
+      PathSummary(label: "Source", value: comparison.sourcePath)
+      PathSummary(label: "Destination", value: comparison.destinationPath)
+      Text(comparison.preview.isEmpty ? "(empty file)" : comparison.preview)
+        .font(.system(.caption, design: .monospaced))
+        .textSelection(.enabled)
+        .lineLimit(6)
+      if comparison.truncated {
+        Label("Preview truncated", systemImage: "scissors")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    }
+    .padding(.vertical, 6)
+  }
+}
+
+struct SkillInventoryPreview: View {
+  @EnvironmentObject private var model: SetupModel
+  let selectedAdoptions: [UnmanagedSkill]
+  let duplicateDestinations: Set<String>
+  let selectedSharedSkillNames: Set<String>
+
+  private var overview: SkillsOverviewResponse? { model.skillsOverview }
+
+  var body: some View {
+    if overview == nil && selectedAdoptions.isEmpty {
+      Text("Skill inventory unavailable.")
+        .foregroundStyle(.secondary)
+    } else {
+      ForEach(overview?.shared ?? []) { skill in
+        VStack(alignment: .leading, spacing: 4) {
+          Label(skill.name, systemImage: "hammer")
+          Text(skill.path)
+            .font(.system(.caption, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+          if !skill.shadowedBy.isEmpty {
+            Text("Shadowed by \(skill.shadowedBy.map { model.providerDisplayName($0) }.joined(separator: ", "))")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+        }
+        .padding(.vertical, 3)
+      }
+
+      ForEach(overview?.providerScoped ?? []) { skill in
+        VStack(alignment: .leading, spacing: 4) {
+          Label("\(skill.name) (\(model.providerDisplayName(skill.provider)))", systemImage: "hammer.circle")
+          Text(skill.path)
+            .font(.system(.caption, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+          if skill.shadowsShared {
+            Text("Shadows a shared skill for this provider.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+        }
+        .padding(.vertical, 3)
+      }
+
+      if selectedAdoptions.isEmpty {
+        Text("No provider-local skills are selected for adoption.")
+          .foregroundStyle(.secondary)
+      } else {
+        ForEach(selectedAdoptions) { skill in
+          SkillProjectionRow(
+            skill: skill,
+            hasSelectionCollision: duplicateDestinations.contains(
+              model.skillScope(skill.id) == .shared ? skill.sharedDestination : skill.providerDestination
+            ),
+            selectedSharedSkillNames: selectedSharedSkillNames
+          )
+        }
+      }
+    }
+  }
+}
+
+struct SkillProjectionRow: View {
+  @EnvironmentObject private var model: SetupModel
+  let skill: UnmanagedSkill
+  let hasSelectionCollision: Bool
+  let selectedSharedSkillNames: Set<String>
+
+  private var scope: SkillAdoptionScope { model.skillScope(skill.id) }
+  private var destination: String {
+    scope == .shared ? skill.sharedDestination : skill.providerDestination
+  }
+  private var conflict: Bool {
+    (scope == .shared ? skill.sharedConflict : skill.providerConflict) == "destination-exists"
+  }
+  private var overwrite: Bool { model.overwriteFlags.contains(skill.id) }
+  private var blocked: Bool { hasSelectionCollision || (conflict && !overwrite) }
+  private var statusText: String {
+    if hasSelectionCollision { return "Blocked: another selection uses this destination" }
+    if blocked { return "Blocked: destination exists" }
+    if conflict && overwrite { return "Will overwrite existing destination" }
+    return scope == .shared ? "Will become shared" : "Will become provider-scoped"
+  }
+  private var statusSymbol: String {
+    if blocked { return "xmark.octagon" }
+    if conflict && overwrite { return "exclamationmark.triangle" }
+    return "square.and.arrow.down"
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 8) {
+        Image(systemName: statusSymbol)
+          .foregroundStyle(blocked ? Color.red : (conflict ? Color.orange : Color.accentColor))
+          .accessibilityLabel(statusText)
+        Text(skill.name)
+          .font(.headline)
+        Text(model.providerDisplayName(skill.provider))
+          .foregroundStyle(.secondary)
+        Text(statusText)
+          .foregroundStyle(.secondary)
+      }
+      PathSummary(label: "Source", value: skill.sourcePath)
+      PathSummary(label: "Destination", value: destination)
+      Text("Affected providers: \(affectedProviders.map { model.providerDisplayName($0) }.joined(separator: ", "))")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      if scope == .provider && ((model.skillsOverview?.shared.contains { $0.name == skill.name } ?? false) || selectedSharedSkillNames.contains(skill.name)) {
+        Text("This provider-scoped skill will shadow the shared skill for \(model.providerDisplayName(skill.provider)).")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    }
+    .padding(.vertical, 6)
+  }
+
+  private var affectedProviders: [String] {
+    scope == .provider ? [skill.provider] : skill.affectedProviders
   }
 }
 

@@ -27,7 +27,7 @@ The macOS app will become Reglet's primary product surface. The CLI remains the 
 - [x] Keep business rules in stable, structured CLI/core operations rather than only in SwiftUI.
 - [x] Extend the CLI JSON contract for app screens to expose current configuration, managed and unmanaged content, sync state, drift, and actionable errors.
 - [x] Add Activity/Drift resolution, manual token sync, skills/MCP drift import, account/device pairing, and a native master-rules editor.
-- [ ] Complete and record the real-machine smoke matrix before broader Mac user testing.
+- [ ] Complete and record the real-machine smoke matrix before broader Mac user testing. Initial partial pass: [`docs/qa/2026-07-11-macos-smoke-matrix.md`](docs/qa/2026-07-11-macos-smoke-matrix.md).
 
 #### Skills
 
@@ -49,9 +49,9 @@ The macOS app will become Reglet's primary product surface. The CLI remains the 
 
 #### Onboarding reconciliation follow-up
 
-- Show the projected master skill inventory before onboarding applies, including provider scope, shared-skill shadows, and collision renames.
-- Compare discovered provider rule files in the preview with source path, provider, matching/different status, and a bounded content preview.
-- Explain how differing provider rules will be preserved as separate master documents and composed into generated outputs before the user confirms onboarding.
+- [x] Show the projected master skill inventory before onboarding applies, including provider scope, shared-skill shadows, and conflict/overwrite state.
+- [x] Compare discovered provider rule files in the preview with source path, provider, matching/different status, and a bounded content preview.
+- [x] Explain how differing provider rules will be preserved as separate master documents and composed into generated outputs before the user confirms onboarding.
 - Rebuild this preview against the current structured skills and rules contracts; do not revive the superseded selective-import implementation from PR #11.
 
 #### Sync, drift, and recovery

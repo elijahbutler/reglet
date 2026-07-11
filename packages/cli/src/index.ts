@@ -50,6 +50,7 @@ import {
 
 const providerIds = ['claude', 'codex', 'cursor', 'gemini', 'windsurf', 'opencode'] as const;
 const contentIds = ['rules', 'skills', 'mcp'] as const;
+const rulesPreviewLimit = 800;
 
 type ContentId = (typeof contentIds)[number];
 
@@ -553,7 +554,21 @@ interface OnboardingPlanJson {
   providers: PlannedProviderJson[];
   reads: PlannedFileJson[];
   writes: PlannedFileJson[];
+  reconciliation: OnboardingReconciliationJson;
   safety: SafetyJson;
+}
+
+interface OnboardingReconciliationJson {
+  rules: RuleComparisonJson[];
+}
+
+interface RuleComparisonJson {
+  provider: ProviderId;
+  sourcePath: string;
+  destinationPath: string;
+  state: 'new' | 'matching' | 'different';
+  preview: string;
+  truncated: boolean;
 }
 
 interface PlannedProviderJson {
@@ -776,6 +791,7 @@ async function buildOnboardingPlanJson(options: BuildOnboardingPlanOptions): Pro
   const reads: PlannedFileJson[] = [];
   const writes: PlannedFileJson[] = [];
   const providers: PlannedProviderJson[] = [];
+  const ruleComparisons: RuleComparisonJson[] = [];
 
   for (const provider of options.providers) {
     const adapter = getAdapter(provider);
@@ -792,6 +808,12 @@ async function buildOnboardingPlanJson(options: BuildOnboardingPlanOptions): Pro
       plannedProvider.contents[content] = contentPlan;
       reads.push(...contentPlan.readPaths.map((filePath) => plannedFile(provider, content, filePath, 'provider', 'read')));
       writes.push(...contentPlan.writePaths.map((filePath) => plannedFile(provider, content, filePath, plannedScope(filePath), 'write')));
+      if (content === 'rules') {
+        const comparison = await buildRuleComparison(provider, inventory);
+        if (comparison !== null) {
+          ruleComparisons.push(comparison);
+        }
+      }
     }
 
     providers.push(plannedProvider);
@@ -804,8 +826,41 @@ async function buildOnboardingPlanJson(options: BuildOnboardingPlanOptions): Pro
     providers,
     reads,
     writes,
+    reconciliation: {
+      rules: ruleComparisons,
+    },
     safety: safetyDefaults(),
   };
+}
+
+async function buildRuleComparison(provider: ProviderId, inventory: ProviderInventory): Promise<RuleComparisonJson | null> {
+  if (inventory.rulesPath === null || !inventory.rulesExists) {
+    return null;
+  }
+
+  const sourceContent = await readFile(inventory.rulesPath, 'utf8');
+  const destinationPath = path.join(regletHome(), 'rules', `imported-${provider}.md`);
+  const destinationContent = await readOptionalFile(destinationPath);
+
+  return {
+    provider,
+    sourcePath: inventory.rulesPath,
+    destinationPath,
+    state: destinationContent === null ? 'new' : destinationContent === sourceContent ? 'matching' : 'different',
+    preview: sourceContent.slice(0, rulesPreviewLimit),
+    truncated: sourceContent.length > rulesPreviewLimit,
+  };
+}
+
+async function readOptionalFile(filePath: string): Promise<string | null> {
+  try {
+    return await readFile(filePath, 'utf8');
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') {
+      return null;
+    }
+    throw error;
+  }
 }
 
 async function buildContentPlan(
