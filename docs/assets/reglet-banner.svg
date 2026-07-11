@@ -1,30 +1,70 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420" role="img" aria-labelledby="title desc">
-  <title id="title">Reglet banner</title>
-  <desc id="desc">Reglet unifies AI agent rules, skills, and MCP servers across local coding tools.</desc>
-  <rect width="1280" height="420" fill="#111827"/>
-  <rect x="0" y="286" width="1280" height="134" fill="#1f2937"/>
-  <path d="M0 300 C160 250 300 330 470 286 C640 242 760 276 930 226 C1090 180 1190 214 1280 174 L1280 420 L0 420 Z" fill="#0f766e"/>
-  <path d="M0 74 C170 116 292 40 450 86 C628 138 760 62 934 96 C1098 128 1188 78 1280 102" fill="none" stroke="#22d3ee" stroke-width="3" opacity="0.38"/>
+  <title id="title">Reglet engineering control plane</title>
+  <desc id="desc">A terminal-style systems diagram showing Reglet compiling one master directory into local AI agent provider outputs.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1020"/>
+      <stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+    <style>
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+      .sans { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .panel { fill: #0f172a; stroke: #334155; stroke-width: 1.5; }
+      .muted { fill: #94a3b8; }
+      .text { fill: #e5e7eb; }
+      .green { fill: #34d399; }
+      .blue { fill: #60a5fa; }
+      .amber { fill: #fbbf24; }
+      .line { stroke: #64748b; stroke-width: 2; fill: none; }
+    </style>
+  </defs>
 
-  <text x="82" y="82" fill="#d1d5db" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="700">Reglet</text>
-  <text x="82" y="158" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="58" font-weight="700">One source of truth.</text>
-  <text x="82" y="226" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="58" font-weight="700">Every local agent.</text>
-  <text x="82" y="286" fill="#dbeafe" font-family="Arial, Helvetica, sans-serif" font-size="24">Rules, skills, MCP servers, drift detection, daemon apply, and self-hosted sync.</text>
+  <rect width="1280" height="420" fill="url(#bg)"/>
+  <rect x="32" y="28" width="1216" height="364" rx="14" class="panel"/>
 
-  <g transform="translate(824 84)">
-    <rect x="0" y="0" width="356" height="250" rx="18" fill="#f9fafb"/>
-    <text x="34" y="42" fill="#111827" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700">master</text>
-    <text x="148" y="42" fill="#111827" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700">adapters</text>
-    <text x="260" y="42" fill="#111827" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700">agents</text>
-    <circle cx="60" cy="126" r="22" fill="#111827"/>
-    <rect x="124" y="72" width="82" height="34" rx="8" fill="#2563eb"/>
-    <rect x="124" y="114" width="82" height="34" rx="8" fill="#0891b2"/>
-    <rect x="124" y="156" width="82" height="34" rx="8" fill="#16a34a"/>
-    <circle cx="288" cy="82" r="18" fill="#7c3aed"/>
-    <circle cx="288" cy="126" r="18" fill="#f59e0b"/>
-    <circle cx="288" cy="170" r="18" fill="#dc2626"/>
-    <path d="M82 126 L124 89 M82 126 L124 131 M82 126 L124 173 M206 89 L270 82 M206 131 L270 126 M206 173 L270 170" fill="none" stroke="#374151" stroke-width="5" stroke-linecap="round"/>
-    <rect x="44" y="212" width="268" height="12" rx="6" fill="#e5e7eb"/>
-    <rect x="44" y="212" width="206" height="12" rx="6" fill="#14b8a6"/>
+  <g class="sans">
+    <text x="70" y="82" class="muted" font-size="18" font-weight="700">REGLET</text>
+    <text x="70" y="126" class="text" font-size="38" font-weight="800">Agent config as local infrastructure</text>
+    <text x="70" y="158" class="muted" font-size="18">One auditable master directory compiled into every local AI coding tool.</text>
+  </g>
+
+  <g transform="translate(70 196)">
+    <rect width="505" height="148" rx="10" fill="#020617" stroke="#1e293b"/>
+    <circle cx="24" cy="24" r="5" fill="#ef4444"/>
+    <circle cx="42" cy="24" r="5" fill="#f59e0b"/>
+    <circle cx="60" cy="24" r="5" fill="#22c55e"/>
+    <text x="24" y="60" class="mono green" font-size="15">$ reglet plan --provider claude,codex --content rules,mcp --json</text>
+    <text x="24" y="90" class="mono text" font-size="15">reads:  ~/.claude/CLAUDE.md, ~/.codex/config.toml</text>
+    <text x="24" y="116" class="mono text" font-size="15">writes: ~/.reglet/rules/*, provider outputs</text>
+    <text x="24" y="142" class="mono amber" font-size="15">daemon=off sync=off notifications=off</text>
+  </g>
+
+  <g transform="translate(644 82)" class="mono">
+    <rect width="250" height="236" rx="10" class="panel"/>
+    <text x="24" y="36" class="blue" font-size="15" font-weight="700">~/.reglet/</text>
+    <text x="24" y="72" class="text" font-size="15">rules/*.md</text>
+    <text x="24" y="102" class="text" font-size="15">skills/*/SKILL.md</text>
+    <text x="24" y="132" class="text" font-size="15">mcp/servers.json</text>
+    <text x="24" y="162" class="text" font-size="15">reglet.toml</text>
+    <text x="24" y="202" class="muted" font-size="13">manifest + backups</text>
+  </g>
+
+  <path d="M894 198 H956" class="line"/>
+  <path d="M948 190 L960 198 L948 206" fill="none" stroke="#64748b" stroke-width="2"/>
+
+  <g transform="translate(966 70)" class="mono">
+    <rect width="220" height="260" rx="10" class="panel"/>
+    <text x="22" y="38" class="blue" font-size="15" font-weight="700">provider outputs</text>
+    <text x="22" y="76" class="text" font-size="14">claude  CLAUDE.md</text>
+    <text x="22" y="106" class="text" font-size="14">codex   AGENTS.md</text>
+    <text x="22" y="136" class="text" font-size="14">cursor  mcp.json</text>
+    <text x="22" y="166" class="text" font-size="14">gemini  settings.json</text>
+    <text x="22" y="196" class="text" font-size="14">windsurf mcp_config</text>
+    <text x="22" y="226" class="text" font-size="14">opencode opencode.json</text>
+  </g>
+
+  <g class="sans">
+    <rect x="644" y="344" width="542" height="30" rx="6" fill="#172554" stroke="#1d4ed8"/>
+    <text x="664" y="365" fill="#bfdbfe" font-size="14" font-weight="700">deterministic apply  |  drift detection  |  restore/revert  |  optional sync</text>
   </g>
 </svg>
