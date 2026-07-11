@@ -17,6 +17,55 @@ jobs:
       - run: bun run typecheck
       - run: bun test
       - run: bun run build:binaries
+      - name: Import Apple signing credentials
+        env:
+          APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64 }}
+          APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD }}
+          APPLE_DEVELOPER_ID_INSTALLER_CERT_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER_CERT_BASE64 }}
+          APPLE_DEVELOPER_ID_INSTALLER_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER_CERT_PASSWORD }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          KEYCHAIN_PASSWORD: ${{ secrets.APPLE_BUILD_KEYCHAIN_PASSWORD }}
+        run: |
+          test -n "$APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64"
+          test -n "$APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD"
+          test -n "$APPLE_DEVELOPER_ID_INSTALLER_CERT_BASE64"
+          test -n "$APPLE_DEVELOPER_ID_INSTALLER_CERT_PASSWORD"
+          test -n "$APPLE_NOTARY_KEY_BASE64"
+          test -n "$APPLE_NOTARY_KEY_ID"
+          test -n "$APPLE_NOTARY_ISSUER_ID"
+          test -n "$KEYCHAIN_PASSWORD"
+
+          KEYCHAIN_PATH="$RUNNER_TEMP/reglet-signing.keychain-db"
+          APP_CERT_PATH="$RUNNER_TEMP/developer-id-application.p12"
+          INSTALLER_CERT_PATH="$RUNNER_TEMP/developer-id-installer.p12"
+          NOTARY_KEY_PATH="$RUNNER_TEMP/AuthKey_$APPLE_NOTARY_KEY_ID.p8"
+
+          echo "$APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64" | base64 -d > "$APP_CERT_PATH"
+          echo "$APPLE_DEVELOPER_ID_INSTALLER_CERT_BASE64" | base64 -d > "$INSTALLER_CERT_PATH"
+          echo "$APPLE_NOTARY_KEY_BASE64" | base64 -d > "$NOTARY_KEY_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$APP_CERT_PATH" -P "$APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security import "$INSTALLER_CERT_PATH" -P "$APPLE_DEVELOPER_ID_INSTALLER_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+
+          APP_IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -n 1)"
+          INSTALLER_IDENTITY="$(security find-certificate -a -c "Developer ID Installer" -Z "$KEYCHAIN_PATH" | sed -n 's/.*alis"<blob>="\([^"]*\)".*/\1/p' | head -n 1)"
+          test -n "$APP_IDENTITY"
+          test -n "$INSTALLER_IDENTITY"
+
+          {
+            echo "CODESIGN_IDENTITY=$APP_IDENTITY"
+            echo "PRODUCTSIGN_IDENTITY=$INSTALLER_IDENTITY"
+            echo "NOTARY_KEY_PATH=$NOTARY_KEY_PATH"
+            echo "APPLE_NOTARY_KEY_ID=$APPLE_NOTARY_KEY_ID"
+            echo "APPLE_NOTARY_ISSUER_ID=$APPLE_NOTARY_ISSUER_ID"
+          } >> "$GITHUB_ENV"
       - run: bun run build:macos-installer
       - uses: softprops/action-gh-release@v2
         with:

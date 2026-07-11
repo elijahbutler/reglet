@@ -23,7 +23,7 @@ The package installs:
 
 The installer does **not** install, load, or start the Reglet daemon. It does **not** configure sync. Open `Reglet Setup.app` after installation to scan providers, preview file reads/writes, and explicitly confirm backup/apply.
 
-If macOS blocks an unsigned prerelease package, use the source install path below until a signed/notarized release is available.
+If macOS reports that it cannot verify the package is free of malware, the package was built without Developer ID signing and Apple notarization. Do not use unsigned installer packages for broad distribution; use the source install path below until a signed/notarized release is available.
 
 ## From Checkout
 
