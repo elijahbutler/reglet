@@ -4,5 +4,7 @@
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
-  "dependencies": {}
+  "dependencies": {
+    "smol-toml": "^1.6.1"
+  }
 }
