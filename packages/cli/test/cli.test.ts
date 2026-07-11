@@ -368,6 +368,81 @@ describe('reglet CLI', () => {
     );
   });
 
+  test('skills list prints managed and unmanaged skills as tab-separated text', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const shared = path.join(home, 'skills', 'shared-alpha');
+    const scoped = path.join(home, 'skills', 'claude', 'scoped-alpha');
+    const local = path.join(providerHome, '.claude', 'skills', 'local-alpha');
+    await mkdir(shared, { recursive: true });
+    await mkdir(scoped, { recursive: true });
+    await mkdir(local, { recursive: true });
+    await writeFile(path.join(shared, 'SKILL.md'), 'shared\n');
+    await writeFile(path.join(scoped, 'SKILL.md'), 'scoped\n');
+    await writeFile(path.join(local, 'SKILL.md'), 'local\n');
+
+    const result = await runCli(['skills', 'list'], home, providerHome);
+
+    expect(result.stdout.trim().split('\n')).toEqual([
+      `shared\tshared-alpha\t${shared}`,
+      `claude\tscoped-alpha\t${scoped}`,
+      `claude\tlocal-alpha\t${local}`,
+    ]);
+  });
+
+  test('skills list --json prints the unified skills overview shape', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const shared = path.join(home, 'skills', 'shared-alpha');
+    const scoped = path.join(home, 'skills', 'claude', 'shared-alpha');
+    const local = path.join(providerHome, '.claude', 'skills', 'local-alpha');
+    await mkdir(shared, { recursive: true });
+    await mkdir(scoped, { recursive: true });
+    await mkdir(local, { recursive: true });
+    await writeFile(path.join(shared, 'SKILL.md'), 'shared\n');
+    await writeFile(path.join(scoped, 'SKILL.md'), 'scoped\n');
+    await writeFile(path.join(local, 'SKILL.md'), 'local\n');
+
+    const listed = JSON.parse((await runCli(['skills', 'list', '--json'], home, providerHome)).stdout) as {
+      version: number;
+      regletHome: string;
+      shared: { name: string; path: string; fileCount: number; shadowedBy: string[] }[];
+      providerScoped: {
+        provider: string;
+        name: string;
+        path: string;
+        fileCount: number;
+        shadowsShared: boolean;
+      }[];
+      unmanaged: { provider: string; name: string; sourcePath: string }[];
+    };
+
+    expect(Object.keys(listed)).toEqual(['version', 'regletHome', 'shared', 'providerScoped', 'unmanaged']);
+    expect(listed.version).toBe(1);
+    expect(listed.regletHome).toBe(home);
+    expect(listed.shared).toEqual([
+      {
+        name: 'shared-alpha',
+        path: shared,
+        fileCount: 1,
+        shadowedBy: ['claude'],
+      },
+    ]);
+    expect(listed.providerScoped).toEqual([
+      {
+        provider: 'claude',
+        name: 'shared-alpha',
+        path: scoped,
+        fileCount: 1,
+        shadowsShared: true,
+      },
+    ]);
+    expect(listed.unmanaged).toHaveLength(1);
+    expect(listed.unmanaged[0]).toMatchObject({
+      provider: 'claude',
+      name: 'local-alpha',
+      sourcePath: local,
+    });
+  });
+
   test('login --token writes sync state with device name', async () => {
     const { home, providerHome } = await useTempHomes();
 

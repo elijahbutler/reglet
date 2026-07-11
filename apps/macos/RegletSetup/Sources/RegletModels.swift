@@ -97,11 +97,6 @@ enum ContentKind: String, CaseIterable, Identifiable {
   }
 }
 
-struct UnmanagedSkillsResponse: Decodable {
-  let version: Int
-  let skills: [UnmanagedSkill]
-}
-
 struct UnmanagedSkill: Decodable, Identifiable {
   let provider: String
   let name: String
@@ -111,6 +106,33 @@ struct UnmanagedSkill: Decodable, Identifiable {
   let sharedConflict: String
   let providerConflict: String
   let affectedProviders: [String]
+
+  var id: String { "\(provider):\(name)" }
+}
+
+struct SkillsOverviewResponse: Decodable {
+  let version: Int
+  let regletHome: String
+  let shared: [SharedSkillSummary]
+  let providerScoped: [ProviderScopedSkillSummary]
+  let unmanaged: [UnmanagedSkill]
+}
+
+struct SharedSkillSummary: Decodable, Identifiable {
+  let name: String
+  let path: String
+  let fileCount: Int
+  let shadowedBy: [String]
+
+  var id: String { name }
+}
+
+struct ProviderScopedSkillSummary: Decodable, Identifiable {
+  let provider: String
+  let name: String
+  let path: String
+  let fileCount: Int
+  let shadowsShared: Bool
 
   var id: String { "\(provider):\(name)" }
 }

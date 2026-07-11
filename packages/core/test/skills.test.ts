@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { adoptSkill, listUnmanagedSkills, recordOutput } from '../src/index.js';
+import { adoptSkill, listSkills, listUnmanagedSkills, recordOutput } from '../src/index.js';
 
 let home: string | undefined;
 let providerHome: string | undefined;
@@ -72,5 +72,133 @@ describe('provider-local skill adoption', () => {
     ).rejects.toThrow('destination already exists');
     const provider = await adoptSkill({ provider: 'claude', name: 'alpha', scope: 'provider', home: paths.home });
     expect(provider.destination).toBe(path.join(paths.home, 'skills', 'claude', 'alpha'));
+  });
+});
+
+describe('skills overview', () => {
+  test('lists an empty master', async () => {
+    const paths = await setup();
+
+    const overview = await listSkills(paths.home);
+
+    expect(overview).toEqual({
+      shared: [],
+      providerScoped: [],
+      unmanaged: [],
+    });
+  });
+
+  test('lists shared skills sorted by name', async () => {
+    const paths = await setup();
+    await mkdir(path.join(paths.home, 'skills', 'beta', 'assets'), { recursive: true });
+    await mkdir(path.join(paths.home, 'skills', 'alpha'), { recursive: true });
+    await writeFile(path.join(paths.home, 'skills', 'beta', 'SKILL.md'), 'beta');
+    await writeFile(path.join(paths.home, 'skills', 'beta', 'assets', 'note.txt'), 'asset');
+    await writeFile(path.join(paths.home, 'skills', 'alpha', 'SKILL.md'), 'alpha');
+
+    const overview = await listSkills(paths.home);
+
+    expect(overview.shared).toEqual([
+      {
+        name: 'alpha',
+        path: path.join(paths.home, 'skills', 'alpha'),
+        fileCount: 1,
+        shadowedBy: [],
+      },
+      {
+        name: 'beta',
+        path: path.join(paths.home, 'skills', 'beta'),
+        fileCount: 2,
+        shadowedBy: [],
+      },
+    ]);
+    expect(overview.providerScoped).toEqual([]);
+    expect(overview.unmanaged).toEqual([]);
+  });
+
+  test('marks provider-scoped skills that shadow shared skills', async () => {
+    const paths = await setup();
+    await mkdir(path.join(paths.home, 'skills', 'shared'), { recursive: true });
+    await mkdir(path.join(paths.home, 'skills', 'claude', 'shared'), { recursive: true });
+    await mkdir(path.join(paths.home, 'skills', 'windsurf', 'shared'), { recursive: true });
+    await mkdir(path.join(paths.home, 'skills', 'claude', 'claude-only'), { recursive: true });
+    await writeFile(path.join(paths.home, 'skills', 'shared', 'SKILL.md'), 'shared');
+    await writeFile(path.join(paths.home, 'skills', 'claude', 'shared', 'SKILL.md'), 'claude shared');
+    await writeFile(path.join(paths.home, 'skills', 'windsurf', 'shared', 'SKILL.md'), 'windsurf shared');
+    await writeFile(path.join(paths.home, 'skills', 'claude', 'claude-only', 'SKILL.md'), 'claude only');
+
+    const overview = await listSkills(paths.home);
+
+    expect(overview.shared).toEqual([
+      {
+        name: 'shared',
+        path: path.join(paths.home, 'skills', 'shared'),
+        fileCount: 1,
+        shadowedBy: ['claude', 'windsurf'],
+      },
+    ]);
+    expect(overview.providerScoped).toEqual([
+      {
+        provider: 'claude',
+        name: 'claude-only',
+        path: path.join(paths.home, 'skills', 'claude', 'claude-only'),
+        fileCount: 1,
+        shadowsShared: false,
+      },
+      {
+        provider: 'claude',
+        name: 'shared',
+        path: path.join(paths.home, 'skills', 'claude', 'shared'),
+        fileCount: 1,
+        shadowsShared: true,
+      },
+      {
+        provider: 'windsurf',
+        name: 'shared',
+        path: path.join(paths.home, 'skills', 'windsurf', 'shared'),
+        fileCount: 1,
+        shadowsShared: true,
+      },
+    ]);
+    expect(overview.unmanaged).toEqual([]);
+  });
+
+  test('lists unmanaged skills alongside managed skills', async () => {
+    const paths = await setup();
+    const source = path.join(paths.providerHome, '.claude', 'skills', 'local-alpha');
+    await mkdir(path.join(paths.home, 'skills', 'managed-shared'), { recursive: true });
+    await mkdir(path.join(paths.home, 'skills', 'claude', 'managed-scoped'), { recursive: true });
+    await mkdir(source, { recursive: true });
+    await writeFile(path.join(paths.home, 'skills', 'managed-shared', 'SKILL.md'), 'shared');
+    await writeFile(path.join(paths.home, 'skills', 'claude', 'managed-scoped', 'SKILL.md'), 'scoped');
+    await writeFile(path.join(source, 'SKILL.md'), 'local');
+
+    const overview = await listSkills(paths.home);
+
+    expect(overview.shared).toEqual([
+      {
+        name: 'managed-shared',
+        path: path.join(paths.home, 'skills', 'managed-shared'),
+        fileCount: 1,
+        shadowedBy: [],
+      },
+    ]);
+    expect(overview.providerScoped).toEqual([
+      {
+        provider: 'claude',
+        name: 'managed-scoped',
+        path: path.join(paths.home, 'skills', 'claude', 'managed-scoped'),
+        fileCount: 1,
+        shadowsShared: false,
+      },
+    ]);
+    expect(overview.unmanaged).toHaveLength(1);
+    expect(overview.unmanaged[0]).toMatchObject({
+      provider: 'claude',
+      name: 'local-alpha',
+      sourcePath: source,
+      sharedConflict: 'none',
+      providerConflict: 'none',
+    });
   });
 });
