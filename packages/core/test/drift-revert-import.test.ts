@@ -1,0 +1,159 @@
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { defaultConfig, saveConfig, type ProviderName } from '../src/config.js';
+import { applyAll } from '../src/engine/apply.js';
+import { appendDriftEvent, clearDriftEvents, detectDrift, listDriftEvents } from '../src/engine/drift.js';
+import { importDriftedRules } from '../src/engine/import.js';
+import { revert, restore } from '../src/engine/revert.js';
+import { GENERATED_HEADER } from '../src/header.js';
+import { loadManifest } from '../src/manifest.js';
+
+let currentHome: string | undefined;
+let currentProviderHome: string | undefined;
+
+afterEach(async () => {
+  if (currentHome !== undefined) {
+    await rm(currentHome, { recursive: true, force: true });
+    currentHome = undefined;
+  }
+  if (currentProviderHome !== undefined) {
+    await rm(currentProviderHome, { recursive: true, force: true });
+    currentProviderHome = undefined;
+  }
+  delete process.env.REGLET_HOME;
+  delete process.env.REGLET_PROVIDER_HOME;
+});
+
+async function useTempHomes(): Promise<{ home: string; providerHome: string }> {
+  currentHome = await mkdtemp(path.join(tmpdir(), 'reglet-core-drift-home-'));
+  currentProviderHome = await mkdtemp(path.join(tmpdir(), 'reglet-core-drift-provider-'));
+  process.env.REGLET_HOME = currentHome;
+  process.env.REGLET_PROVIDER_HOME = currentProviderHome;
+  return { home: currentHome, providerHome: currentProviderHome };
+}
+
+async function enableProviders(home: string, providers: ProviderName[]): Promise<void> {
+  const config = defaultConfig();
+  for (const provider of providers) {
+    config.providers[provider].enabled = true;
+  }
+  await saveConfig(config, home);
+}
+
+async function writeMasterRule(home: string): Promise<void> {
+  await mkdir(path.join(home, 'rules'), { recursive: true });
+  await writeFile(path.join(home, 'rules', '00-general.md'), '# General\n\nBe concise.\n');
+}
+
+describe('drift, import, and revert', () => {
+  test('detectDrift reports clean, modified, and missing managed outputs', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await writeMasterRule(home);
+    await enableProviders(home, ['claude']);
+
+    await applyAll({ providers: ['claude'], contents: ['rules'] });
+    const outputPath = path.join(providerHome, '.claude', 'CLAUDE.md');
+    expect(await detectDrift(home)).toEqual([{ outputPath, provider: 'claude', content: 'rules', status: 'clean' }]);
+
+    await writeFile(outputPath, `${await readFile(outputPath, 'utf8')}\nHand edit.\n`);
+    expect(await detectDrift(home)).toEqual([{ outputPath, provider: 'claude', content: 'rules', status: 'modified' }]);
+
+    await rm(outputPath);
+    expect(await detectDrift(home)).toEqual([{ outputPath, provider: 'claude', content: 'rules', status: 'missing' }]);
+  });
+
+  test('detectDrift ignores unmanaged mcp edits and reports managed mcp edits', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await mkdir(path.join(home, 'rules'), { recursive: true });
+    await mkdir(path.join(home, 'mcp'), { recursive: true });
+    await writeFile(
+      path.join(home, 'mcp', 'servers.json'),
+      `${JSON.stringify({ mcpServers: { managed: { command: 'node', args: ['server.js'] } } }, null, 2)}\n`,
+    );
+    await enableProviders(home, ['claude']);
+    await applyAll({ providers: ['claude'], contents: ['mcp'] });
+
+    const outputPath = path.join(providerHome, '.claude.json');
+    await writeFile(
+      outputPath,
+      `${JSON.stringify(
+        {
+          mcpServers: {
+            managed: { command: 'node', args: ['server.js'] },
+            user: { command: 'python' },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    expect(await detectDrift(home)).toEqual([{ outputPath, provider: 'claude', content: 'mcp', status: 'clean' }]);
+
+    await writeFile(
+      outputPath,
+      `${JSON.stringify({ mcpServers: { managed: { command: 'ruby' }, user: { command: 'python' } } }, null, 2)}\n`,
+    );
+    expect(await detectDrift(home)).toEqual([{ outputPath, provider: 'claude', content: 'mcp', status: 'modified' }]);
+  });
+
+  test('importDriftedRules writes stripped provider rules into the master rules dir', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await writeMasterRule(home);
+    await enableProviders(home, ['claude']);
+    await applyAll({ providers: ['claude'], contents: ['rules'] });
+
+    const outputPath = path.join(providerHome, '.claude', 'CLAUDE.md');
+    await writeFile(outputPath, `${GENERATED_HEADER.replace('<provider>', 'claude')}\n\nImported body.\n`);
+
+    const result = await importDriftedRules('claude', home, new Date('2026-07-10T12:00:00.000Z'));
+
+    expect(result.importedPath).toBe(path.join(home, 'rules', 'imported-claude-2026-07-10.md'));
+    expect(await readFile(result.importedPath, 'utf8')).toBe('Imported body.\n');
+  });
+
+  test('revert restores backed-up originals byte-identically and removes created outputs', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await writeMasterRule(home);
+    await enableProviders(home, ['claude', 'gemini']);
+    const claudePath = path.join(providerHome, '.claude', 'CLAUDE.md');
+    await mkdir(path.dirname(claudePath), { recursive: true });
+    await writeFile(claudePath, 'original claude\n');
+
+    await applyAll({ providers: ['claude', 'gemini'], contents: ['rules'] });
+    const geminiPath = path.join(providerHome, '.gemini', 'GEMINI.md');
+
+    const results = await revert(undefined, home);
+
+    expect(results).toContainEqual({ outputPath: claudePath, provider: 'claude', action: 'restored' });
+    expect(results).toContainEqual({ outputPath: geminiPath, provider: 'gemini', action: 'removed' });
+    expect(await readFile(claudePath, 'utf8')).toBe('original claude\n');
+    await expect(readFile(geminiPath, 'utf8')).rejects.toThrow();
+    expect(await loadManifest(home)).toEqual({ version: 1, outputs: {} });
+  });
+
+  test('restore can target one provider and leaves other manifest entries intact', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await writeMasterRule(home);
+    await enableProviders(home, ['claude', 'gemini']);
+    await applyAll({ providers: ['claude', 'gemini'], contents: ['rules'] });
+
+    await restore('claude', home);
+
+    const manifest = await loadManifest(home);
+    expect(manifest.outputs[path.join(providerHome, '.claude', 'CLAUDE.md')]).toBeUndefined();
+    expect(manifest.outputs[path.join(providerHome, '.gemini', 'GEMINI.md')]).toBeDefined();
+  });
+
+  test('drift queue helpers append, list, and clear events', async () => {
+    const { home } = await useTempHomes();
+    const record = { outputPath: '/tmp/generated', provider: 'claude', content: 'rules' as const, status: 'modified' as const };
+
+    await appendDriftEvent(record, home);
+    expect((await listDriftEvents(home)).events).toHaveLength(1);
+
+    await clearDriftEvents(home);
+    expect(await listDriftEvents(home)).toEqual({ version: 1, events: [] });
+  });
+});
