@@ -159,14 +159,21 @@ struct RegletCommand {
       }
 
       try process.run()
+      let stdoutTask = Task.detached(priority: .userInitiated) {
+        stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+      }
+      let stderrTask = Task.detached(priority: .userInitiated) {
+        stderrPipe.fileHandleForReading.readDataToEndOfFile()
+      }
+
       if let stdin, let data = stdin.data(using: .utf8) {
         stdinPipe.fileHandleForWriting.write(data)
         try stdinPipe.fileHandleForWriting.close()
       }
       process.waitUntilExit()
 
-      let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-      let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+      let stdout = String(data: await stdoutTask.value, encoding: .utf8) ?? ""
+      let stderr = String(data: await stderrTask.value, encoding: .utf8) ?? ""
       let result = CommandResult(stdout: stdout, stderr: stderr, status: process.terminationStatus)
       if result.status != 0 {
         throw RegletCommandError.failed(
