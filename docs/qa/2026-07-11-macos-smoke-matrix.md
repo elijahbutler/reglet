@@ -2,7 +2,7 @@
 
 ## Result
 
-**Partial pass.** The current source passes its automated safety and lifecycle coverage, and the installed Homebrew app launches successfully on the test Mac. Broader Mac testing remains gated on a permission-enabled visual walkthrough, destructive recovery/uninstall checks on a disposable user account or VM, and a genuinely fresh machine image.
+**Partial pass.** The current source passes its automated safety and lifecycle coverage, the installed Homebrew app launches successfully on the test Mac, and a permission-enabled visual walkthrough of all seven native surfaces passed on 2026-07-11 (second pass, app 0.1.6). Broader Mac testing remains gated on destructive recovery/uninstall checks on a disposable user account or VM, a genuinely fresh machine image, and an interactive accessibility pass.
 
 ## Environment
 
@@ -33,7 +33,7 @@
 | Conflicts and recovery | Pass (automated) | Non-overlapping merge and overlapping-conflict behavior pass; live destructive resolution was intentionally not attempted. |
 | Installer leaves daemon/sync disabled | Pass | Installed app reports daemon stopped and sync unconfigured. |
 | Installer uninstall leaves no background process | Not run | Requires intentionally removing the installed cask; run on a disposable account or VM. |
-| Native sidebar and screen rendering | Blocked | The app launches, and the installed binary contains Providers, Rules, Skills, MCP, Sync, Activity & Drift, and Recovery surfaces. macOS denied Accessibility access to `osascript`, so navigation and screen-level visual assertions could not be completed. |
+| Native sidebar and screen rendering | Pass (live walkthrough) | Second pass on app 0.1.6 with Accessibility granted: an automated read-only walkthrough reached all seven sidebar surfaces (Providers, Rules, Skills, MCP, Sync, Activity & Drift, Recovery) and captured a screenshot of each. No blank areas, truncation, overlap, or error banners on any surface. Independent screenshot review confirmed clean rendering. See "Live walkthrough" below. |
 | Keyboard, VoiceOver, contrast, reduced motion | Not run | Requires an interactive accessibility pass. |
 
 ## Automated checks
@@ -56,10 +56,18 @@ The suite covers master/config/manifest behavior, all provider adapters, onboard
 - Read-only status reports four modified MCP outputs: Claude, Cursor, Gemini, and Windsurf. Their contents were not read or changed during this pass.
 - No Apply, Save, Restore, Revert, Adopt, Login, Sync, or daemon mutation was performed.
 
+## Live walkthrough (second pass, 2026-07-11)
+
+- App: `/Applications/Reglet.app` 0.1.6 (Homebrew cask), CLI 0.1.6. Source at `6791f12` plus this branch; `bun test` 72 pass / 0 fail (255 assertions), typecheck and lint clean.
+- Method: automated read-only walkthrough driven through macOS Accessibility (`osascript` + `screencapture` by window ID), executed by an independent verification agent, with a separate human-style review of every screenshot. No Apply, Save, Restore, Revert, Adopt, Login, Sync, or daemon control was activated; no provider or master files were modified.
+- Result: **pass**. All seven surfaces reached and rendered cleanly. Activity & Drift correctly reported `5 of 886 managed files changed outside Reglet` (the live profile's hand-edited MCP outputs) with per-file Import to Master / Re-apply actions. Sync shows the manual-only, token-stored-locally safety note; Recovery lists Restore/Revert per provider.
+- Screenshots and accessibility dumps are retained locally outside the repo (they capture the test user's personal paths and skill inventory): `.context/qa/2026-07-11-app-walkthrough/`.
+- Automation note: CoreGraphics reports the window owner as `Reglet` while Accessibility names the process `RegletSetup`; scripts must target the process name. Accessibility briefly failed to enumerate `window 1` on Recovery; capture by window ID succeeded.
+
 ## Release-gate follow-up
 
-1. Grant Accessibility and Screen Recording permission to the verification host, then navigate and capture every native surface.
+1. ~~Grant Accessibility and Screen Recording permission to the verification host, then navigate and capture every native surface.~~ Done in the second pass above.
 2. Run fresh install, restore/revert, and uninstall on a disposable macOS user or VM.
 3. Repeat with representative existing Claude and Codex configurations, inspecting exact backups and previews.
 4. Exercise VoiceOver, keyboard-only navigation, Increase Contrast, Reduce Transparency, and Reduce Motion.
-5. Record screenshots and outcomes here; only then mark the roadmap smoke gate complete.
+5. Record outcomes here; only then mark the roadmap smoke gate complete.
