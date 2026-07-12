@@ -154,6 +154,82 @@ struct RegletCommand {
     try await run(["apply", "--content", "skills"])
   }
 
+  func skillTree(name: String, provider: String?) async throws -> SkillTreeResponse {
+    var arguments = ["skills", "files", name, "--scope", provider == nil ? "shared" : "provider", "--json"]
+    if let provider { arguments += ["--provider", provider] }
+    let result = try await run(arguments)
+    return try decode(SkillTreeResponse.self, from: result.stdout, command: "reglet \(arguments.joined(separator: " "))")
+  }
+
+  func readSkillFile(name: String, provider: String?, path: String) async throws -> SkillFileResponse {
+    var arguments = ["skills", "read", name, path, "--scope", provider == nil ? "shared" : "provider", "--json"]
+    if let provider { arguments += ["--provider", provider] }
+    let result = try await run(arguments)
+    return try decode(SkillFileResponse.self, from: result.stdout, command: "reglet \(arguments.joined(separator: " "))")
+  }
+
+  func writeSkillFile(name: String, provider: String?, path: String, content: String) async throws {
+    var arguments = ["skills", "write", name, path, "--scope", provider == nil ? "shared" : "provider"]
+    if let provider { arguments += ["--provider", provider] }
+    _ = try await run(arguments, stdin: content)
+  }
+
+  func createSkill(name: String, provider: String?, content: String) async throws {
+    var arguments = ["skills", "create", name, "--scope", provider == nil ? "shared" : "provider"]
+    if let provider { arguments += ["--provider", provider] }
+    _ = try await run(arguments, stdin: content)
+  }
+
+  func deleteSkill(name: String, provider: String?) async throws {
+    var arguments = ["skills", "delete", name, "--scope", provider == nil ? "shared" : "provider"]
+    if let provider { arguments += ["--provider", provider] }
+    _ = try await run(arguments)
+  }
+
+  func renameSkill(name: String, newName: String, provider: String?) async throws {
+    var arguments = ["skills", "rename", name, newName, "--scope", provider == nil ? "shared" : "provider"]
+    if let provider { arguments += ["--provider", provider] }
+    _ = try await run(arguments)
+  }
+
+  func deleteSkillFile(name: String, provider: String?, path: String) async throws {
+    var arguments = ["skills", "delete-file", name, path, "--scope", provider == nil ? "shared" : "provider"]
+    if let provider { arguments += ["--provider", provider] }
+    _ = try await run(arguments)
+  }
+
+  func renameSkillFile(name: String, provider: String?, path: String, newPath: String) async throws {
+    var arguments = ["skills", "rename-file", name, path, newPath, "--scope", provider == nil ? "shared" : "provider"]
+    if let provider { arguments += ["--provider", provider] }
+    _ = try await run(arguments)
+  }
+
+  func mcpList() async throws -> McpServersResponse {
+    let arguments = ["mcp", "list", "--json"]
+    let result = try await run(arguments)
+    return try decode(McpServersResponse.self, from: result.stdout, command: "reglet mcp list --json")
+  }
+
+  func upsertMcp(name: String, definition: McpServerDefinition) async throws {
+    let data = try JSONEncoder().encode(definition)
+    guard let input = String(data: data, encoding: .utf8) else { throw RegletCommandError.invalidOutput(command: "mcp upsert", details: "could not encode server") }
+    _ = try await run(["mcp", "upsert", name], stdin: input)
+  }
+
+  func deleteMcp(name: String) async throws {
+    _ = try await run(["mcp", "delete", name])
+  }
+
+  func previewApply(content: ContentKind) async throws -> StructuredApplyPreview {
+    let arguments = ["apply-structured", "preview", "--content", content.rawValue]
+    let result = try await run(arguments)
+    return try decode(StructuredApplyPreview.self, from: result.stdout, command: "reglet \(arguments.joined(separator: " "))")
+  }
+
+  func applyPreview(_ preview: StructuredApplyPreview, content: ContentKind) async throws {
+    _ = try await run(["apply-structured", "apply", "--digest", preview.digest, "--content", content.rawValue])
+  }
+
   func adoptSkill(_ skill: UnmanagedSkill, scope: SkillAdoptionScope, overwrite: Bool = false) async throws -> SkillAdoptionResponse {
     var arguments = ["skills", "adopt", skill.provider, skill.name, "--scope", scope.rawValue]
     if overwrite {

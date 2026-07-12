@@ -14,6 +14,7 @@ final class SetupModel: ObservableObject {
   @Published var lastSyncResult: SyncRunResponse?
   @Published var lastSyncError: String?
   @Published var ruleDocuments: [RulesListResponse.Document] = []
+  @Published var mcpServers: [McpServersResponse.Entry] = []
   @Published var update: AppUpdate?
   @Published var updateMessage: String?
   @Published var isCheckingForUpdates = false
@@ -137,6 +138,7 @@ final class SetupModel: ObservableObject {
       self.skillsOverview = try await self.command.skillsList()
       self.status = try await self.command.status()
       self.ruleDocuments = try await self.command.rulesList().documents
+      self.mcpServers = try await self.command.mcpList().servers
       if self.selectedProviders.isEmpty {
         self.selectedProviders = Set(response.providers.filter(\.detected).map(\.id))
       }
@@ -281,6 +283,95 @@ final class SetupModel: ObservableObject {
       _ = try await self.command.applyRules()
       self.status = try await self.command.status()
       self.completionMessage = "Applied master rules to enrolled providers."
+    }
+  }
+
+  func loadSkillTree(name: String, provider: String?) async -> ManagedSkillTree? {
+    var tree: ManagedSkillTree?
+    await runWork { tree = try await self.command.skillTree(name: name, provider: provider).tree }
+    return tree
+  }
+
+  func loadSkillFile(name: String, provider: String?, path: String) async -> String? {
+    var content: String?
+    await runWork { content = try await self.command.readSkillFile(name: name, provider: provider, path: path).document.content }
+    return content
+  }
+
+  func saveSkillFile(name: String, provider: String?, path: String, content: String) async -> Bool {
+    await runWork {
+      try await self.command.writeSkillFile(name: name, provider: provider, path: path, content: content)
+      self.skillsOverview = try await self.command.skillsList()
+      self.completionMessage = "Saved \(path) to the master — not applied."
+    }
+  }
+
+  func createSkill(name: String, provider: String?, content: String) async -> Bool {
+    await runWork {
+      try await self.command.createSkill(name: name, provider: provider, content: content)
+      self.skillsOverview = try await self.command.skillsList()
+      self.completionMessage = "Created \(name) in the master — not applied."
+    }
+  }
+
+  func deleteSkill(name: String, provider: String?) async -> Bool {
+    await runWork {
+      try await self.command.deleteSkill(name: name, provider: provider)
+      self.skillsOverview = try await self.command.skillsList()
+      self.completionMessage = "Deleted \(name) from the master — not applied."
+    }
+  }
+
+  func renameSkill(name: String, newName: String, provider: String?) async -> Bool {
+    await runWork {
+      try await self.command.renameSkill(name: name, newName: newName, provider: provider)
+      self.skillsOverview = try await self.command.skillsList()
+      self.completionMessage = "Renamed \(name) to \(newName) in the master — not applied."
+    }
+  }
+
+  func deleteSkillFile(name: String, provider: String?, path: String) async -> Bool {
+    await runWork {
+      try await self.command.deleteSkillFile(name: name, provider: provider, path: path)
+      self.completionMessage = "Deleted \(path) from the master — not applied."
+    }
+  }
+
+  func renameSkillFile(name: String, provider: String?, path: String, newPath: String) async -> Bool {
+    await runWork {
+      try await self.command.renameSkillFile(name: name, provider: provider, path: path, newPath: newPath)
+      self.completionMessage = "Renamed \(path) to \(newPath) in the master — not applied."
+    }
+  }
+
+  func saveMcp(name: String, definition: McpServerDefinition) async -> Bool {
+    await runWork {
+      try await self.command.upsertMcp(name: name, definition: definition)
+      self.mcpServers = try await self.command.mcpList().servers
+      self.completionMessage = "Saved \(name) to the master — not applied."
+    }
+  }
+
+  func deleteMcp(name: String) async -> Bool {
+    await runWork {
+      try await self.command.deleteMcp(name: name)
+      self.mcpServers = try await self.command.mcpList().servers
+      self.completionMessage = "Deleted \(name) from the master — not applied."
+    }
+  }
+
+  func previewApply(content: ContentKind) async -> StructuredApplyPreview? {
+    var preview: StructuredApplyPreview?
+    await runWork { preview = try await self.command.previewApply(content: content) }
+    return preview
+  }
+
+  func applyPreview(_ preview: StructuredApplyPreview, content: ContentKind) async -> Bool {
+    await runWork {
+      try await self.command.applyPreview(preview, content: content)
+      self.status = try await self.command.status()
+      self.scan = try await self.command.scan()
+      self.completionMessage = "Applied saved \(content.label.lowercased()) to providers."
     }
   }
 
