@@ -1,88 +1,101 @@
 # Roadmap
 
-## v1 (OSS, in progress)
+## V1 decision
 
-- [x] Core: master dir (`~/.reglet/`), provider registry (Claude Code, Codex CLI, Cursor, Gemini CLI, Windsurf, OpenCode), converters for rules / skills / MCP configs
-- [x] Onboarding: machine scan, selective import, per-provider backups, restore/revert
-- [x] Drift detection + import/unenroll flow, injected agent-instruction header
-- [x] Background daemon (macOS launchd, Windows scheduled task) with auto-apply
-- [x] Self-hostable sync server (Bun + Hono + SQLite, single Docker container) with device pairing and versioned per-file snapshots (3-way merge, conflict copies)
-- [ ] Mac-friendly installer + onboarding UI: signed `.pkg`/`.dmg`, first-run setup app, provider scan/import checklist, file-write preview, backup confirmation, and explicit opt-in toggles for daemon and sync
-  - [x] CLI setup contract for native UI: `reglet scan --json` and `reglet plan --json`
-  - [x] Native SwiftUI setup app shell using Reglet CLI/core as the engine
-  - [x] First-run flow: welcome/safety, provider selection, content selection, exact file preview, backup/apply confirmation, status/restore
-  - [x] Homebrew tap distribution for CLI alpha installs
-  - [ ] Signed/notarized `.pkg` or `.dmg` distribution (blocked until Apple Developer ID exists)
-  - [ ] Real Mac smoke pass across fresh machine, existing provider configs, backup inspection, restore, drift detection, uninstall, and explicit daemon/sync opt-in
-- [x] Final documentation pass mirroring BranchForge's README/docs/assets structure with Reglet-specific banner and lifecycle SVGs
+Reglet already has credible local-control-plane breadth: six provider adapters, a versionable master directory, safe first writes and backups, drift handling, scoped skill adoption, a self-hosted sync service, a scriptable CLI, and a native macOS manager.
 
-## App-first roadmap
+**It is not ready for a public V1 launch yet.** The remaining work is not broad feature expansion. It is a bounded release program that makes Reglet's safety promise true under failure, remote sync, and day-to-day manager use.
 
-The macOS app will become Reglet's primary product surface. The CLI remains the stable automation, scripting, and CI engine, while routine setup, configuration, sync, editing, recovery, and provider-specific skill decisions become available natively in the app.
+The V1 promise is:
 
-### Next milestone: Persistent Mac Manager
+> A local-first macOS manager for AI-agent configuration where people can inspect scope, make a deliberate change, review its exact effects, apply it safely, and recover without terminal memory.
 
-- [x] Reframe `Reglet Setup.app` as the persistent Reglet app, with first-run onboarding as one entry point rather than the app's sole purpose.
-- [x] Add a native sidebar for Providers, Rules, Skills, MCP, Sync, Activity/Drift, and Recovery.
-- [x] Keep business rules in stable, structured CLI/core operations rather than only in SwiftUI.
-- [x] Extend the CLI JSON contract for app screens to expose current configuration, managed and unmanaged content, sync state, drift, and actionable errors.
-- [x] Add Activity/Drift resolution, manual token sync, skills/MCP drift import, account/device pairing, and a native master-rules editor.
-- [ ] Complete and record the real-machine smoke matrix before broader Mac user testing. Initial partial pass: [`docs/qa/2026-07-11-macos-smoke-matrix.md`](docs/qa/2026-07-11-macos-smoke-matrix.md).
+The CLI remains the stable automation and CI interface. The app is the primary surface for routine management. Daemon activity, network access, and provider writes must remain explicit, visible, and reversible.
 
-#### Skills
+See the evidence and launch risks in [the V1 launch-readiness audit](docs/qa/2026-07-12-v1-launch-readiness-audit.md).
 
-- Preserve the master layout: shared skills at `~/.reglet/skills/<skill>/` and provider-scoped skills at `~/.reglet/skills/<provider>/<skill>/`. Provider-local skills remain unmanaged unless explicitly adopted.
-- When the app discovers an unmanaged provider skill, offer three per-skill choices:
-  1. **Share with all providers** — copy it into the shared master.
-  2. **Sync only for this provider** — copy it into that provider's master namespace.
-  3. **Keep local only** — leave it untouched and exclude it from sync.
-- Add structured CLI operations to list unmanaged skills and adopt one with `shared` or `provider` scope. The app refreshes status after each operation.
-- Before adoption, show the source path, destination, overwrite or conflict state, and affected providers.
+## What is already complete
 
-#### Native configuration management
+- [x] Local master directory (`~/.reglet/`) with rule, skill, provider-scoped skill, MCP, config, and state layouts.
+- [x] Provider adapters for Claude Code, Codex CLI, Cursor, Gemini CLI, Windsurf, and OpenCode.
+- [x] Selective onboarding, first-write backups, manifest tracking, drift detection/import, restore, and revert.
+- [x] Shared and provider-scoped skill discovery, explicit adoption, override precedence, and cleanup.
+- [x] Canonical MCP editing and provider-specific merging, including redacted structured previews.
+- [x] CLI automation for scan, plan, apply, structured preview, enrollment, status, sync, daemon, and recovery.
+- [x] Self-hosted sync server with device pairing, versioned files, text merge/conflict copies, and protocol compatibility checks.
+- [x] Persistent native macOS manager with Providers, Rules, Skills, MCP, Sync, Activity & Drift, Recovery, and first-run onboarding.
+- [x] Current automated baseline: `bun test` (80 pass / 294 assertions), typecheck, and lint pass after installing pinned dependencies.
 
-- Provide native editors for master rules, skill metadata and files, and MCP definitions.
-- Validate skill directory structure, MCP schema, provider support, and name conflicts before applying edits.
-- Preview every provider write before apply, including affected paths and backup behavior.
-- Surface provider-specific overrides clearly when a scoped skill shadows a shared skill.
-- Use familiar document-style editing with explicit Save and Apply actions; never silently apply edits to provider outputs.
+## Public V1 — required launch gates
 
-#### Onboarding reconciliation follow-up
+All gates below must be green before Reglet is described or distributed as a public macOS V1. A beta label does not waive a safety or distribution failure.
 
-- [x] Show the projected master skill inventory before onboarding applies, including provider scope, shared-skill shadows, and conflict/overwrite state.
-- [x] Compare discovered provider rule files in the preview with source path, provider, matching/different status, and a bounded content preview.
-- [x] Explain how differing provider rules will be preserved as separate master documents and composed into generated outputs before the user confirms onboarding.
-- Rebuild this preview against the current structured skills and rules contracts; do not revive the superseded selective-import implementation from PR #11.
+### 1. Trust boundary and data integrity
 
-#### Sync, drift, and recovery
+- [ ] **Make sync paths canonical and confined.** Reject traversal, absolute paths, aliases, and every path outside the declared sync allowlist before reading, writing, deleting, or creating a conflict copy.
+- [ ] **Make deletion sync correct and lossless.** Propagate local tombstones, preserve an unsynced local edit when a remote deletion arrives, and surface delete-vs-edit as a resolvable conflict rather than silently removing data.
+- [ ] **Add token and device lifecycle controls.** Rotation must revoke the old single-user token; device tokens need list/revoke semantics; reconnect and disconnect must be explicit and testable.
+- [ ] **Protect MCP secrets by design.** Do not treat raw `env` values as ordinary syncable configuration. Adopt a clear V1 policy: environment-variable references or another device-local secret mechanism; owner-only permissions for sensitive local state; redaction in previews/logs; and no public Cloud sync of raw credentials until a protected model exists.
+- [ ] **Make writes and recovery interruption-safe.** Use atomic replace/journaled manifest updates, detect provider drift before an overwrite, preserve a recoverable version of the changed output, and make directory writes just as safe as file writes.
+- [ ] **Add regression coverage for every release-blocking failure.** Include hostile sync paths, local/remote deletion conflicts, token rotation/revocation, interrupted writes, drifted overwrite/recovery, and secret redaction/permissions.
 
-- Add self-hosted sync setup for server URL, token, device name, connection testing, manual sync, last result, and failure details.
-- Keep background sync and the daemon as separate opt-ins, both disabled by default.
-- Add an activity and drift view for managed output changes, sync conflicts, pending actions, and resolution paths.
-- Add restore and revert controls plus direct access to the backup location.
+### 2. Complete the macOS control loop
 
-#### Compatibility and validation
+The app does not need a new control plane. It needs one consistent, fast, native loop for the operations it already claims to manage.
 
-- Keep existing CLI commands working and add app-oriented structured commands instead of replacing CLI behavior.
-- Keep existing shared-skill directories backward compatible. Never auto-import a provider-local skill; adoption must be explicit and reversible.
-- Add core and CLI tests for skill discovery, each adoption choice, override precedence, local-skill preservation, sync propagation, and apply cleanup.
-- Add UI tests for first-run navigation, adoption dialogs, write previews, editing validation, sync errors, drift state, and recovery flows.
-- Run macOS smoke tests across fresh setup, existing multi-provider configurations, provider-local skills, two-device provider-scoped sync, conflicts, and recovery.
-- Verify keyboard navigation, VoiceOver labels, reduced motion, contrast, and non-color status cues.
+- [ ] **Use one digest-backed Review & Apply flow everywhere.** It must scope providers and Rules/Skills/MCP, show validation, exact diffs, backup behavior, and stale-preview protection. Route Rules, drift re-apply, sync-applied provider changes, and every app-originated apply through it.
+- [ ] **Stage sync before provider writes.** Manual sync may update a local change set, but remote master changes must be reviewed before they update provider outputs. Background sync/daemon behavior stays separately opted in and visible.
+- [ ] **Expose lightweight provider/content lifecycle controls.** Show what is managed for every detected provider; allow scoped enrollment and **Stop Managing…** without rerunning onboarding or silently deleting provider content.
+- [ ] **Finish drift and recovery decisions.** Each drift item needs Import, Review & Re-apply, and Stop Managing. Restore/revert must preview affected paths and backup sources, require confirmation, and offer Open Backups.
+- [ ] **Close editor safety gaps.** Never discard unsaved Rules edits on navigation; confirm destructive MCP/skill mutations; validate MCP definitions and secret references before save.
+- [ ] **Make the status legible and actionable.** Add an operations summary and persistent result/error handoff: last reviewed/apply/sync outcome, pending drift/conflicts, next safe action, retry, and copyable diagnostics.
+- [ ] **Add power-user navigation without feature sprawl.** Search/filter large skill and MCP lists, standard keyboard shortcuts for review/apply/save, and a consolidated manager snapshot so refresh does not serially spawn several CLI commands.
+- [ ] **Honor privacy defaults.** Disable the automatic startup update request by default or make it an explicit, disclosed setting. Keep the manual “Check for Updates” action.
 
-### Future milestone: Full Control Plane
+### 3. Release engineering and certification
 
-- Add native multi-device sync conflict resolution with diff and merge choices.
-- Add full provider inventory and lifecycle management, including enrollment, permissions, support changes, and migration assistance.
-- Add skill-pack browsing, grouping, sharing, import/export, and provider compatibility guidance.
-- Add native history and audit views for applies, syncs, backups, restores, and drift events.
-- Add a project-scope view alongside global configuration with the same preview-and-apply model.
+- [ ] **Ship a trusted Mac artifact.** Acquire Developer ID credentials; sign, notarize, staple, and verify the exact public `.pkg`/app archive. Fail public-release automation when those credentials or checks are absent.
+- [ ] **Remove the quarantine bypass before public release.** The Homebrew cask must consume the signed/notarized artifact rather than stripping Gatekeeper quarantine.
+- [ ] **Test the native app in CI.** Run `swift test` alongside the existing Bun suite; add focused UI tests for Review & Apply, lifecycle controls, sync disconnect/conflict states, drift/recovery, unsaved edits, and error states.
+- [ ] **Complete the real-machine matrix.** On a fresh macOS user or VM, test installation, onboarding with existing Claude/Codex configurations, preview/apply, backups, drift, recovery, uninstall, and verification that no daemon or sync is left behind.
+- [ ] **Certify accessibility.** Exercise keyboard-only navigation, VoiceOver, Increase Contrast, Reduce Transparency, Reduce Motion, text scaling, and non-color status cues on every native surface and destructive flow.
+- [ ] **Publish operating commitments.** Add concise privacy/network behavior, security reporting, support/feedback, release notes, checksums/SBOM/provenance, known limitations, and recovery documentation. Pin release-action dependencies to immutable revisions.
+- [ ] **Run a release rehearsal.** From the shipped artifact—not a checkout—complete install → scan → review/apply → drift resolution → recovery → uninstall and record the evidence in the smoke matrix.
 
-## v2 and beyond
+## V1 release criteria
 
-- **SaaS**: hosted sync at a small monthly subscription for casual users — same server codebase on Postgres, Stripe billing, web dashboard (React/Tailwind) for account, devices, and browsing synced content. Self-host stays free and first-class.
-- **Team / shared skill packs**: publish and subscribe to shared rule/skill collections.
-- **Subagents** as a content type (`.claude/agents/`, `.codex/agents/`, …).
-- **More providers**: the registry is one-file-per-provider; port remaining adapters from ruler's matrix (Aider, Goose, Zed, Kiro, Amazon Q, …).
-- **Optional end-to-end encryption** of synced content.
-- **Project-scope mode** interoperating with ruler's `.ruler/` convention.
+Reglet may launch publicly only when all of the following are demonstrated in a release candidate:
+
+1. No remote sync input can escape the master directory or silently destroy a local edit.
+2. No raw MCP credential is unintentionally exposed through normal local storage, previews, logs, or public sync.
+3. Every app-originated provider write is reviewable, digest-bound, recoverable, and visible in the result state.
+4. A user can manage or stop managing a provider/content scope, recover a mistake, and disconnect sync without using the terminal.
+5. The app's network behavior matches its local-first copy and is controllable by the user.
+6. The exact distributed Mac artifact is signed, notarized, installed on a clean environment, and passes recovery/uninstall/accessibility testing.
+7. The public support, security, privacy, and release-integrity path is documented.
+
+Until then, the only acceptable external program is a tightly controlled, **CLI-first local-only technical alpha**: scan → structured preview → explicit apply → status → revert, with daemon and sync disabled by default and the known limitations disclosed. It is not the public Mac V1.
+
+## Deferred until after V1
+
+These are valuable, but they do not belong in the public-launch critical path.
+
+### Post-V1 control-plane depth
+
+- Native sync-conflict inspection and merge choices.
+- Full provider inventory/lifecycle management, permissions, support-change notices, and migrations.
+- Native history/audit timeline beyond V1 operation receipts and recovery context.
+- Project-scope management alongside global configuration.
+- Advanced command palette, bulk workflows, and richer multi-window editing after launch telemetry identifies the highest-frequency tasks.
+
+### Product expansion
+
+- Reglet Cloud public availability, billing, and a web account dashboard. Cloud remains private beta until the trust and operating gates above are complete.
+- Team/shared skill packs, browsing, publishing, grouping, and import/export.
+- Subagents as a managed content type.
+- More providers (Aider, Goose, Zed, Kiro, Amazon Q, and others).
+- Optional end-to-end encryption for synced content.
+
+## Historical foundation milestones
+
+The original local engine, onboarding, sync server, native-manager shell, documentation, and Homebrew distribution work are complete as listed above. The next milestone is deliberately not another feature tranche: it is the **Public V1 release program** defined by the launch gates in this document.
