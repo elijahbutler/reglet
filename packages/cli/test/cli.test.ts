@@ -344,21 +344,36 @@ describe('reglet CLI', () => {
 
     const fakeHome = await mkdtemp(path.join(tmpdir(), 'reglet-cli-runner-home-'));
     currentExtraHomes.push(fakeHome);
-    const fakeCodex = path.join(fakeHome, '.local', 'bin', 'codex');
+    const fakeCodex = path.join(fakeHome, '.local', 'bin', process.platform === 'win32' ? 'codex.cmd' : 'codex');
     await mkdir(path.dirname(fakeCodex), { recursive: true });
-    await writeFile(
-      fakeCodex,
-      [
-        '#!/bin/sh',
-        'if [ "$1" = "--version" ]; then',
-        '  echo "codex 0.0.0"',
-        '  exit 0',
-        'fi',
-        'echo "Merged from fake codex."',
-        '',
-      ].join('\n'),
-    );
-    await chmod(fakeCodex, 0o755);
+    if (process.platform === 'win32') {
+      await writeFile(
+        fakeCodex,
+        [
+          '@echo off',
+          'if "%1"=="--version" (',
+          '  echo codex 0.0.0',
+          '  exit /b 0',
+          ')',
+          'echo Merged from fake codex.',
+          '',
+        ].join('\r\n'),
+      );
+    } else {
+      await writeFile(
+        fakeCodex,
+        [
+          '#!/bin/sh',
+          'if [ "$1" = "--version" ]; then',
+          '  echo "codex 0.0.0"',
+          '  exit 0',
+          'fi',
+          'echo "Merged from fake codex."',
+          '',
+        ].join('\n'),
+      );
+      await chmod(fakeCodex, 0o755);
+    }
 
     const result = await runCli(
       ['rules', 'merge-draft', '--provider', 'claude,codex', '--json'],
@@ -366,6 +381,7 @@ describe('reglet CLI', () => {
       providerHome,
       {
         HOME: fakeHome,
+        USERPROFILE: fakeHome,
         PATH: [path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter),
       },
     );
