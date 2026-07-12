@@ -3,6 +3,7 @@ dist/
 .build/
 *.tsbuildinfo
 .superpowers/
+.branchforge/
 .DS_Store
 *.sqlite
 *.sqlite-shm
