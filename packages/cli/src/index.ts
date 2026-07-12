@@ -1047,27 +1047,34 @@ async function resolveCommand(command: string): Promise<string | null> {
 
 function fallbackCommandPaths(command: string): string[] {
   const home = process.env.HOME;
+  const userProfile = process.env.USERPROFILE;
+  const userDirs = Array.from(new Set([home, userProfile].filter((dir): dir is string => dir !== undefined)));
   const dirs = [
     ...(process.env.PATH?.split(path.delimiter) ?? []),
     '/opt/homebrew/bin',
     '/usr/local/bin',
     '/usr/bin',
     '/bin',
-    ...(home === undefined ? [] : [
-      path.join(home, '.local', 'bin'),
-      path.join(home, '.bun', 'bin'),
-      path.join(home, '.npm-global', 'bin'),
-      path.join(home, '.deno', 'bin'),
-      path.join(home, '.cargo', 'bin'),
-      path.join(home, '.codex', 'packages', 'standalone', 'current', 'bin'),
+    ...userDirs.flatMap((dir) => [
+      path.join(dir, '.local', 'bin'),
+      path.join(dir, '.bun', 'bin'),
+      path.join(dir, '.npm-global', 'bin'),
+      path.join(dir, '.deno', 'bin'),
+      path.join(dir, '.cargo', 'bin'),
+      path.join(dir, '.codex', 'packages', 'standalone', 'current', 'bin'),
     ]),
   ];
-  return Array.from(new Set(dirs.filter((dir) => dir.length > 0).map((dir) => path.join(dir, command))));
+  return Array.from(new Set(dirs.filter((dir) => dir.length > 0).flatMap((dir) => commandPathCandidates(dir, command))));
+}
+
+function commandPathCandidates(dir: string, command: string): string[] {
+  const extensions = process.platform === 'win32' ? ['', '.exe', '.cmd', '.bat'] : [''];
+  return extensions.map((extension) => path.join(dir, `${command}${extension}`));
 }
 
 async function executableExists(filePath: string): Promise<boolean> {
   try {
-    await access(filePath, 0x01);
+    await access(filePath);
     return true;
   } catch {
     return false;
@@ -1076,8 +1083,14 @@ async function executableExists(filePath: string): Promise<boolean> {
 
 async function commandExists(command: string): Promise<boolean> {
   try {
-    const args = path.isAbsolute(command) ? ['--version'] : [command, '--version'];
-    await execFileAsync(path.isAbsolute(command) ? command : '/usr/bin/env', args, { timeout: 5_000, maxBuffer: 64 * 1024 });
+    const useShellCommand = path.isAbsolute(command) || process.platform === 'win32';
+    const executable = useShellCommand ? command : '/usr/bin/env';
+    const args = useShellCommand ? ['--version'] : [command, '--version'];
+    await execFileAsync(executable, args, {
+      timeout: 5_000,
+      maxBuffer: 64 * 1024,
+      shell: process.platform === 'win32',
+    });
     return true;
   } catch {
     return false;
