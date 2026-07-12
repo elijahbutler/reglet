@@ -6,10 +6,25 @@ export interface CreateAppOptions {
   dbPath?: string;
   singleUserToken?: string;
   now?: () => Date;
+  bodyLimitBytes?: number;
+  rateLimit?: RateLimitOptions | false;
 }
 
 interface JsonResponse {
   [key: string]: unknown;
+}
+
+export interface RateLimitOptions {
+  windowMs?: number;
+  max?: number;
+  key?: (request: Request) => string;
+}
+
+interface ErrorBody extends JsonResponse {
+  error: {
+    code: string;
+    message: string;
+  };
 }
 
 interface RegisterBody {
@@ -43,10 +58,21 @@ interface Session {
 const singleUserEmail = 'single-user@reglet.local';
 const singleUserPassword = 'single-user';
 const appDatabases = new WeakMap<Hono, Database>();
+const serviceVersion = '0.1.0';
+const protocolVersion = 1;
+const defaultBodyLimitBytes = 256 * 1024;
+const defaultRateLimitWindowMs = 60 * 1000;
+const defaultRateLimitMax = 60;
+const minimumTokenLength = 20;
 
 export function createApp(options: CreateAppOptions = {}): Hono {
+  if (options.singleUserToken !== undefined) {
+    assertStrongToken(options.singleUserToken);
+  }
   const db = new Database(options.dbPath ?? ':memory:');
   const now = options.now ?? (() => new Date());
+  const bodyLimitBytes = options.bodyLimitBytes ?? defaultBodyLimitBytes;
+  const rateLimiter = createRateLimiter(options.rateLimit, now);
   initializeSchema(db);
   if (options.singleUserToken !== undefined) {
     ensureSingleUser(db, options.singleUserToken);
@@ -75,12 +101,34 @@ export function createApp(options: CreateAppOptions = {}): Hono {
 `),
   );
 
-  app.get('/healthz', (c) => c.json({ ok: true }));
+  app.get('/healthz', (c) =>
+    c.json({
+      ok: true,
+      service: { name: 'reglet-sync-server', version: serviceVersion },
+      protocol: { current: protocolVersion, supported: [protocolVersion] },
+    }),
+  );
+
+  app.get('/v1/compatibility', (c) =>
+    c.json({
+      service: { name: 'reglet-sync-server', version: serviceVersion },
+      protocol: { current: protocolVersion, supported: [protocolVersion] },
+    }),
+  );
 
   app.post('/v1/auth/register', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as RegisterBody;
+    const limited = rateLimiter.check(c.req.raw, 'auth');
+    if (!limited.ok) {
+      return c.json(errorBody('rate_limited', 'Too many requests'), 429);
+    }
+
+    const parsed = await readJsonBody(c.req.raw, bodyLimitBytes);
+    if (!parsed.ok) {
+      return c.json(errorBody(parsed.code, parsed.message), parsed.status);
+    }
+    const body = parsed.value as RegisterBody;
     if (typeof body.email !== 'string' || typeof body.password !== 'string') {
-      return c.json({ error: 'email and password are required' }, 400);
+      return c.json(errorBody('invalid_request', 'email and password are required'), 400);
     }
 
     try {
@@ -90,32 +138,46 @@ export function createApp(options: CreateAppOptions = {}): Hono {
       return c.json(createSession(db, row.id, now));
     } catch (error) {
       if (isSqliteConstraint(error)) {
-        return c.json({ error: 'user already exists' }, 409);
+        return c.json(errorBody('user_exists', 'user already exists'), 409);
       }
       throw error;
     }
   });
 
   app.post('/v1/auth/login', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as LoginBody;
+    const limited = rateLimiter.check(c.req.raw, 'auth');
+    if (!limited.ok) {
+      return c.json(errorBody('rate_limited', 'Too many requests'), 429);
+    }
+
+    const parsed = await readJsonBody(c.req.raw, bodyLimitBytes);
+    if (!parsed.ok) {
+      return c.json(errorBody(parsed.code, parsed.message), parsed.status);
+    }
+    const body = parsed.value as LoginBody;
     if (typeof body.email !== 'string' || typeof body.password !== 'string') {
-      return c.json({ error: 'email and password are required' }, 400);
+      return c.json(errorBody('invalid_request', 'email and password are required'), 400);
     }
 
     const user = db.query('select id, pass_hash from users where email = ?').get(body.email) as
       | { id: number; pass_hash: string }
       | null;
     if (user === null || !verifySecret(body.password, user.pass_hash)) {
-      return c.json({ error: 'invalid credentials' }, 401);
+      return c.json(errorBody('invalid_credentials', 'invalid credentials'), 401);
     }
 
     return c.json(createSession(db, user.id, now));
   });
 
   app.post('/v1/pair/start', (c) => {
+    const limited = rateLimiter.check(c.req.raw, 'pair');
+    if (!limited.ok) {
+      return c.json(errorBody('rate_limited', 'Too many requests'), 429);
+    }
+
     const session = requireSession(db, c.req.header('authorization'), now);
     if (session === null) {
-      return c.json({ error: 'unauthorized' }, 401);
+      return c.json(errorBody('unauthorized', 'unauthorized'), 401);
     }
 
     const code = randomCode();
@@ -128,16 +190,25 @@ export function createApp(options: CreateAppOptions = {}): Hono {
   });
 
   app.post('/v1/pair/claim', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as PairClaimBody;
+    const limited = rateLimiter.check(c.req.raw, 'pair');
+    if (!limited.ok) {
+      return c.json(errorBody('rate_limited', 'Too many requests'), 429);
+    }
+
+    const parsed = await readJsonBody(c.req.raw, bodyLimitBytes);
+    if (!parsed.ok) {
+      return c.json(errorBody(parsed.code, parsed.message), parsed.status);
+    }
+    const body = parsed.value as PairClaimBody;
     if (typeof body.code !== 'string' || typeof body.deviceName !== 'string') {
-      return c.json({ error: 'code and deviceName are required' }, 400);
+      return c.json(errorBody('invalid_request', 'code and deviceName are required'), 400);
     }
 
     const pairCode = db.query('select user_id, expires_at from pair_codes where code = ?').get(body.code) as
       | { user_id: number; expires_at: number }
       | null;
     if (pairCode === null || pairCode.expires_at < now().getTime()) {
-      return c.json({ error: 'invalid pair code' }, 404);
+      return c.json(errorBody('invalid_pair_code', 'invalid pair code'), 404);
     }
     db.query('delete from pair_codes where code = ?').run(body.code);
 
@@ -154,7 +225,7 @@ export function createApp(options: CreateAppOptions = {}): Hono {
   app.get('/v1/changes', (c) => {
     const device = requireDevice(db, c.req.header('authorization'), options.singleUserToken);
     if (device === null) {
-      return c.json({ error: 'unauthorized' }, 401);
+      return c.json(errorBody('unauthorized', 'unauthorized'), 401);
     }
 
     const since = Number(c.req.query('since') ?? '0');
@@ -185,15 +256,19 @@ export function createApp(options: CreateAppOptions = {}): Hono {
   app.get('/v1/files/*', (c) => {
     const device = requireDevice(db, c.req.header('authorization'), options.singleUserToken);
     if (device === null) {
-      return c.json({ error: 'unauthorized' }, 401);
+      return c.json(errorBody('unauthorized', 'unauthorized'), 401);
     }
 
-    const filePath = c.req.path.replace('/v1/files/', '');
+    const filePath = syncFilePath(c.req.raw);
+    if (filePath === null) {
+      return c.json(errorBody('invalid_path', 'path is not in the supported sync scope'), 400);
+    }
+
     const file = db
       .query('select revision, hash, content, deleted from files where user_id = ? and path = ?')
       .get(device.userId, filePath) as { revision: number; hash: string; content: Uint8Array; deleted: number } | null;
     if (file === null || file.deleted === 1) {
-      return c.json({ error: 'not found' }, 404);
+      return c.json(errorBody('not_found', 'not found'), 404);
     }
     return c.json({
       revision: file.revision,
@@ -205,15 +280,26 @@ export function createApp(options: CreateAppOptions = {}): Hono {
   app.put('/v1/files/*', async (c) => {
     const device = requireDevice(db, c.req.header('authorization'), options.singleUserToken);
     if (device === null) {
-      return c.json({ error: 'unauthorized' }, 401);
+      return c.json(errorBody('unauthorized', 'unauthorized'), 401);
     }
 
-    const body = (await c.req.json().catch(() => ({}))) as PutFileBody;
-    if (typeof body.baseRevision !== 'number' || typeof body.contentBase64 !== 'string') {
-      return c.json({ error: 'baseRevision and contentBase64 are required' }, 400);
+    const filePath = syncFilePath(c.req.raw);
+    if (filePath === null) {
+      return c.json(errorBody('invalid_path', 'path is not in the supported sync scope'), 400);
     }
 
-    const filePath = c.req.path.replace('/v1/files/', '');
+    const parsed = await readJsonBody(c.req.raw, bodyLimitBytes);
+    if (!parsed.ok) {
+      return c.json(errorBody(parsed.code, parsed.message), parsed.status);
+    }
+    const body = parsed.value as PutFileBody;
+    if (!isValidRevision(body.baseRevision) || typeof body.contentBase64 !== 'string') {
+      return c.json(errorBody('invalid_request', 'baseRevision and contentBase64 are required'), 400);
+    }
+    if (!isStrictBase64(body.contentBase64)) {
+      return c.json(errorBody('invalid_base64', 'contentBase64 must be strict valid base64'), 400);
+    }
+
     const head = getFileHead(db, device.userId, filePath);
     if ((head?.revision ?? 0) !== body.baseRevision) {
       return conflict(c, head);
@@ -231,15 +317,23 @@ export function createApp(options: CreateAppOptions = {}): Hono {
   app.delete('/v1/files/*', async (c) => {
     const device = requireDevice(db, c.req.header('authorization'), options.singleUserToken);
     if (device === null) {
-      return c.json({ error: 'unauthorized' }, 401);
+      return c.json(errorBody('unauthorized', 'unauthorized'), 401);
     }
 
-    const body = (await c.req.json().catch(() => ({}))) as DeleteFileBody;
-    if (typeof body.baseRevision !== 'number') {
-      return c.json({ error: 'baseRevision is required' }, 400);
+    const filePath = syncFilePath(c.req.raw);
+    if (filePath === null) {
+      return c.json(errorBody('invalid_path', 'path is not in the supported sync scope'), 400);
     }
 
-    const filePath = c.req.path.replace('/v1/files/', '');
+    const parsed = await readJsonBody(c.req.raw, bodyLimitBytes);
+    if (!parsed.ok) {
+      return c.json(errorBody(parsed.code, parsed.message), parsed.status);
+    }
+    const body = parsed.value as DeleteFileBody;
+    if (!isValidRevision(body.baseRevision)) {
+      return c.json(errorBody('invalid_request', 'baseRevision is required'), 400);
+    }
+
     const head = getFileHead(db, device.userId, filePath);
     if ((head?.revision ?? 0) !== body.baseRevision) {
       return conflict(c, head);
@@ -252,6 +346,8 @@ export function createApp(options: CreateAppOptions = {}): Hono {
     return c.json({ revision });
   });
 
+  app.notFound((c) => c.json(errorBody('not_found', 'not found'), 404));
+
   return app;
 }
 
@@ -261,6 +357,20 @@ export function closeApp(app: Hono): void {
 }
 
 function initializeSchema(db: Database): void {
+  db.exec(`
+create table if not exists schema_migrations (
+  version integer primary key,
+  applied_at text not null
+);
+`);
+  const current = db.query('select version from schema_migrations where version = 1').get() as
+    | { version: number }
+    | null;
+  if (current !== null) {
+    return;
+  }
+
+  const migrate = db.transaction(() => {
   db.exec(`
 create table if not exists users (
   id integer primary key autoincrement,
@@ -307,6 +417,9 @@ create table if not exists pair_codes (
   expires_at integer not null
 );
 `);
+    db.query('insert into schema_migrations (version, applied_at) values (?, ?)').run(1, new Date().toISOString());
+  });
+  migrate();
 }
 
 function ensureSingleUser(db: Database, token: string): void {
@@ -386,6 +499,7 @@ function getFileHead(
 function conflict(c: { json: (value: JsonResponse, status?: number) => Response }, head: ReturnType<typeof getFileHead>): Response {
   return c.json(
     {
+      ...errorBody('conflict', 'file revision conflict'),
       headRevision: head?.revision ?? 0,
       contentBase64: head === null ? '' : Buffer.from(head.content).toString('base64'),
     },
@@ -485,4 +599,198 @@ function bearerToken(header: string | undefined): string | null {
 
 function isSqliteConstraint(error: unknown): boolean {
   return error instanceof Error && error.message.includes('UNIQUE constraint failed');
+}
+
+function errorBody(code: string, message: string): ErrorBody {
+  return { error: { code, message } };
+}
+
+type JsonParseResult =
+  | { ok: true; value: unknown }
+  | { ok: false; status: 400 | 413; code: string; message: string };
+
+async function readJsonBody(request: Request, limitBytes: number): Promise<JsonParseResult> {
+  const contentLength = request.headers.get('content-length');
+  if (contentLength !== null) {
+    const parsedLength = Number(contentLength);
+    if (Number.isFinite(parsedLength) && parsedLength > limitBytes) {
+      return { ok: false, status: 413, code: 'body_too_large', message: 'request body is too large' };
+    }
+  }
+
+  const body = await readLimitedText(request, limitBytes);
+  if (!body.ok) {
+    return { ok: false, status: 413, code: 'body_too_large', message: 'request body is too large' };
+  }
+
+  try {
+    return { ok: true, value: JSON.parse(body.text) as unknown };
+  } catch {
+    return { ok: false, status: 400, code: 'invalid_json', message: 'request body must be valid JSON' };
+  }
+}
+
+async function readLimitedText(request: Request, limitBytes: number): Promise<{ ok: true; text: string } | { ok: false }> {
+  if (request.body === null) {
+    return { ok: true, text: '' };
+  }
+
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = '';
+  for (;;) {
+    const chunk = await reader.read();
+    if (chunk.done) {
+      break;
+    }
+    bytes += chunk.value.byteLength;
+    if (bytes > limitBytes) {
+      await reader.cancel();
+      return { ok: false };
+    }
+    text += decoder.decode(chunk.value, { stream: true });
+  }
+  text += decoder.decode();
+  return { ok: true, text };
+}
+
+function assertStrongToken(token: string): void {
+  if (!isStrongToken(token)) {
+    throw new Error(`REGLET_TOKEN must be at least ${minimumTokenLength} non-whitespace characters`);
+  }
+}
+
+function isStrongToken(token: string): boolean {
+  return token.trim() === token && token.length >= minimumTokenLength && new Set(token).size >= 8;
+}
+
+function isValidRevision(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isStrictBase64(value: string): boolean {
+  if (value.length === 0) {
+    return true;
+  }
+  if (value.length % 4 !== 0) {
+    return false;
+  }
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+    return false;
+  }
+  return Buffer.from(value, 'base64').toString('base64') === value;
+}
+
+function syncFilePath(request: Request): string | null {
+  const rawPath = new URL(request.url).pathname;
+  const prefix = '/v1/files/';
+  if (!rawPath.startsWith(prefix)) {
+    return null;
+  }
+
+  const rawFilePath = rawPath.slice(prefix.length);
+  if (rawFilePath.length === 0 || containsEncodedSlash(rawFilePath)) {
+    return null;
+  }
+
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(rawFilePath);
+  } catch {
+    return null;
+  }
+  if (
+    decoded !== rawFilePath &&
+    (containsEncodedTraversal(rawFilePath) || containsEncodedTraversal(decoded) || containsEncodedSlash(decoded))
+  ) {
+    return null;
+  }
+  return isAllowedSyncPath(decoded) ? decoded : null;
+}
+
+function containsEncodedSlash(rawPath: string): boolean {
+  return /%2f|%5c/i.test(rawPath);
+}
+
+function containsEncodedTraversal(rawPath: string): boolean {
+  return /%2e/i.test(rawPath) && decodedSegments(rawPath).includes('..');
+}
+
+function decodedSegments(rawPath: string): string[] {
+  try {
+    return decodeURIComponent(rawPath).split('/');
+  } catch {
+    return [];
+  }
+}
+
+function isAllowedSyncPath(filePath: string): boolean {
+  if (
+    filePath.length === 0 ||
+    filePath.startsWith('/') ||
+    filePath.startsWith('~') ||
+    filePath.includes('\\') ||
+    filePath.includes('\0')
+  ) {
+    return false;
+  }
+  const segments = filePath.split('/');
+  if (segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')) {
+    return false;
+  }
+  if (segments.includes('.state') || segments.some((segment) => isBackupOrConflictArtifact(segment))) {
+    return false;
+  }
+  return (
+    filePath === 'reglet.toml' ||
+    filePath === 'mcp/servers.json' ||
+    (filePath.startsWith('rules/') && segments.length >= 2) ||
+    (filePath.startsWith('skills/') && segments.length >= 2)
+  );
+}
+
+function isBackupOrConflictArtifact(segment: string): boolean {
+  return (
+    segment.endsWith('~') ||
+    segment.endsWith('.bak') ||
+    segment.endsWith('.backup') ||
+    segment.includes('.conflict-')
+  );
+}
+
+interface RateLimiter {
+  check: (request: Request, bucket: 'auth' | 'pair') => { ok: true } | { ok: false };
+}
+
+function createRateLimiter(options: RateLimitOptions | false | undefined, now: () => Date): RateLimiter {
+  if (options === false) {
+    return { check: () => ({ ok: true }) };
+  }
+
+  const windowMs = options?.windowMs ?? defaultRateLimitWindowMs;
+  const max = options?.max ?? defaultRateLimitMax;
+  const keyFor = options?.key ?? defaultRateLimitKey;
+  const buckets = new Map<string, { resetAt: number; count: number }>();
+
+  return {
+    check(request: Request, bucket: 'auth' | 'pair') {
+      const key = `${bucket}:${keyFor(request)}`;
+      const timestamp = now().getTime();
+      const current = buckets.get(key);
+      if (current === undefined || current.resetAt <= timestamp) {
+        buckets.set(key, { resetAt: timestamp + windowMs, count: 1 });
+        return { ok: true };
+      }
+      current.count += 1;
+      if (current.count > max) {
+        return { ok: false };
+      }
+      return { ok: true };
+    },
+  };
+}
+
+function defaultRateLimitKey(request: Request): string {
+  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'local';
 }

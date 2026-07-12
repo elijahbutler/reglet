@@ -21,6 +21,7 @@ export async function syncOnce(home = regletHome(), fetchImpl: typeof fetch = fe
   }
 
   const client = new SyncClient(state.serverUrl, state.deviceToken, fetchImpl);
+  await client.ensureCompatible();
   const result: SyncResult = { pulled: [], pushed: [], merged: [], conflicts: [], deleted: [] };
   const pullChanged = await pullChanges(home, state, client, result);
   await pushChanges(home, state, client, result);
@@ -177,6 +178,9 @@ async function collectUnder(absDir: string, relDir: string, files: string[]): Pr
     throw error;
   }
   for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (isLocalOnlySyncArtifact(entry.name)) {
+      continue;
+    }
     const absPath = path.join(absDir, entry.name);
     const relPath = `${relDir}/${entry.name}`;
     if (entry.isDirectory()) {
@@ -185,6 +189,10 @@ async function collectUnder(absDir: string, relDir: string, files: string[]): Pr
       files.push(relPath);
     }
   }
+}
+
+function isLocalOnlySyncArtifact(name: string): boolean {
+  return name.endsWith('~') || name.endsWith('.bak') || name.endsWith('.backup') || name.includes('.conflict-');
 }
 
 function isSyncPath(filePath: string): boolean {

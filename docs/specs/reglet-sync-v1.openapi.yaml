@@ -1,0 +1,122 @@
+openapi: 3.1.0
+info:
+  title: Reglet Sync API
+  version: 1.0.0
+  description: Protocol shared by Reglet Cloud and the public self-hosted sync server.
+servers:
+  - url: https://sync.example.com
+paths:
+  /healthz:
+    get:
+      operationId: health
+      responses:
+        "200":
+          description: Service and protocol health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /v1/compatibility:
+    get:
+      operationId: compatibility
+      responses:
+        "200":
+          description: Supported protocol versions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Compatibility"
+  /v1/changes:
+    get:
+      operationId: listChanges
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: since
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "200":
+          description: Changes after the supplied cursor
+        "401": { $ref: "#/components/responses/Error" }
+  /v1/files/{path}:
+    parameters:
+      - in: path
+        name: path
+        required: true
+        schema: { type: string }
+        description: A path under rules/, skills/, mcp/servers.json, or reglet.toml.
+    get:
+      operationId: getFile
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: Current file revision and base64 content }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      operationId: putFile
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [baseRevision, contentBase64]
+              properties:
+                baseRevision: { type: integer, minimum: 0 }
+                contentBase64: { type: string, contentEncoding: base64 }
+      responses:
+        "200": { description: New revision }
+        "409": { description: Revision conflict }
+    delete:
+      operationId: deleteFile
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: New deletion revision }
+        "409": { description: Revision conflict }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  responses:
+    Error:
+      description: Structured API error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Service:
+      type: object
+      required: [name, version]
+      properties:
+        name: { type: string }
+        version: { type: string }
+    Protocol:
+      type: object
+      required: [current, supported]
+      properties:
+        current: { type: integer }
+        supported: { type: array, items: { type: integer } }
+    Compatibility:
+      type: object
+      required: [service, protocol]
+      properties:
+        service: { $ref: "#/components/schemas/Service" }
+        protocol: { $ref: "#/components/schemas/Protocol" }
+    Health:
+      allOf:
+        - $ref: "#/components/schemas/Compatibility"
+        - type: object
+          required: [ok]
+          properties:
+            ok: { type: boolean }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }

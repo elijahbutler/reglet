@@ -26,6 +26,17 @@ export interface ConflictResponse {
   contentBase64: string;
 }
 
+export interface CompatibilityResponse {
+  service: { name: string; version: string };
+  protocol: { current: number; supported: number[] };
+}
+
+export interface SyncApiError {
+  error: { code: string; message: string };
+}
+
+export const syncProtocolVersion = 1;
+
 export class SyncClient {
   private readonly baseUrl: string;
   private readonly token: string;
@@ -35,6 +46,17 @@ export class SyncClient {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.token = token;
     this.fetchImpl = fetchImpl;
+  }
+
+  async ensureCompatible(): Promise<CompatibilityResponse> {
+    const compatibility = await this.requestJson<CompatibilityResponse>('/v1/compatibility', {}, false);
+    if (!compatibility.protocol.supported.includes(syncProtocolVersion)) {
+      throw new Error(
+        `Sync server does not support Reglet protocol ${syncProtocolVersion}. ` +
+          `Server supports: ${compatibility.protocol.supported.join(', ') || 'none'}.`,
+      );
+    }
+    return compatibility;
   }
 
   async changes(since: number): Promise<ChangesResponse> {
@@ -87,24 +109,39 @@ export class SyncClient {
     return { ok: true, revision: body.revision };
   }
 
-  private async requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const response = await this.request(path, init);
+  private async requestJson<T>(path: string, init: RequestInit = {}, authenticated = true): Promise<T> {
+    const response = await this.request(path, init, authenticated);
     if (!response.ok) {
-      throw new Error(`Sync request failed: ${response.status}`);
+      const body = (await response.json().catch(() => null)) as unknown;
+      const detail = isSyncApiError(body) ? ` (${body.error.code}: ${body.error.message})` : '';
+      throw new Error(`Sync request failed: ${response.status}${detail}`);
     }
     return (await response.json()) as T;
   }
 
-  private async request(path: string, init: RequestInit = {}): Promise<Response> {
+  private async request(path: string, init: RequestInit = {}, authenticated = true): Promise<Response> {
     return this.fetchImpl(`${this.baseUrl}${path}`, {
       ...init,
       headers: {
         'content-type': 'application/json',
-        authorization: `Bearer ${this.token}`,
+        ...(authenticated ? { authorization: `Bearer ${this.token}` } : {}),
         ...init.headers,
       },
     });
   }
+}
+
+function isSyncApiError(value: unknown): value is SyncApiError {
+  if (typeof value !== 'object' || value === null || !('error' in value)) return false;
+  const error = value.error;
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    'message' in error &&
+    typeof error.code === 'string' &&
+    typeof error.message === 'string'
+  );
 }
 
 function isPutFileResponse(value: unknown): value is PutFileResponse {

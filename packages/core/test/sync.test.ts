@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { accountSession, claimPairing, loginWithAccount, startPairing } from '../src/sync/account.js';
 import { configureTokenLogin, syncOnce, tryMergeText } from '../src/sync/engine.js';
+import { SyncClient } from '../src/sync/client.js';
 import { closeApp, createApp } from '../../../packages/server/src/app.js';
 
 let currentDirs: string[] = [];
@@ -36,15 +37,15 @@ describe('sync engine', () => {
   test('syncs a local edit from one client to another through the server', async () => {
     await useTempProviderHome();
     const serverDb = path.join(await tempDir('reglet-sync-server-'), 'db.sqlite');
-    const app = useApp(createApp({ dbPath: serverDb, singleUserToken: 'sync-token' }));
+    const app = useApp(createApp({ dbPath: serverDb, singleUserToken: 'reglet-sync-test-token-123456' }));
     const fetchImpl = appFetch(app);
     const homeA = await tempDir('reglet-sync-a-');
     const homeB = await tempDir('reglet-sync-b-');
 
     await writeBasicMaster(homeA, 'A rules\n');
     await writeBasicMaster(homeB, 'B rules\n');
-    await configureTokenLogin('http://reglet.test', 'sync-token', 'device-a', homeA);
-    await configureTokenLogin('http://reglet.test', 'sync-token', 'device-b', homeB);
+    await configureTokenLogin('http://reglet.test', 'reglet-sync-test-token-123456', 'device-a', homeA);
+    await configureTokenLogin('http://reglet.test', 'reglet-sync-test-token-123456', 'device-b', homeB);
 
     const syncA = await syncOnce(homeA, fetchImpl);
     const syncB = await syncOnce(homeB, fetchImpl);
@@ -57,7 +58,7 @@ describe('sync engine', () => {
   test('clean pull applies remote files into an empty local master', async () => {
     await useTempProviderHome();
     const serverDb = path.join(await tempDir('reglet-sync-server-'), 'db.sqlite');
-    const app = useApp(createApp({ dbPath: serverDb, singleUserToken: 'sync-token' }));
+    const app = useApp(createApp({ dbPath: serverDb, singleUserToken: 'reglet-sync-test-token-123456' }));
     const fetchImpl = appFetch(app);
     const homeA = await tempDir('reglet-sync-a-');
     const homeB = await tempDir('reglet-sync-b-');
@@ -67,8 +68,8 @@ describe('sync engine', () => {
     await mkdir(path.join(homeB, 'mcp'), { recursive: true });
     await writeFile(path.join(homeB, 'mcp', 'servers.json'), `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`);
     await writeFile(path.join(homeB, 'reglet.toml'), '[sync]\nserver_url = ""\n');
-    await configureTokenLogin('http://reglet.test', 'sync-token', 'device-a', homeA);
-    await configureTokenLogin('http://reglet.test', 'sync-token', 'device-b', homeB);
+    await configureTokenLogin('http://reglet.test', 'reglet-sync-test-token-123456', 'device-a', homeA);
+    await configureTokenLogin('http://reglet.test', 'reglet-sync-test-token-123456', 'device-b', homeB);
 
     await syncOnce(homeA, fetchImpl);
     const syncB = await syncOnce(homeB, fetchImpl);
@@ -80,7 +81,7 @@ describe('sync engine', () => {
   test('syncs provider-specific skill files as part of the master skills tree', async () => {
     await useTempProviderHome();
     const serverDb = path.join(await tempDir('reglet-sync-server-'), 'db.sqlite');
-    const app = useApp(createApp({ dbPath: serverDb, singleUserToken: 'sync-token' }));
+    const app = useApp(createApp({ dbPath: serverDb, singleUserToken: 'reglet-sync-test-token-123456' }));
     const fetchImpl = appFetch(app);
     const homeA = await tempDir('reglet-sync-a-');
     const homeB = await tempDir('reglet-sync-b-');
@@ -92,8 +93,8 @@ describe('sync engine', () => {
     await mkdir(path.join(homeB, 'mcp'), { recursive: true });
     await writeFile(path.join(homeB, 'mcp', 'servers.json'), `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`);
     await writeFile(path.join(homeB, 'reglet.toml'), '[sync]\nserver_url = ""\n');
-    await configureTokenLogin('http://reglet.test', 'sync-token', 'device-a', homeA);
-    await configureTokenLogin('http://reglet.test', 'sync-token', 'device-b', homeB);
+    await configureTokenLogin('http://reglet.test', 'reglet-sync-test-token-123456', 'device-a', homeA);
+    await configureTokenLogin('http://reglet.test', 'reglet-sync-test-token-123456', 'device-b', homeB);
 
     const syncA = await syncOnce(homeA, fetchImpl);
     const syncB = await syncOnce(homeB, fetchImpl);
@@ -108,7 +109,7 @@ describe('sync engine', () => {
   test('merges non-overlapping text edits and retries push after remote conflict', async () => {
     await useTempProviderHome();
     const serverDb = path.join(await tempDir('reglet-sync-server-'), 'db.sqlite');
-    const app = useApp(createApp({ dbPath: serverDb, singleUserToken: 'sync-token' }));
+    const app = useApp(createApp({ dbPath: serverDb, singleUserToken: 'reglet-sync-test-token-123456' }));
     const fetchImpl = appFetch(app);
     const homeA = await tempDir('reglet-sync-a-');
     const homeB = await tempDir('reglet-sync-b-');
@@ -116,8 +117,8 @@ describe('sync engine', () => {
 
     await writeBasicMaster(homeA, original);
     await writeBasicMaster(homeB, original);
-    await configureTokenLogin('http://reglet.test', 'sync-token', 'device-a', homeA);
-    await configureTokenLogin('http://reglet.test', 'sync-token', 'device-b', homeB);
+    await configureTokenLogin('http://reglet.test', 'reglet-sync-test-token-123456', 'device-a', homeA);
+    await configureTokenLogin('http://reglet.test', 'reglet-sync-test-token-123456', 'device-b', homeB);
     await syncOnce(homeA, fetchImpl);
     await syncOnce(homeB, fetchImpl);
 
@@ -177,6 +178,17 @@ describe('sync engine', () => {
     const remote = Buffer.from('same\nremote\n');
 
     expect(tryMergeText(base, local, remote)).toBeNull();
+  });
+
+  test('rejects a server that does not support the client protocol before syncing', async () => {
+    const fetchImpl = (async () =>
+      Response.json({
+        service: { name: 'future-sync', version: '9.0.0' },
+        protocol: { current: 9, supported: [9] },
+      })) as typeof fetch;
+    const client = new SyncClient('https://sync.example.test', 'token', fetchImpl);
+
+    await expect(client.ensureCompatible()).rejects.toThrow('does not support Reglet protocol 1');
   });
 });
 
