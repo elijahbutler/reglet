@@ -1,6 +1,7 @@
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { configPath, defaultConfig, providerNames, serializeConfig, type ProviderName } from './config.js';
+import { serializeMcpServers, validateMcpServer } from './mcp.js';
 import { regletHome } from './paths.js';
 
 export interface McpServerDef {
@@ -43,7 +44,7 @@ export async function initMasterDir(home = regletHome()): Promise<void> {
   await mkdir(path.join(home, '.state', 'backups'), { recursive: true });
   await mkdir(path.join(home, '.state', 'sync-base'), { recursive: true });
 
-  await writeFileIfMissing(path.join(home, 'mcp', 'servers.json'), `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`);
+  await writeFileIfMissing(path.join(home, 'mcp', 'servers.json'), serializeMcpServers({}));
   await writeFileIfMissing(
     path.join(home, 'rules', '00-general.md'),
     '# Reglet general rules\n\n<!-- Add shared instructions here. -->\n',
@@ -167,7 +168,7 @@ async function loadMcpServers(serversPath: string): Promise<Record<string, McpSe
 
     const servers: Record<string, McpServerDef> = {};
     for (const [name, server] of Object.entries((parsed as McpServersFile).mcpServers ?? {})) {
-      if (isMcpServerDef(server)) {
+      if (isMcpServerDef(server) && validateMcpServer(name, server).ok) {
         servers[name] = server;
       }
     }

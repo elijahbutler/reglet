@@ -137,7 +137,7 @@ struct ManagerDetail: View {
       case .skills: SkillsManagerView()
       case .recovery: RecoveryManagerView()
       case .rules: RulesManagerView()
-      case .mcp: InventoryManagerView(kind: .mcp)
+      case .mcp: McpManagerView()
       case .sync: SyncManagerView()
       case .activity: ActivityDriftManagerView()
       }
@@ -208,6 +208,9 @@ struct ProvidersManagerView: View {
 
 struct SkillsManagerView: View {
   @EnvironmentObject private var model: SetupModel
+  @State private var editingSkill: SkillEditorTarget?
+  @State private var applyPreview: StructuredApplyPreview?
+  @State private var showsNewSkill = false
 
   private var overview: SkillsOverviewResponse? { model.skillsOverview }
 
@@ -230,6 +233,7 @@ struct SkillsManagerView: View {
                   .font(.system(.caption, design: .monospaced))
                   .foregroundStyle(.secondary)
                   .textSelection(.enabled)
+                Button("Edit Files…") { editingSkill = SkillEditorTarget(name: skill.name, provider: nil) }
               }
               .padding(.vertical, 2)
             }
@@ -254,6 +258,7 @@ struct SkillsManagerView: View {
                   .font(.system(.caption, design: .monospaced))
                   .foregroundStyle(.secondary)
                   .textSelection(.enabled)
+                Button("Edit Files…") { editingSkill = SkillEditorTarget(name: skill.name, provider: skill.provider) }
               }
               .padding(.vertical, 2)
             }
@@ -280,6 +285,9 @@ struct SkillsManagerView: View {
         Text("Adoption applies skills to every enrolled provider.")
           .font(.caption).foregroundStyle(.secondary)
         Spacer()
+        Button("New Skill…") { showsNewSkill = true }
+        Button("Preview Apply…") { Task { applyPreview = await model.previewApply(content: .skills) } }
+          .disabled(model.isWorking)
         Button {
           Task { await model.adoptSelectedSkills() }
         } label: {
@@ -291,6 +299,173 @@ struct SkillsManagerView: View {
       .padding(16)
       .background(.regularMaterial)
     }
+    .sheet(item: $editingSkill) { target in
+      SkillEditorView(target: target).environmentObject(model)
+    }
+    .sheet(isPresented: $showsNewSkill) {
+      NewSkillView().environmentObject(model)
+    }
+    .sheet(item: $applyPreview) { preview in
+      ApplyPreviewView(preview: preview, content: .skills) { applyPreview = nil }
+        .environmentObject(model)
+    }
+  }
+}
+
+struct SkillEditorTarget: Identifiable {
+  let name: String
+  let provider: String?
+  var id: String { "\(provider ?? "shared"):\(name)" }
+}
+
+struct SkillEditorView: View {
+  @EnvironmentObject private var model: SetupModel
+  @Environment(\.dismiss) private var dismiss
+  let target: SkillEditorTarget
+  @State private var tree: ManagedSkillTree?
+  @State private var selectedPath: String?
+  @State private var content = ""
+  @State private var savedContent = ""
+  @State private var confirmsDelete = false
+  @State private var draftName = ""
+  @State private var newFilePath = ""
+  @State private var showsNewFile = false
+  @State private var confirmsDeleteFile = false
+  @State private var renamedFilePath = ""
+  @State private var showsRenameFile = false
+  @State private var pendingPath: String?
+  @State private var resolvesUnsavedSelection = false
+
+  var body: some View {
+    VStack(spacing: 0) {
+      HStack {
+        VStack(alignment: .leading) {
+          HStack {
+            TextField("Skill name", text: $draftName).font(.title2.weight(.semibold)).frame(width: 260)
+            Button("Rename") { Task { if await model.renameSkill(name: target.name, newName: draftName, provider: target.provider) { dismiss() } } }
+              .disabled(draftName.isEmpty || draftName == target.name || content != savedContent)
+          }
+          Text(target.provider.map { "Provider-scoped: \($0)" } ?? "Shared skill").foregroundStyle(.secondary)
+        }
+        Spacer()
+        if tree?.shadowsShared == true { SkillBadge(text: "shadows shared", tint: .orange) }
+        Button("Delete Skill", role: .destructive) { confirmsDelete = true }
+      }.padding()
+      Divider()
+      HSplitView {
+        VStack(spacing: 0) {
+          List(tree?.files ?? [], selection: $selectedPath) { file in
+            Label(file.path, systemImage: "doc").tag(file.path)
+          }
+          Divider()
+          HStack {
+            Button { newFilePath = ""; showsNewFile = true } label: { Image(systemName: "plus") }
+            Button(role: .destructive) { confirmsDeleteFile = true } label: { Image(systemName: "minus") }
+              .disabled(selectedPath == nil || selectedPath == "SKILL.md")
+            Button { renamedFilePath = selectedPath ?? ""; showsRenameFile = true } label: { Image(systemName: "pencil") }
+              .disabled(selectedPath == nil || selectedPath == "SKILL.md")
+            Spacer()
+          }.padding(8)
+        }.frame(minWidth: 210)
+        VStack(spacing: 0) {
+          if selectedPath != nil {
+            TextEditor(text: $content).font(.system(.body, design: .monospaced)).padding(10)
+            Divider()
+            HStack {
+              Text(content == savedContent ? "Saved to master — not applied" : "Unsaved changes")
+                .font(.caption).foregroundStyle(content == savedContent ? Color.secondary : Color.orange)
+              Spacer()
+              Button("Save") { save() }.buttonStyle(.borderedProminent)
+                .disabled(content == savedContent || model.isWorking)
+            }.padding()
+          } else {
+            ContentUnavailableView("Select a skill file", systemImage: "doc")
+          }
+        }.frame(minWidth: 500)
+      }
+    }
+    .frame(minWidth: 760, minHeight: 520)
+    .task { draftName = target.name; tree = await model.loadSkillTree(name: target.name, provider: target.provider); selectedPath = tree?.files.first?.path }
+    .onChange(of: selectedPath) { oldPath, newPath in
+      guard oldPath == nil || content == savedContent else {
+        pendingPath = newPath; selectedPath = oldPath; resolvesUnsavedSelection = true; return
+      }
+      guard let newPath else { return }
+      Task { if let loaded = await model.loadSkillFile(name: target.name, provider: target.provider, path: newPath) { content = loaded; savedContent = loaded } }
+    }
+    .confirmationDialog("Delete \(target.name)?", isPresented: $confirmsDelete) {
+      Button("Delete from Master", role: .destructive) { Task { if await model.deleteSkill(name: target.name, provider: target.provider) { dismiss() } } }
+    } message: { Text("Provider copies remain until you preview and apply Skills.") }
+    .alert("New Skill File", isPresented: $showsNewFile) {
+      TextField("assets/example.md", text: $newFilePath)
+      Button("Cancel", role: .cancel) {}
+      Button("Create") {
+        Task {
+          if await model.saveSkillFile(name: target.name, provider: target.provider, path: newFilePath, content: "") {
+            tree = await model.loadSkillTree(name: target.name, provider: target.provider)
+            selectedPath = newFilePath
+          }
+        }
+      }.disabled(newFilePath.isEmpty)
+    } message: { Text("The empty file is saved to the master and is not applied yet.") }
+    .alert("Rename Skill File", isPresented: $showsRenameFile) {
+      TextField("assets/example.md", text: $renamedFilePath)
+      Button("Cancel", role: .cancel) {}
+      Button("Rename") {
+        guard let selectedPath else { return }
+        Task {
+          if await model.renameSkillFile(name: target.name, provider: target.provider, path: selectedPath, newPath: renamedFilePath) {
+            self.selectedPath = renamedFilePath
+            tree = await model.loadSkillTree(name: target.name, provider: target.provider)
+          }
+        }
+      }.disabled(renamedFilePath.isEmpty)
+    }
+    .confirmationDialog("Delete \(selectedPath ?? "file")?", isPresented: $confirmsDeleteFile) {
+      Button("Delete from Master", role: .destructive) {
+        guard let selectedPath else { return }
+        Task {
+          if await model.deleteSkillFile(name: target.name, provider: target.provider, path: selectedPath) {
+            self.selectedPath = nil; content = ""; savedContent = ""
+            tree = await model.loadSkillTree(name: target.name, provider: target.provider)
+          }
+        }
+      }
+    }
+    .confirmationDialog("Save changes before switching files?", isPresented: $resolvesUnsavedSelection) {
+      Button("Save") {
+        guard let current = selectedPath else { return }
+        Task {
+          if await model.saveSkillFile(name: target.name, provider: target.provider, path: current, content: content) {
+            savedContent = content; selectedPath = pendingPath; pendingPath = nil
+          }
+        }
+      }
+      Button("Discard Changes", role: .destructive) { content = savedContent; selectedPath = pendingPath; pendingPath = nil }
+      Button("Cancel", role: .cancel) { pendingPath = nil }
+    }
+    .interactiveDismissDisabled(content != savedContent)
+  }
+
+  private func save() {
+    guard let selectedPath else { return }
+    Task { if await model.saveSkillFile(name: target.name, provider: target.provider, path: selectedPath, content: content) { savedContent = content; tree = await model.loadSkillTree(name: target.name, provider: target.provider) } }
+  }
+}
+
+struct NewSkillView: View {
+  @EnvironmentObject private var model: SetupModel
+  @Environment(\.dismiss) private var dismiss
+  @State private var name = ""
+  @State private var provider = ""
+  @State private var content = "# New Skill\n"
+  var body: some View {
+    Form {
+      TextField("Skill name", text: $name)
+      TextField("Provider (blank for shared)", text: $provider)
+      TextEditor(text: $content).font(.system(.body, design: .monospaced)).frame(minHeight: 220)
+      HStack { Spacer(); Button("Cancel") { dismiss() }; Button("Save to Master") { Task { if await model.createSkill(name: name, provider: provider.isEmpty ? nil : provider, content: content) { dismiss() } } }.buttonStyle(.borderedProminent).disabled(name.isEmpty) }
+    }.padding().frame(width: 560, height: 400)
   }
 }
 
@@ -468,6 +643,105 @@ struct InventoryManagerView: View {
       }
       .padding(.vertical, 4)
     }
+  }
+}
+
+struct McpManagerView: View {
+  @EnvironmentObject private var model: SetupModel
+  @State private var selectedName: String?
+  @State private var name = ""
+  @State private var transport = 0
+  @State private var command = ""
+  @State private var args = ""
+  @State private var url = ""
+  @State private var env = ""
+  @State private var saved = McpServerDefinition()
+  @State private var applyPreview: StructuredApplyPreview?
+  @State private var pendingName: String?
+  @State private var resolvesUnsavedSelection = false
+
+  private var definition: McpServerDefinition {
+    transport == 0
+      ? McpServerDefinition(command: command, args: args.split(separator: "\n").map(String.init), env: parseEnvironment(), url: nil)
+      : McpServerDefinition(command: nil, args: nil, env: nil, url: url)
+  }
+  private var valid: Bool {
+    !name.isEmpty && (transport == 0 ? !command.trimmingCharacters(in: .whitespaces).isEmpty : (URL(string: url)?.scheme.map { $0 == "http" || $0 == "https" } ?? false))
+  }
+
+  var body: some View {
+    HSplitView {
+      VStack(spacing: 0) {
+        List(model.mcpServers, selection: $selectedName) { entry in
+          VStack(alignment: .leading) { Text(entry.name); if !entry.issues.isEmpty { Text(entry.issues.joined(separator: ", ")).font(.caption).foregroundStyle(.red) } }.tag(entry.name)
+        }
+        Divider()
+        Button("New Server") { selectedName = nil; clear() }.padding()
+      }.frame(minWidth: 220)
+      Form {
+        TextField("Server name", text: $name)
+        Picker("Transport", selection: $transport) { Text("Local command").tag(0); Text("Remote URL").tag(1) }.pickerStyle(.segmented)
+        if transport == 0 {
+          TextField("Command", text: $command)
+          TextField("Arguments (one per line)", text: $args, axis: .vertical).lineLimit(3...8)
+          TextField("Environment (KEY=value, one per line)", text: $env, axis: .vertical).lineLimit(3...8)
+          Text("Environment values are stored as plain text in the synced master definition.").font(.caption).foregroundStyle(.orange)
+        } else {
+          TextField("https://server.example/mcp", text: $url)
+        }
+        HStack {
+          if selectedName != nil { Button("Delete", role: .destructive) { Task { if await model.deleteMcp(name: name) { clear() } } } }
+          Spacer()
+          Text(definition == saved ? "Saved to master — not applied" : "Unsaved changes").font(.caption).foregroundStyle(definition == saved ? Color.secondary : Color.orange)
+          Button("Save") { Task { if await model.saveMcp(name: name, definition: definition) { saved = definition; selectedName = name } } }.buttonStyle(.borderedProminent).disabled(!valid || definition == saved)
+        }
+      }.formStyle(.grouped).frame(minWidth: 500)
+    }
+    .safeAreaInset(edge: .bottom) {
+      HStack { Spacer(); Button("Preview Apply…") { Task { applyPreview = await model.previewApply(content: .mcp) } }.buttonStyle(.borderedProminent).disabled(model.isWorking) }.padding().background(.regularMaterial)
+    }
+    .onChange(of: selectedName) { oldValue, value in
+      if definition != saved && oldValue != nil {
+        pendingName = value; selectedName = oldValue; resolvesUnsavedSelection = true
+      } else { load(value) }
+    }
+    .sheet(item: $applyPreview) { preview in ApplyPreviewView(preview: preview, content: .mcp) { applyPreview = nil }.environmentObject(model) }
+    .confirmationDialog("Save changes before switching servers?", isPresented: $resolvesUnsavedSelection) {
+      Button("Save") { Task { if await model.saveMcp(name: name, definition: definition) { saved = definition; selectedName = pendingName; pendingName = nil } } }
+      Button("Discard Changes", role: .destructive) { saved = definition; selectedName = pendingName; pendingName = nil }
+      Button("Cancel", role: .cancel) { pendingName = nil }
+    }
+  }
+
+  private func load(_ selected: String?) {
+    guard let entry = model.mcpServers.first(where: { $0.name == selected }) else { return }
+    name = entry.name; command = entry.server.command ?? ""; args = (entry.server.args ?? []).joined(separator: "\n"); url = entry.server.url ?? ""; env = (entry.server.env ?? [:]).sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "\n"); transport = entry.server.url == nil ? 0 : 1; saved = entry.server
+  }
+  private func clear() { selectedName = nil; name = ""; command = ""; args = ""; url = ""; env = ""; transport = 0; saved = McpServerDefinition() }
+  private func parseEnvironment() -> [String: String] {
+    Dictionary(uniqueKeysWithValues: env.split(separator: "\n").compactMap { line in guard let split = line.firstIndex(of: "=") else { return nil }; return (String(line[..<split]), String(line[line.index(after: split)...])) })
+  }
+}
+
+struct ApplyPreviewView: View {
+  @EnvironmentObject private var model: SetupModel
+  let preview: StructuredApplyPreview
+  let content: ContentKind
+  let close: () -> Void
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      Text("Preview \(content.label) Apply").font(.title2.weight(.semibold))
+      if !preview.validationIssues.isEmpty { Label(preview.validationIssues.joined(separator: "\n"), systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red) }
+      List(preview.entries) { entry in
+        DisclosureGroup {
+          Text(entry.diff).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+          Text("Backup: \(entry.backup.behavior)\(entry.backup.location.map { " → \($0)" } ?? "")").font(.caption).foregroundStyle(.secondary)
+        } label: {
+          VStack(alignment: .leading) { Text("\(entry.provider) · \(entry.operation)"); Text(entry.path).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary) }
+        }
+      }
+      HStack { Spacer(); Button("Cancel", action: close); Button("Apply to Providers") { Task { if await model.applyPreview(preview, content: content) { close() } } }.buttonStyle(.borderedProminent).disabled(!preview.validationIssues.isEmpty || model.isWorking) }
+    }.padding(24).frame(minWidth: 760, minHeight: 560)
   }
 }
 

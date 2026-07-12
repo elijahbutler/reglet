@@ -1,4 +1,4 @@
-import { cp, mkdir, stat } from 'node:fs/promises';
+import { cp, mkdir, lstat, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { loadConfig } from './config.js';
 import { loadManifest } from './manifest.js';
@@ -60,6 +60,41 @@ export interface SkillsOverview {
   unmanaged: UnmanagedSkill[];
 }
 
+export type SkillScope = { kind: 'shared' } | { kind: 'provider'; provider: ProviderId };
+
+export interface SkillTreeFile {
+  path: string;
+  bytes: number;
+}
+
+export interface ManagedSkillDetail {
+  scope: SkillScope;
+  name: string;
+  path: string;
+  hasSkillMd: boolean;
+  frontmatterIssues: string[];
+  files: SkillTreeFile[];
+  shadowsShared: boolean;
+  shadowedBy: ProviderId[];
+}
+
+export interface SkillFileRead {
+  scope: SkillScope;
+  name: string;
+  path: string;
+  content: string;
+}
+
+export interface SkillMutationResult {
+  scope: SkillScope;
+  name: string;
+  path: string;
+}
+
+export interface SkillFileMutationResult extends SkillMutationResult {
+  filePath: string;
+}
+
 export async function listSkills(home = regletHome()): Promise<SkillsOverview> {
   const [master, unmanaged] = await Promise.all([loadMasterDir(home), listUnmanagedSkills(home)]);
   const sharedNames = new Set(master.skills.map((skill) => skill.name));
@@ -98,6 +133,125 @@ export async function listSkills(home = regletHome()): Promise<SkillsOverview> {
     ),
     unmanaged,
   };
+}
+
+export async function listManagedSkillTrees(home = regletHome()): Promise<ManagedSkillDetail[]> {
+  const master = await loadMasterDir(home);
+  const sharedNames = new Set(master.skills.map((skill) => skill.name));
+  const providerByName = new Map<string, ProviderId[]>();
+  for (const provider of allAdapters().map((adapter) => adapter.id)) {
+    for (const skill of master.providerSkills[provider]) {
+      providerByName.set(skill.name, [...(providerByName.get(skill.name) ?? []), provider]);
+    }
+  }
+
+  const details: ManagedSkillDetail[] = [];
+  for (const skill of master.skills) {
+    details.push(await describeSkill({ kind: 'shared' }, skill.name, home, false, providerByName.get(skill.name) ?? []));
+  }
+  for (const provider of allAdapters().map((adapter) => adapter.id)) {
+    for (const skill of master.providerSkills[provider]) {
+      details.push(await describeSkill({ kind: 'provider', provider }, skill.name, home, sharedNames.has(skill.name), []));
+    }
+  }
+  return details.sort((left, right) => skillSortKey(left).localeCompare(skillSortKey(right)));
+}
+
+export async function readSkillFile(scope: SkillScope, name: string, filePath: string, home = regletHome()): Promise<SkillFileRead> {
+  const skillRoot = await existingSkillRoot(scope, name, home);
+  const target = await safeSkillPath(skillRoot, filePath, { mustExist: true });
+  const stats = await lstat(target);
+  if (!stats.isFile()) throw new Error(`Skill path is not a file: ${filePath}`);
+  return { scope, name, path: normalizeRelativePath(filePath), content: await readFile(target, 'utf8') };
+}
+
+export async function createSkill(
+  scope: SkillScope,
+  name: string,
+  skillMd: string,
+  home = regletHome(),
+): Promise<SkillMutationResult> {
+  validateSkillNameForScope(scope, name);
+  if (!hasValidSkillFrontmatter(skillMd).ok) {
+    throw new Error(`Invalid SKILL.md frontmatter: ${hasValidSkillFrontmatter(skillMd).issues.join('; ')}`);
+  }
+  const root = skillRoot(scope, name, home);
+  if (await pathExists(root)) throw new Error(`Skill already exists: ${name}`);
+  await mkdir(root, { recursive: true });
+  await writeFile(path.join(root, 'SKILL.md'), skillMd);
+  return { scope, name, path: root };
+}
+
+export async function writeSkillFile(
+  scope: SkillScope,
+  name: string,
+  filePath: string,
+  content: string,
+  home = regletHome(),
+): Promise<SkillFileMutationResult> {
+  const root = await existingMutableSkillRoot(scope, name, home);
+  const relPath = normalizeRelativePath(filePath);
+  const target = await safeSkillPath(root, relPath, { mustExist: false });
+  if (relPath === 'SKILL.md') {
+    const validation = hasValidSkillFrontmatter(content);
+    if (!validation.ok) throw new Error(`Invalid SKILL.md frontmatter: ${validation.issues.join('; ')}`);
+  }
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, content);
+  return { scope, name, path: root, filePath: relPath };
+}
+
+export async function renameSkill(
+  scope: SkillScope,
+  name: string,
+  nextName: string,
+  home = regletHome(),
+): Promise<SkillMutationResult> {
+  const root = await existingMutableSkillRoot(scope, name, home);
+  validateSkillNameForScope(scope, nextName);
+  const nextRoot = skillRoot(scope, nextName, home);
+  if (await pathExists(nextRoot)) throw new Error(`Skill already exists: ${nextName}`);
+  await rename(root, nextRoot);
+  return { scope, name: nextName, path: nextRoot };
+}
+
+export async function deleteSkill(scope: SkillScope, name: string, home = regletHome()): Promise<SkillMutationResult> {
+  const root = await existingMutableSkillRoot(scope, name, home);
+  await rm(root, { recursive: true, force: true });
+  return { scope, name, path: root };
+}
+
+export async function deleteSkillFile(
+  scope: SkillScope,
+  name: string,
+  filePath: string,
+  home = regletHome(),
+): Promise<SkillFileMutationResult> {
+  const root = await existingMutableSkillRoot(scope, name, home);
+  const relPath = normalizeRelativePath(filePath);
+  if (relPath === 'SKILL.md') throw new Error('Cannot delete SKILL.md from a mutable skill');
+  const target = await safeSkillPath(root, relPath, { mustExist: true });
+  await rm(target, { recursive: true, force: false });
+  return { scope, name, path: root, filePath: relPath };
+}
+
+export async function renameSkillFile(
+  scope: SkillScope,
+  name: string,
+  filePath: string,
+  nextFilePath: string,
+  home = regletHome(),
+): Promise<SkillFileMutationResult> {
+  const root = await existingMutableSkillRoot(scope, name, home);
+  const current = normalizeRelativePath(filePath);
+  const next = normalizeRelativePath(nextFilePath);
+  if (current === 'SKILL.md' || next === 'SKILL.md') throw new Error('SKILL.md cannot be renamed');
+  const source = await safeSkillPath(root, current, { mustExist: true });
+  const destination = await safeSkillPath(root, next, { mustExist: false });
+  if (await pathExists(destination)) throw new Error(`Skill file already exists: ${next}`);
+  await mkdir(path.dirname(destination), { recursive: true });
+  await rename(source, destination);
+  return { scope, name, path: root, filePath: next };
 }
 
 export async function listUnmanagedSkills(home = regletHome()): Promise<UnmanagedSkill[]> {
@@ -198,4 +352,138 @@ async function pathExists(targetPath: string): Promise<boolean> {
 
 function isSkillName(name: string): boolean {
   return name.length > 0 && name !== '.' && name !== '..' && !name.includes('/') && !name.includes('\\');
+}
+
+function validateSkillNameForScope(scope: SkillScope, name: string): void {
+  if (!isSkillName(name)) throw new Error(`Invalid skill name: ${name}`);
+  if (scope.kind === 'shared' && allAdapters().some((adapter) => adapter.id === name)) {
+    throw new Error(`Skill name collides with provider namespace: ${name}`);
+  }
+}
+
+async function describeSkill(
+  scope: SkillScope,
+  name: string,
+  home: string,
+  shadowsShared: boolean,
+  shadowedBy: ProviderId[],
+): Promise<ManagedSkillDetail> {
+  const root = skillRoot(scope, name, home);
+  const master = scope.kind === 'shared'
+    ? (await loadMasterDir(home)).skills.find((skill) => skill.name === name)
+    : (await loadMasterDir(home)).providerSkills[scope.provider].find((skill) => skill.name === name);
+  const files = await Promise.all((master?.files ?? []).map(async (file) => ({
+    path: file.relPath,
+    bytes: (await stat(file.absPath)).size,
+  })));
+  const skillMdPath = path.join(root, 'SKILL.md');
+  const skillMd = await readOptionalFile(skillMdPath);
+  const validation = skillMd === null ? { ok: true, issues: [] } : hasValidSkillFrontmatter(skillMd);
+  return {
+    scope,
+    name,
+    path: root,
+    hasSkillMd: skillMd !== null,
+    frontmatterIssues: validation.issues,
+    files,
+    shadowsShared,
+    shadowedBy,
+  };
+}
+
+function skillRoot(scope: SkillScope, name: string, home: string): string {
+  return scope.kind === 'shared' ? path.join(home, 'skills', name) : path.join(home, 'skills', scope.provider, name);
+}
+
+async function existingSkillRoot(scope: SkillScope, name: string, home: string): Promise<string> {
+  validateSkillNameForScope(scope, name);
+  const root = skillRoot(scope, name, home);
+  const rootReal = await realpathRoot(path.join(home, 'skills'));
+  const currentReal = await realpath(root);
+  if (!isInside(currentReal, rootReal)) throw new Error(`Skill path escapes master skills root: ${name}`);
+  return root;
+}
+
+async function existingMutableSkillRoot(scope: SkillScope, name: string, home: string): Promise<string> {
+  const root = await existingSkillRoot(scope, name, home);
+  if (!(await pathExists(path.join(root, 'SKILL.md')))) {
+    throw new Error('Legacy skills without SKILL.md are readable but cannot be structurally modified');
+  }
+  return root;
+}
+
+async function safeSkillPath(root: string, relativePath: string, options: { mustExist: boolean }): Promise<string> {
+  if (path.isAbsolute(relativePath)) throw new Error(`Absolute skill paths are not allowed: ${relativePath}`);
+  const normalized = normalizeRelativePath(relativePath);
+  if (normalized.length === 0 || normalized === '.' || normalized.split('/').includes('..')) {
+    throw new Error(`Traversal skill paths are not allowed: ${relativePath}`);
+  }
+  const target = path.join(root, normalized);
+  await rejectSymlinkComponents(root, target);
+  const rootReal = await realpath(root);
+  const targetReal = options.mustExist ? await realpath(target) : await realpathParent(target);
+  if (!isInside(targetReal, rootReal)) throw new Error(`Skill path escapes skill root: ${relativePath}`);
+  return target;
+}
+
+async function rejectSymlinkComponents(root: string, target: string): Promise<void> {
+  const relative = path.relative(root, target);
+  let current = root;
+  for (const component of relative.split(path.sep)) {
+    current = path.join(current, component);
+    try {
+      if ((await lstat(current)).isSymbolicLink()) throw new Error(`Symlink skill paths are not allowed: ${relative}`);
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
+      throw error;
+    }
+  }
+}
+
+async function realpathRoot(root: string): Promise<string> {
+  await mkdir(root, { recursive: true });
+  return realpath(root);
+}
+
+async function realpathParent(target: string): Promise<string> {
+  let current = path.dirname(target);
+  while (!(await pathExists(current))) current = path.dirname(current);
+  return realpath(current);
+}
+
+function isInside(candidate: string, root: string): boolean {
+  const rel = path.relative(root, candidate);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function hasValidSkillFrontmatter(content: string): { ok: boolean; issues: string[] } {
+  if (!content.startsWith('---\n')) return { ok: true, issues: [] };
+  const end = content.indexOf('\n---', 4);
+  if (end < 0) return { ok: false, issues: ['frontmatter is not closed'] };
+  const issues: string[] = [];
+  for (const [index, line] of content.slice(4, end).split('\n').entries()) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0 || trimmed.startsWith('#')) continue;
+    if (!/^[A-Za-z0-9_-]+:\s*(.*)$/.test(trimmed)) {
+      issues.push(`line ${index + 1} is not key: value`);
+    }
+  }
+  return { ok: issues.length === 0, issues };
+}
+
+async function readOptionalFile(filePath: string): Promise<string | null> {
+  try {
+    return await readFile(filePath, 'utf8');
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function normalizeRelativePath(relativePath: string): string {
+  return relativePath.split(path.sep).join('/');
+}
+
+function skillSortKey(skill: ManagedSkillDetail): string {
+  return `${skill.scope.kind === 'shared' ? '0' : `1:${skill.scope.provider}`}:${skill.name}`;
 }

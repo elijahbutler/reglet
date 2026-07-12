@@ -25,7 +25,7 @@ export async function applyJsonMcp(
     delete existingServers[key];
   }
 
-  const nextServers: Record<string, unknown> = { ...existingServers, ...servers };
+  const nextServers = sortRecord({ ...existingServers, ...servers });
   const nextConfig: JsonMcpFile & Record<string, unknown> = {
     ...baseConfig,
     mcpServers: nextServers as Record<string, McpServerDef>,
@@ -49,6 +49,10 @@ export async function applyJsonMcp(
     status: writeResult.status,
     managedKeys,
   };
+}
+
+function sortRecord<T>(record: Record<string, T>): Record<string, T> {
+  return Object.fromEntries(Object.entries(record).sort(([left], [right]) => left.localeCompare(right)));
 }
 
 export async function readJsonMcpServerNames(outputPath: string | null): Promise<string[]> {

@@ -234,6 +234,87 @@ struct SkillAdoptionResponse: Decodable {
   }
 }
 
+struct SkillTreeResponse: Decodable {
+  let version: Int
+  let tree: ManagedSkillTree
+}
+
+struct ManagedSkillTree: Decodable {
+  let scope: Scope
+  let name: String
+  let path: String
+  let hasSkillMd: Bool
+  let frontmatterIssues: [String]
+  let files: [File]
+  let shadowsShared: Bool
+  let shadowedBy: [String]
+
+  struct Scope: Decodable {
+    let kind: String
+    let provider: String?
+  }
+
+  struct File: Decodable, Identifiable {
+    let path: String
+    let bytes: Int
+    var id: String { path }
+  }
+}
+
+struct SkillFileResponse: Decodable {
+  let version: Int
+  let document: Document
+
+  struct Document: Decodable {
+    let scope: ManagedSkillTree.Scope
+    let name: String
+    let path: String
+    let content: String
+  }
+}
+
+struct McpServersResponse: Decodable {
+  let version: Int
+  let servers: [Entry]
+
+  struct Entry: Decodable, Identifiable {
+    let name: String
+    let server: McpServerDefinition
+    let issues: [String]
+    var id: String { name }
+  }
+}
+
+struct McpServerDefinition: Codable, Equatable {
+  var command: String?
+  var args: [String]?
+  var env: [String: String]?
+  var url: String?
+}
+
+struct StructuredApplyPreview: Decodable, Identifiable {
+  let version: Int
+  let digest: String
+  let validationIssues: [String]
+  let entries: [Entry]
+  var id: String { digest }
+
+  struct Entry: Decodable, Identifiable {
+    let provider: String
+    let content: String
+    let operation: String
+    let path: String
+    let diff: String
+    let backup: Backup
+    var id: String { "\(provider):\(content):\(path)" }
+  }
+
+  struct Backup: Decodable {
+    let behavior: String
+    let location: String?
+  }
+}
+
 enum SkillAdoptionScope: String {
   case shared
   case provider

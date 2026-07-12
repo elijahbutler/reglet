@@ -8,9 +8,14 @@ import { Command, InvalidArgumentError } from 'commander';
 import {
   accountSession,
   applyAll,
+  applyStructuredPreview,
   adoptSkill,
   claimPairing,
   configureTokenLogin,
+  createSkill,
+  deleteMcpServer,
+  deleteSkill,
+  deleteSkillFile,
   detectDrift,
   getAdapter,
   importDriftedMcp,
@@ -21,13 +26,19 @@ import {
   loadMasterDir,
   loadSyncState,
   loginWithAccount,
+  listMcpServers,
+  listManagedSkillTrees,
   listSkills,
   listUnmanagedSkills,
   type McpServerDef,
+  previewApplyStructured,
   readProviderMcpServers,
+  readSkillFile,
   regletHome,
   restore,
   revert,
+  renameSkill,
+  renameSkillFile,
   saveConfig,
   startPairing,
   syncOnce,
@@ -37,6 +48,9 @@ import {
   type ProviderId,
   type ProviderInventory,
   type SkillAdoptionScope,
+  type SkillScope,
+  upsertMcpServer,
+  writeSkillFile,
 } from '@reglet/core';
 import { allAdapters } from '@reglet/core';
 import {
@@ -215,6 +229,27 @@ program
     printApplyResults(report.results);
   });
 
+const apply = program.command('apply-structured').description('Preview or apply exact structured provider writes');
+
+apply
+  .command('preview')
+  .description('Print a digest-backed JSON preview for provider writes')
+  .option('-p, --provider <provider...>', 'provider(s) to include', parseProviderList)
+  .option('-c, --content <content...>', 'content type(s) to include', parseContentList)
+  .action(async (options: { provider?: ProviderId[]; content?: ApplyContent[] }) => {
+    printJson(await previewApplyStructured({ providers: options.provider, contents: options.content }));
+  });
+
+apply
+  .command('apply')
+  .description('Apply a structured preview if its digest is still current')
+  .requiredOption('--digest <digest>', 'digest returned by apply-structured preview')
+  .option('-p, --provider <provider...>', 'provider(s) to include', parseProviderList)
+  .option('-c, --content <content...>', 'content type(s) to include', parseContentList)
+  .action(async (options: { digest: string; provider?: ProviderId[]; content?: ApplyContent[] }) => {
+    printJson(await applyStructuredPreview(options.digest, { providers: options.provider, contents: options.content }));
+  });
+
 const rules = program.command('rules').description('Read and edit master rule documents');
 
 rules
@@ -374,6 +409,133 @@ skills
       console.log(`${adopted.provider}\t${adopted.name}\t${adopted.scope}\t${adopted.destination}`);
     },
   );
+
+skills
+  .command('read')
+  .description('Read a managed skill file')
+  .requiredOption('--scope <scope>', 'shared or provider', parseSkillScope)
+  .option('--provider <provider>', 'provider for provider-scoped skills', parseProvider)
+  .argument('<name>')
+  .argument('<path>')
+  .option('--json')
+  .action(async (name: string, relativePath: string, options: SkillCommandOptions) => {
+    const document = await readSkillFile(skillScope(options), name, relativePath);
+    if (options.json === true) printJson({ version: 1, document });
+    else process.stdout.write(document.content);
+  });
+
+skills
+  .command('files')
+  .description('List files in a managed skill')
+  .requiredOption('--scope <scope>', 'shared or provider', parseSkillScope)
+  .option('--provider <provider>', 'provider for provider-scoped skills', parseProvider)
+  .argument('<name>')
+  .option('--json')
+  .action(async (name: string, options: SkillCommandOptions) => {
+    const tree = (await listManagedSkillTrees()).find((skill) => skill.name === name && sameSkillScope(skill.scope, options));
+    if (tree === undefined) throw new Error(`Skill does not exist: ${name}`);
+    if (options.json === true) printJson({ version: 1, tree });
+    else tree.files.forEach((file) => console.log(file.path));
+  });
+
+skills
+  .command('create')
+  .description('Create a managed skill with SKILL.md from stdin')
+  .requiredOption('--scope <scope>', 'shared or provider', parseSkillScope)
+  .option('--provider <provider>', 'provider for provider-scoped skills', parseProvider)
+  .argument('<name>')
+  .option('--json')
+  .action(async (name: string, options: SkillCommandOptions) => {
+    const input = await Bun.stdin.text();
+    const document = await createSkill(skillScope(options), name, input.length > 0 ? input : '# Skill\n');
+    if (options.json === true) printJson({ version: 1, document });
+    else console.log(`skills\tcreated\t${name}`);
+  });
+
+skills
+  .command('write')
+  .description('Write a managed skill file from stdin')
+  .requiredOption('--scope <scope>', 'shared or provider', parseSkillScope)
+  .option('--provider <provider>', 'provider for provider-scoped skills', parseProvider)
+  .argument('<name>')
+  .argument('<path>')
+  .option('--json')
+  .action(async (name: string, relativePath: string, options: SkillCommandOptions) => {
+    const document = await writeSkillFile(skillScope(options), name, relativePath, await Bun.stdin.text());
+    if (options.json === true) printJson({ version: 1, document });
+    else console.log(`skills\tsaved\t${name}\t${relativePath}`);
+  });
+
+skills
+  .command('rename')
+  .description('Rename a managed skill')
+  .requiredOption('--scope <scope>', 'shared or provider', parseSkillScope)
+  .option('--provider <provider>', 'provider for provider-scoped skills', parseProvider)
+  .argument('<name>')
+  .argument('<new-name>')
+  .option('--json')
+  .action(async (name: string, newName: string, options: SkillCommandOptions) => {
+    const skill = await renameSkill(skillScope(options), name, newName);
+    if (options.json === true) printJson({ version: 1, skill });
+    else console.log(`skills\trenamed\t${name}\t${newName}`);
+  });
+
+skills
+  .command('delete-file')
+  .description('Delete a managed skill file')
+  .requiredOption('--scope <scope>', 'shared or provider', parseSkillScope)
+  .option('--provider <provider>', 'provider for provider-scoped skills', parseProvider)
+  .argument('<name>')
+  .argument('<path>')
+  .action(async (name: string, relativePath: string, options: SkillCommandOptions) => {
+    await deleteSkillFile(skillScope(options), name, relativePath);
+    console.log(`skills\tdeleted-file\t${name}\t${relativePath}`);
+  });
+
+skills
+  .command('rename-file')
+  .description('Rename a managed skill file')
+  .requiredOption('--scope <scope>', 'shared or provider', parseSkillScope)
+  .option('--provider <provider>', 'provider for provider-scoped skills', parseProvider)
+  .argument('<name>')
+  .argument('<path>')
+  .argument('<new-path>')
+  .action(async (name: string, filePath: string, newPath: string, options: SkillCommandOptions) => {
+    await renameSkillFile(skillScope(options), name, filePath, newPath);
+    console.log(`skills\trenamed-file\t${name}\t${filePath}\t${newPath}`);
+  });
+
+skills
+  .command('delete')
+  .description('Delete a managed skill')
+  .requiredOption('--scope <scope>', 'shared or provider', parseSkillScope)
+  .option('--provider <provider>', 'provider for provider-scoped skills', parseProvider)
+  .argument('<name>')
+  .action(async (name: string, options: SkillCommandOptions) => {
+    await deleteSkill(skillScope(options), name);
+    console.log(`skills\tdeleted\t${name}`);
+  });
+
+const mcp = program.command('mcp').description('Read and edit master MCP definitions');
+
+mcp.command('list').option('--json').action(async (options: { json?: boolean }) => {
+  const result = await listMcpServers();
+  const servers = result.servers;
+  if (options.json === true) printJson({ version: 1, servers });
+  else for (const entry of servers) console.log(`${entry.name}\t${entry.server.url ?? entry.server.command ?? ''}`);
+});
+
+mcp.command('upsert').argument('<name>').option('--json').action(async (name: string, options: { json?: boolean }) => {
+  const input = JSON.parse(await Bun.stdin.text()) as McpServerDef;
+  const server = await upsertMcpServer(name, input);
+  if (options.json === true) printJson({ version: 1, server });
+  else console.log(`mcp\tsaved\t${name}`);
+});
+
+mcp.command('delete').argument('<name>').action(async (name: string) => {
+  await deleteMcpServer(name);
+  console.log(`mcp\tdeleted\t${name}`);
+});
 
 program
   .command('login')
@@ -641,6 +803,24 @@ interface SafetyJson {
 interface BuildOnboardingPlanOptions {
   providers: ProviderId[];
   contents: ApplyContent[];
+}
+
+interface SkillCommandOptions {
+  scope: SkillAdoptionScope;
+  provider?: ProviderId;
+  json?: boolean;
+}
+
+function skillScope(options: SkillCommandOptions): SkillScope {
+  if (options.scope === 'provider') {
+    if (options.provider === undefined) throw new InvalidArgumentError('--provider is required for provider scope');
+    return { kind: 'provider', provider: options.provider };
+  }
+  return { kind: 'shared' };
+}
+
+function sameSkillScope(scope: SkillScope, options: SkillCommandOptions): boolean {
+  return options.scope === 'shared' ? scope.kind === 'shared' : scope.kind === 'provider' && scope.provider === options.provider;
 }
 
 function safetyDefaults(): SafetyJson {
