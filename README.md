@@ -4,6 +4,8 @@
 
 Reglet is a local-first control plane for AI agent configuration. It turns rules, skills, and MCP servers into infrastructure: one versionable master directory, deterministic provider adapters, backups, drift detection, optional daemon apply, and self-hosted sync.
 
+Reglet is complete in local-only mode: installing the app or CLI does not install a server, create an account, make network requests, or enable background work. Multi-device sync is optional through either Reglet Cloud or the standalone public self-hosted server.
+
 ```text
 ~/.reglet/                 provider outputs
   rules/*.md        -+     ~/.claude/CLAUDE.md
@@ -29,6 +31,7 @@ Reglet is built for engineers who treat agent setup as workstation infrastructur
 | Restore / revert | implemented |
 | Daemon watching | opt-in, implemented |
 | Self-hosted sync | implemented |
+| Reglet Cloud | private hosted beta in progress |
 | Homebrew tap | implemented |
 | Mac setup app | implemented, installer blocked on Developer ID |
 | Signed/notarized installer | blocked |
@@ -177,6 +180,15 @@ apps/macos/RegletSetup
 
 ## Self-Hosted Sync
 
+The sync server is distributed separately from the Reglet client. The app, CLI, Homebrew cask, and daemon do not bundle or run it.
+
+Recommended container install:
+
+```bash
+export REGLET_TOKEN="$(openssl rand -base64 32)"
+docker compose up -d
+```
+
 Run a local sync server:
 
 ```bash
@@ -191,6 +203,8 @@ reglet sync
 ```
 
 Sync scope is the master directory only: `rules/`, `skills/`, `mcp/servers.json`, and `reglet.toml`. Provider-specific skills sync naturally because they are nested under `skills/<provider>/`. Reglet never syncs `.state/`.
+
+The independently versioned multi-architecture image is published as `ghcr.io/elijahbutler/reglet-sync`. See [Self-hosting](docs/self-hosting.md) for upgrades, backups, rollback, and the public protocol contract.
 
 ## Development
 

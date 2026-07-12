@@ -975,48 +975,94 @@ struct DriftRow: View {
 }
 
 struct SyncManagerView: View {
+  private enum SyncMode: String, CaseIterable, Identifiable {
+    case local, cloud, selfHosted
+    var id: String { rawValue }
+    var title: String {
+      switch self {
+      case .local: "Local only"
+      case .cloud: "Reglet Cloud"
+      case .selfHosted: "Self-hosted"
+      }
+    }
+  }
+
   @EnvironmentObject private var model: SetupModel
   @State private var serverUrl = ""
   @State private var token = ""
   @State private var deviceName = ""
   @State private var isEditingConnection = false
+  @State private var syncMode: SyncMode = .local
 
   private var syncInfo: StatusResponse.SyncInfo? { model.status?.sync }
   private var showsForm: Bool { !(syncInfo?.configured ?? false) || isEditingConnection }
+  private var cloudUrl: String {
+    ProcessInfo.processInfo.environment["REGLET_CLOUD_SYNC_URL"] ?? "https://sync.reglet.cloud"
+  }
 
   var body: some View {
     Form {
       if showsForm {
-        Section("Self-hosted sync server") {
-          TextField("Server URL", text: $serverUrl, prompt: Text("https://sync.example.com"))
-            .textContentType(.URL)
-            .autocorrectionDisabled()
-          SecureField("Server token", text: $token)
-          TextField("Device name", text: $deviceName, prompt: Text("this-mac"))
-          HStack {
-            if isEditingConnection {
-              Button("Cancel") { isEditingConnection = false }
+        Section("Sync mode") {
+          Picker("Sync mode", selection: $syncMode) {
+            ForEach(SyncMode.allCases) { mode in
+              Text(mode.title).tag(mode)
             }
-            Spacer()
-            Button("Connect") {
-              Task {
-                if await model.configureSync(
-                  url: serverUrl,
-                  token: token,
-                  device: deviceName.isEmpty ? "device" : deviceName
-                ) {
-                  token = ""
-                  isEditingConnection = false
-                  await model.runSync()
+          }
+          .pickerStyle(.segmented)
+
+          switch syncMode {
+          case .local:
+            Label("Everything stays on this Mac. No account, server, or network connection is required.", systemImage: "macbook")
+          case .cloud:
+            Label("Managed multi-device sync for people who do not want to operate a server.", systemImage: "cloud")
+          case .selfHosted:
+            Label("Connect to the public Reglet sync server you operate.", systemImage: "server.rack")
+          }
+        }
+
+        if syncMode != .local {
+          Section(syncMode == .cloud ? "Reglet Cloud beta" : "Self-hosted server") {
+            if syncMode == .selfHosted {
+              TextField("Server URL", text: $serverUrl, prompt: Text("https://sync.example.com"))
+                .textContentType(.URL)
+                .autocorrectionDisabled()
+            } else {
+              LabeledContent("Service", value: cloudUrl)
+              Text("Use the beta access token from your Reglet Cloud account.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            SecureField(syncMode == .cloud ? "Beta access token" : "Server token", text: $token)
+            TextField("Device name", text: $deviceName, prompt: Text("this-mac"))
+            HStack {
+              if isEditingConnection {
+                Button("Cancel") { isEditingConnection = false }
+              }
+              Spacer()
+              Button("Connect") {
+                Task {
+                  let selectedUrl = syncMode == .cloud ? cloudUrl : serverUrl
+                  if await model.configureSync(
+                    url: selectedUrl,
+                    token: token,
+                    device: deviceName.isEmpty ? "device" : deviceName
+                  ) {
+                    token = ""
+                    isEditingConnection = false
+                    await model.runSync()
+                  }
                 }
               }
+              .buttonStyle(.borderedProminent)
+              .disabled((syncMode == .selfHosted && serverUrl.isEmpty) || token.isEmpty || model.isWorking)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(serverUrl.isEmpty || token.isEmpty || model.isWorking)
           }
         }
         Section {
-          Text("Sync runs only when you start it. No background sync is enabled here, and the token is stored locally in ~/.reglet/.state.")
+          Text(syncMode == .local
+            ? "You can add Cloud or self-hosted sync later without changing or losing your master directory."
+            : "Sync runs only when you start it. Background sync and the daemon remain separate opt-ins, and the token is stored locally in ~/.reglet/.state.")
             .font(.caption)
             .foregroundStyle(.secondary)
         }
@@ -1028,6 +1074,7 @@ struct SyncManagerView: View {
             Button("Change Connection…") {
               serverUrl = syncInfo.serverUrl
               deviceName = syncInfo.deviceName
+              syncMode = syncInfo.serverUrl == cloudUrl ? .cloud : .selfHosted
               isEditingConnection = true
             }
             Spacer()
