@@ -21,6 +21,11 @@ struct RegletSetupApp: App {
           Task { await model.checkForUpdates() }
         }
         .disabled(model.isCheckingForUpdates)
+
+        Toggle("Automatically check for updates", isOn: Binding(
+          get: { model.automaticUpdateChecks },
+          set: { model.setAutomaticUpdateChecks($0) }
+        ))
       }
     }
   }
@@ -98,7 +103,7 @@ struct ContentView: View {
 }
 
 enum ManagerSection: String, CaseIterable, Identifiable {
-  case providers, rules, skills, mcp, sync, activity, recovery
+  case providers, rules, skills, mcp, activity, recovery
 
   var id: String { rawValue }
   var title: String {
@@ -107,7 +112,6 @@ enum ManagerSection: String, CaseIterable, Identifiable {
     case .rules: "Rules"
     case .skills: "Skills"
     case .mcp: "MCP"
-    case .sync: "Sync"
     case .activity: "Activity & Drift"
     case .recovery: "Recovery"
     }
@@ -118,7 +122,6 @@ enum ManagerSection: String, CaseIterable, Identifiable {
     case .rules: "doc.text"
     case .skills: "hammer"
     case .mcp: "server.rack"
-    case .sync: "arrow.triangle.2.circlepath"
     case .activity: "waveform.path.ecg"
     case .recovery: "clock.arrow.circlepath"
     }
@@ -138,7 +141,6 @@ struct ManagerDetail: View {
       case .recovery: RecoveryManagerView()
       case .rules: RulesManagerView()
       case .mcp: McpManagerView()
-      case .sync: SyncManagerView()
       case .activity: ActivityDriftManagerView()
       }
     }
@@ -150,6 +152,7 @@ struct ManagerDetail: View {
         } label: {
           Label("Refresh", systemImage: "arrow.clockwise")
         }
+        .keyboardShortcut("r", modifiers: .command)
         .disabled(model.isWorking)
       }
     }
@@ -159,6 +162,7 @@ struct ManagerDetail: View {
 struct ProvidersManagerView: View {
   @EnvironmentObject private var model: SetupModel
   @Binding var showsOnboarding: Bool
+  @State private var providerToStop: String?
 
   var body: some View {
     List {
@@ -179,6 +183,10 @@ struct ProvidersManagerView: View {
               Text([provider.contents.rules ? "Rules" : nil, provider.contents.skills ? "Skills" : nil, provider.contents.mcp ? "MCP" : nil].compactMap { $0 }.joined(separator: " · "))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+              Button("Stop Managing…", role: .destructive) {
+                providerToStop = provider.id
+              }
+              .disabled(model.isWorking)
             }
           }
           .padding(.vertical, 4)
@@ -203,25 +211,54 @@ struct ProvidersManagerView: View {
       .padding()
       .background(.regularMaterial)
     }
+    .confirmationDialog(
+      "Stop managing this provider?",
+      isPresented: Binding(
+        get: { providerToStop != nil },
+        set: { if !$0 { providerToStop = nil } }
+      ),
+      titleVisibility: .visible
+    ) {
+      Button("Stop Managing", role: .destructive) {
+        if let providerToStop {
+          Task { await model.stopManaging(provider: providerToStop) }
+        }
+        providerToStop = nil
+      }
+      Button("Cancel", role: .cancel) { providerToStop = nil }
+    } message: {
+      Text("Reglet preserves the provider's current files, clears ownership, and removes generated rules headers where applicable.")
+    }
   }
 }
 
 struct SkillsManagerView: View {
   @EnvironmentObject private var model: SetupModel
   @State private var editingSkill: SkillEditorTarget?
-  @State private var applyPreview: StructuredApplyPreview?
+  @State private var applyPreview: ApplyReviewScope?
   @State private var showsNewSkill = false
+  @State private var searchText = ""
+  @State private var confirmsAdoptionOverwrite = false
 
   private var overview: SkillsOverviewResponse? { model.skillsOverview }
+  private var sharedSkills: [SharedSkillSummary] {
+    (overview?.shared ?? []).filter { matches($0.name, $0.path) }
+  }
+  private var providerScopedSkills: [ProviderScopedSkillSummary] {
+    (overview?.providerScoped ?? []).filter { matches($0.name, $0.provider, $0.path) }
+  }
+  private var unmanagedSkills: [UnmanagedSkill] {
+    model.unmanagedSkills.filter { matches($0.name, $0.provider, $0.sourcePath) }
+  }
 
   var body: some View {
     VStack(spacing: 0) {
       List {
         Section("Unified (shared)") {
-          if (overview?.shared ?? []).isEmpty {
+          if sharedSkills.isEmpty {
             Text("No shared skills yet.").foregroundStyle(.secondary)
           } else {
-            ForEach(overview?.shared ?? []) { skill in
+            ForEach(sharedSkills) { skill in
               VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
                   Text(skill.name)
@@ -241,10 +278,10 @@ struct SkillsManagerView: View {
         }
 
         Section("Provider-scoped") {
-          if (overview?.providerScoped ?? []).isEmpty {
+          if providerScopedSkills.isEmpty {
             Text("No provider-scoped skills.").foregroundStyle(.secondary)
           } else {
-            ForEach(overview?.providerScoped ?? []) { skill in
+            ForEach(providerScopedSkills) { skill in
               VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
                   Text(skill.name)
@@ -266,14 +303,15 @@ struct SkillsManagerView: View {
         }
 
         Section("Provider-local (unmanaged)") {
-          if model.unmanagedSkills.isEmpty {
+          if unmanagedSkills.isEmpty {
             Text("No local skills to review. Provider-local skills stay untouched until adopted.")
               .foregroundStyle(.secondary)
           } else {
-            UnmanagedSkillsGroups(skills: model.unmanagedSkills)
+            UnmanagedSkillsGroups(skills: unmanagedSkills)
           }
         }
       }
+      .searchable(text: $searchText, placement: .toolbar, prompt: "Filter skills")
       .overlay {
         if overview == nil && !model.isWorking {
           ContentUnavailableView("Skills unavailable", systemImage: "hammer", description: Text("Refresh to scan this Mac."))
@@ -282,16 +320,32 @@ struct SkillsManagerView: View {
 
       Divider()
       HStack {
-        Text("Adoption applies skills to every enrolled provider.")
+        Text("Adoption saves skills to the master. Review & Apply distributes them.")
           .font(.caption).foregroundStyle(.secondary)
         Spacer()
         Button("New Skill…") { showsNewSkill = true }
-        Button("Preview Apply…") { Task { applyPreview = await model.previewApply(content: .skills) } }
+        Button("Preview Apply…") {
+          Task {
+            if let preview = await model.previewApply(content: .skills) {
+              applyPreview = ApplyReviewScope(
+                preview: preview,
+                contents: [.skills],
+                providers: [],
+                title: "Review Skills Apply"
+              )
+            }
+          }
+        }
+        .keyboardShortcut(.defaultAction)
           .disabled(model.isWorking)
         Button {
-          Task { await model.adoptSelectedSkills() }
+          if model.hasPendingSkillOverwrite() {
+            confirmsAdoptionOverwrite = true
+          } else {
+            Task { await model.adoptSelectedSkills() }
+          }
         } label: {
-          Label("Adopt Selected", systemImage: "square.and.arrow.down")
+          Label("Adopt Selected to Master", systemImage: "square.and.arrow.down")
         }
         .buttonStyle(.borderedProminent)
         .disabled(model.checkedSkills.isEmpty || model.isWorking)
@@ -305,10 +359,23 @@ struct SkillsManagerView: View {
     .sheet(isPresented: $showsNewSkill) {
       NewSkillView().environmentObject(model)
     }
-    .sheet(item: $applyPreview) { preview in
-      ApplyPreviewView(preview: preview, content: .skills) { applyPreview = nil }
+    .sheet(item: $applyPreview) { scope in
+      ApplyPreviewView(scope: scope, close: { applyPreview = nil }, applied: {})
         .environmentObject(model)
     }
+    .confirmationDialog("Overwrite selected master skills?", isPresented: $confirmsAdoptionOverwrite) {
+      Button("Overwrite and Adopt", role: .destructive) {
+        Task { await model.adoptSelectedSkills() }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("This replaces existing skill files in the master directory. Provider copies will not change until you review and apply Skills.")
+    }
+  }
+
+  private func matches(_ values: String...) -> Bool {
+    let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    return query.isEmpty || values.contains { $0.localizedCaseInsensitiveContains(query) }
   }
 }
 
@@ -376,6 +443,7 @@ struct SkillEditorView: View {
                 .font(.caption).foregroundStyle(content == savedContent ? Color.secondary : Color.orange)
               Spacer()
               Button("Save") { save() }.buttonStyle(.borderedProminent)
+                .keyboardShortcut("s", modifiers: .command)
                 .disabled(content == savedContent || model.isWorking)
             }.padding()
           } else {
@@ -459,13 +527,39 @@ struct NewSkillView: View {
   @State private var name = ""
   @State private var provider = ""
   @State private var content = "# New Skill\n"
+  @State private var confirmsDiscard = false
+  private var hasUnsavedDraft: Bool {
+    !name.isEmpty || !provider.isEmpty || content != "# New Skill\n"
+  }
   var body: some View {
     Form {
       TextField("Skill name", text: $name)
       TextField("Provider (blank for shared)", text: $provider)
       TextEditor(text: $content).font(.system(.body, design: .monospaced)).frame(minHeight: 220)
-      HStack { Spacer(); Button("Cancel") { dismiss() }; Button("Save to Master") { Task { if await model.createSkill(name: name, provider: provider.isEmpty ? nil : provider, content: content) { dismiss() } } }.buttonStyle(.borderedProminent).disabled(name.isEmpty) }
-    }.padding().frame(width: 560, height: 400)
+      HStack {
+        Spacer()
+        Button("Cancel") {
+          if hasUnsavedDraft {
+            confirmsDiscard = true
+          } else {
+            dismiss()
+          }
+        }
+        Button("Save to Master") {
+          Task { if await model.createSkill(name: name, provider: provider.isEmpty ? nil : provider, content: content) { dismiss() } }
+        }
+        .buttonStyle(.borderedProminent)
+        .keyboardShortcut("s", modifiers: .command)
+        .disabled(name.isEmpty)
+      }
+    }
+    .padding()
+    .frame(width: 560, height: 400)
+    .interactiveDismissDisabled(hasUnsavedDraft)
+    .confirmationDialog("Discard new skill draft?", isPresented: $confirmsDiscard) {
+      Button("Discard", role: .destructive) { dismiss() }
+      Button("Keep Editing", role: .cancel) {}
+    }
   }
 }
 
@@ -656,9 +750,12 @@ struct McpManagerView: View {
   @State private var url = ""
   @State private var env = ""
   @State private var saved = McpServerDefinition()
-  @State private var applyPreview: StructuredApplyPreview?
+  @State private var applyPreview: ApplyReviewScope?
   @State private var pendingName: String?
   @State private var resolvesUnsavedSelection = false
+  @State private var confirmsDelete = false
+  @State private var confirmsOverwrite = false
+  @State private var searchText = ""
 
   private var definition: McpServerDefinition {
     transport == 0
@@ -672,11 +769,14 @@ struct McpManagerView: View {
   var body: some View {
     HSplitView {
       VStack(spacing: 0) {
-        List(model.mcpServers, selection: $selectedName) { entry in
+        TextField("Filter servers", text: $searchText)
+          .textFieldStyle(.roundedBorder)
+          .padding(8)
+        List(filteredServers, selection: $selectedName) { entry in
           VStack(alignment: .leading) { Text(entry.name); if !entry.issues.isEmpty { Text(entry.issues.joined(separator: ", ")).font(.caption).foregroundStyle(.red) } }.tag(entry.name)
         }
         Divider()
-        Button("New Server") { selectedName = nil; clear() }.padding()
+        Button("New Server") { selectedName = nil }.padding()
       }.frame(minWidth: 220)
       Form {
         TextField("Server name", text: $name)
@@ -684,63 +784,159 @@ struct McpManagerView: View {
         if transport == 0 {
           TextField("Command", text: $command)
           TextField("Arguments (one per line)", text: $args, axis: .vertical).lineLimit(3...8)
-          TextField("Environment (KEY=value, one per line)", text: $env, axis: .vertical).lineLimit(3...8)
-          Text("Environment values are stored as plain text in the synced master definition.").font(.caption).foregroundStyle(.orange)
+          TextField("Environment (OUTPUT_KEY=LOCAL_VARIABLE, one per line)", text: $env, axis: .vertical).lineLimit(3...8)
+          Text("Reglet stores only local process-environment variable names. Values are resolved in memory during apply and never shown here.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
         } else {
           TextField("https://server.example/mcp", text: $url)
         }
         HStack {
-          if selectedName != nil { Button("Delete", role: .destructive) { Task { if await model.deleteMcp(name: name) { clear() } } } }
+          if selectedName != nil {
+            Button("Delete", role: .destructive) { confirmsDelete = true }
+          }
           Spacer()
           Text(definition == saved ? "Saved to master — not applied" : "Unsaved changes").font(.caption).foregroundStyle(definition == saved ? Color.secondary : Color.orange)
-          Button("Save") { Task { if await model.saveMcp(name: name, definition: definition) { saved = definition; selectedName = name } } }.buttonStyle(.borderedProminent).disabled(!valid || definition == saved)
+          Button("Save") {
+            if selectedName == nil && !model.mcpServers.contains(where: { $0.name == name }) {
+              Task { if await model.saveMcp(name: name, definition: definition) { saved = definition; selectedName = name } }
+            } else {
+              confirmsOverwrite = true
+            }
+          }
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut("s", modifiers: .command)
+            .disabled(!valid || definition == saved)
         }
       }.formStyle(.grouped).frame(minWidth: 500)
     }
     .safeAreaInset(edge: .bottom) {
-      HStack { Spacer(); Button("Preview Apply…") { Task { applyPreview = await model.previewApply(content: .mcp) } }.buttonStyle(.borderedProminent).disabled(model.isWorking) }.padding().background(.regularMaterial)
+      HStack {
+        Spacer()
+        Button("Preview Apply…") {
+          Task {
+            if let preview = await model.previewApply(content: .mcp) {
+              applyPreview = ApplyReviewScope(
+                preview: preview,
+                contents: [.mcp],
+                providers: [],
+                title: "Review MCP Apply"
+              )
+            }
+          }
+        }
+        .buttonStyle(.borderedProminent)
+        .keyboardShortcut(.defaultAction)
+        .disabled(model.isWorking)
+      }
+      .padding()
+      .background(.regularMaterial)
     }
     .onChange(of: selectedName) { oldValue, value in
       if definition != saved && oldValue != nil {
         pendingName = value; selectedName = oldValue; resolvesUnsavedSelection = true
       } else { load(value) }
     }
-    .sheet(item: $applyPreview) { preview in ApplyPreviewView(preview: preview, content: .mcp) { applyPreview = nil }.environmentObject(model) }
+    .sheet(item: $applyPreview) { scope in
+      ApplyPreviewView(scope: scope, close: { applyPreview = nil }, applied: {})
+        .environmentObject(model)
+    }
     .confirmationDialog("Save changes before switching servers?", isPresented: $resolvesUnsavedSelection) {
       Button("Save") { Task { if await model.saveMcp(name: name, definition: definition) { saved = definition; selectedName = pendingName; pendingName = nil } } }
       Button("Discard Changes", role: .destructive) { saved = definition; selectedName = pendingName; pendingName = nil }
       Button("Cancel", role: .cancel) { pendingName = nil }
     }
+    .confirmationDialog("Delete \(name)?", isPresented: $confirmsDelete) {
+      Button("Delete from Master", role: .destructive) {
+        Task {
+          if await model.deleteMcp(name: name) {
+            clear()
+          }
+        }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("This deletes the canonical server definition. Existing provider copies remain until you review and apply MCP.")
+    }
+    .confirmationDialog("Replace \(name)?", isPresented: $confirmsOverwrite) {
+      Button("Replace in Master", role: .destructive) {
+        Task { if await model.saveMcp(name: name, definition: definition) { saved = definition; selectedName = name } }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("This replaces the canonical MCP definition. Existing provider copies remain unchanged until you review and apply MCP.")
+    }
   }
 
   private func load(_ selected: String?) {
+    guard let selected else {
+      clear()
+      return
+    }
     guard let entry = model.mcpServers.first(where: { $0.name == selected }) else { return }
-    name = entry.name; command = entry.server.command ?? ""; args = (entry.server.args ?? []).joined(separator: "\n"); url = entry.server.url ?? ""; env = (entry.server.env ?? [:]).sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "\n"); transport = entry.server.url == nil ? 0 : 1; saved = entry.server
+    name = entry.name; command = entry.server.command ?? ""; args = (entry.server.args ?? []).joined(separator: "\n"); url = entry.server.url ?? ""; env = (entry.server.env ?? [:]).sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value.name)" }.joined(separator: "\n"); transport = entry.server.url == nil ? 0 : 1; saved = entry.server
+  }
+  private var filteredServers: [McpServersResponse.Entry] {
+    let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !query.isEmpty else { return model.mcpServers }
+    return model.mcpServers.filter { entry in
+      entry.name.localizedCaseInsensitiveContains(query)
+        || (entry.server.command ?? "").localizedCaseInsensitiveContains(query)
+        || (entry.server.url ?? "").localizedCaseInsensitiveContains(query)
+    }
   }
   private func clear() { selectedName = nil; name = ""; command = ""; args = ""; url = ""; env = ""; transport = 0; saved = McpServerDefinition() }
-  private func parseEnvironment() -> [String: String] {
-    Dictionary(uniqueKeysWithValues: env.split(separator: "\n").compactMap { line in guard let split = line.firstIndex(of: "=") else { return nil }; return (String(line[..<split]), String(line[line.index(after: split)...])) })
+  private func parseEnvironment() -> [String: McpProcessEnvironmentReference] {
+    Dictionary(uniqueKeysWithValues: env.split(separator: "\n").compactMap { line in
+      guard let split = line.firstIndex(of: "=") else { return nil }
+      let key = String(line[..<split]).trimmingCharacters(in: .whitespacesAndNewlines)
+      let name = String(line[line.index(after: split)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !key.isEmpty, !name.isEmpty else { return nil }
+      return (key, McpProcessEnvironmentReference(name: name))
+    })
   }
 }
 
 struct ApplyPreviewView: View {
   @EnvironmentObject private var model: SetupModel
-  let preview: StructuredApplyPreview
-  let content: ContentKind
+  let scope: ApplyReviewScope
   let close: () -> Void
+  let applied: () -> Void
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
-      Text("Preview \(content.label) Apply").font(.title2.weight(.semibold))
-      if !preview.validationIssues.isEmpty { Label(preview.validationIssues.joined(separator: "\n"), systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red) }
-      List(preview.entries) { entry in
+      Text(scope.title).font(.title2.weight(.semibold))
+      if !scope.preview.validationIssues.isEmpty { Label(scope.preview.validationIssues.joined(separator: "\n"), systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red) }
+      List(scope.preview.entries) { entry in
         DisclosureGroup {
           Text(entry.diff).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+          Text("Drift: \(entry.driftStatus)").font(.caption).foregroundStyle(.secondary)
+          if let hash = entry.expectedTargetHash {
+            Text("Expected target hash: \(hash)").font(.system(.caption2, design: .monospaced)).textSelection(.enabled)
+          }
+          if let hash = entry.resultingTargetHash {
+            Text("Resulting target hash: \(hash)").font(.system(.caption2, design: .monospaced)).textSelection(.enabled)
+          }
+          Text("Snapshot: \(entry.snapshot.behavior)\(entry.snapshot.location.map { " → \($0)" } ?? "")").font(.caption).foregroundStyle(.secondary)
           Text("Backup: \(entry.backup.behavior)\(entry.backup.location.map { " → \($0)" } ?? "")").font(.caption).foregroundStyle(.secondary)
         } label: {
           VStack(alignment: .leading) { Text("\(entry.provider) · \(entry.operation)"); Text(entry.path).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary) }
         }
       }
-      HStack { Spacer(); Button("Cancel", action: close); Button("Apply to Providers") { Task { if await model.applyPreview(preview, content: content) { close() } } }.buttonStyle(.borderedProminent).disabled(!preview.validationIssues.isEmpty || model.isWorking) }
+      HStack {
+        Spacer()
+        Button("Cancel", action: close)
+        Button("Apply to Providers") {
+          Task {
+            if await model.applyPreview(scope.preview, contents: scope.contents, providers: scope.providers) {
+              applied()
+              close()
+            }
+          }
+        }
+        .buttonStyle(.borderedProminent)
+        .keyboardShortcut(.defaultAction)
+        .disabled(!scope.preview.validationIssues.isEmpty || model.isWorking)
+      }
     }.padding(24).frame(minWidth: 760, minHeight: 560)
   }
 }
@@ -750,7 +946,9 @@ struct RulesManagerView: View {
   @State private var selectedPath: String?
   @State private var content = ""
   @State private var savedContent = ""
-  @State private var applyPreview: String?
+  @State private var applyPreview: ApplyReviewScope?
+  @State private var pendingPath: String?
+  @State private var resolvesUnsavedSelection = false
 
   private var hasUnsavedChanges: Bool { content != savedContent }
 
@@ -782,11 +980,22 @@ struct RulesManagerView: View {
                 }
               }
             }
+            .keyboardShortcut("s", modifiers: .command)
             .disabled(!hasUnsavedChanges || model.isWorking)
             Button("Preview Apply…") {
-              Task { applyPreview = await model.previewRulesApply() }
+              Task {
+                if let preview = await model.previewApply(content: .rules) {
+                  applyPreview = ApplyReviewScope(
+                    preview: preview,
+                    contents: [.rules],
+                    providers: [],
+                    title: "Review Rules Apply"
+                  )
+                }
+              }
             }
             .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.defaultAction)
             .disabled(hasUnsavedChanges || model.isWorking)
           }
           .padding(12)
@@ -797,13 +1006,13 @@ struct RulesManagerView: View {
       }
       .frame(minWidth: 440)
     }
-    .onChange(of: selectedPath) { _, newPath in
-      guard let newPath else { return }
-      Task {
-        if let loaded = await model.loadRule(path: newPath) {
-          content = loaded
-          savedContent = loaded
-        }
+    .onChange(of: selectedPath) { oldPath, newPath in
+      if hasUnsavedChanges, oldPath != nil, newPath != oldPath {
+        pendingPath = newPath
+        selectedPath = oldPath
+        resolvesUnsavedSelection = true
+      } else {
+        load(newPath)
       }
     }
     .task {
@@ -816,70 +1025,198 @@ struct RulesManagerView: View {
         selectedPath = paths.first
       }
     }
-    .sheet(isPresented: Binding(
-      get: { applyPreview != nil },
-      set: { if !$0 { applyPreview = nil } }
-    )) {
-      VStack(alignment: .leading, spacing: 16) {
-        Text("Preview Rules Apply").font(.title2.weight(.semibold))
-        Text("These provider writes will be performed. Existing files are backed up according to the normal Reglet apply policy.")
-          .foregroundStyle(.secondary)
-        ScrollView {
-          Text(applyPreview ?? "")
-            .font(.system(.body, design: .monospaced))
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding()
-        }
-        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-        HStack {
-          Spacer()
-          Button("Cancel") { applyPreview = nil }
-          Button("Apply to Providers") {
-            applyPreview = nil
-            Task { _ = await model.applyRules() }
+    .sheet(item: $applyPreview) { scope in
+      ApplyPreviewView(scope: scope, close: { applyPreview = nil }, applied: {})
+        .environmentObject(model)
+    }
+    .confirmationDialog("Save changes before switching rules?", isPresented: $resolvesUnsavedSelection) {
+      Button("Save") {
+        guard let currentPath = selectedPath else { return }
+        Task {
+          if await model.saveRule(path: currentPath, content: content) {
+            savedContent = content
+            self.selectedPath = pendingPath
+            pendingPath = nil
           }
-          .buttonStyle(.borderedProminent)
         }
       }
-      .padding(24)
-      .frame(minWidth: 680, minHeight: 480)
+      Button("Discard Changes", role: .destructive) {
+        savedContent = content
+        selectedPath = pendingPath
+        pendingPath = nil
+      }
+      Button("Cancel", role: .cancel) { pendingPath = nil }
+    }
+  }
+
+  private func load(_ path: String?) {
+    guard let path else { return }
+    Task {
+      if let loaded = await model.loadRule(path: path) {
+        content = loaded
+        savedContent = loaded
+      }
     }
   }
 }
 
 struct RecoveryManagerView: View {
   @EnvironmentObject private var model: SetupModel
+  @State private var receiptToRestore: OperationReceipt?
+  @State private var confirmsLegacyClear = false
+
   var body: some View {
-    List(model.scan?.providers.filter { $0.enabled } ?? []) { provider in
-      HStack {
-        Text(provider.displayName)
-        Spacer()
-        Button { Task { await model.restore(provider: provider.id) } } label: {
-          Label("Restore", systemImage: "clock.arrow.circlepath")
-        }
-        Button { Task { await model.revert(provider: provider.id) } } label: {
-          Label("Revert", systemImage: "arrow.uturn.backward")
+    List {
+      Section("Operation receipts") {
+        if model.operationReceipts.isEmpty {
+          Text("No operations have been recorded on this Mac yet.")
+            .foregroundStyle(.secondary)
+        } else {
+          ForEach(model.operationReceipts) { receipt in
+            VStack(alignment: .leading, spacing: 6) {
+              HStack {
+                Text(receipt.lifecycle.capitalized)
+                  .font(.headline)
+                Spacer()
+                Text("\(receipt.targets.count) target\(receipt.targets.count == 1 ? "" : "s")")
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              }
+              Text(receipt.startedAt)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+              ForEach(receipt.targets.prefix(3)) { target in
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(target.path)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                  Text(target.snapshot.map { "Snapshot: \($0)" } ?? "Snapshot: target did not exist")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .textSelection(.enabled)
+                }
+              }
+              if receipt.targets.count > 3 {
+                Text("+ \(receipt.targets.count - 3) more path(s)")
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              }
+              Button("Restore this receipt…", role: .destructive) {
+                receiptToRestore = receipt
+              }
+              .disabled(model.isWorking || receipt.targets.isEmpty)
+            }
+            .padding(.vertical, 4)
+          }
         }
       }
-      .padding(.vertical, 4)
+
+      if let legacy = model.legacyNetworkState, legacy.present {
+        Section("Inert legacy network state") {
+          Text("Older local credentials and snapshots are inactive. Clearing them is permanent.")
+            .foregroundStyle(.secondary)
+          ForEach(legacy.paths, id: \.self) { path in
+            Text(path)
+              .font(.system(.caption, design: .monospaced))
+              .textSelection(.enabled)
+          }
+          Button("Clear Legacy State…", role: .destructive) {
+            confirmsLegacyClear = true
+          }
+          .disabled(model.isWorking)
+        }
+      }
+    }
+    .confirmationDialog(
+      "Restore provider files from this receipt?",
+      isPresented: Binding(
+        get: { receiptToRestore != nil },
+        set: { if !$0 { receiptToRestore = nil } }
+      ),
+      titleVisibility: .visible
+    ) {
+      Button("Restore", role: .destructive) {
+        if let receiptToRestore {
+          Task { await model.restoreOperation(receiptToRestore.id) }
+        }
+        receiptToRestore = nil
+      }
+      Button("Cancel", role: .cancel) { receiptToRestore = nil }
+    } message: {
+      Text("This replaces each listed provider path with its private snapshot from the selected operation.")
+    }
+    .confirmationDialog(
+      "Clear inert legacy network state?",
+      isPresented: $confirmsLegacyClear,
+      titleVisibility: .visible
+    ) {
+      Button("Clear State", role: .destructive) {
+        Task { await model.clearLegacyNetworkState() }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("This permanently removes inactive pre-V1 credentials and snapshots from this Mac.")
     }
   }
 }
 
 struct ActivityDriftManagerView: View {
   @EnvironmentObject private var model: SetupModel
+  @State private var reviewedReplacement: ApplyReviewScope?
 
   private var drift: [DriftRecord] { model.status?.drift ?? [] }
   private var drifted: [DriftRecord] { drift.filter { $0.status != "clean" } }
   private var clean: [DriftRecord] { drift.filter { $0.status == "clean" } }
+  private var latestReceipt: OperationReceipt? { model.operationReceipts.first }
+  private var managedProviders: [StatusResponse.Provider] {
+    model.status?.providers.filter(\.enabled) ?? []
+  }
+  private var diagnostics: String {
+    let receipt = latestReceipt.map { "lastReceipt=\($0.id) lifecycle=\($0.lifecycle) targets=\($0.targets.count)" } ?? "lastReceipt=none"
+    return "managedProviders=\(managedProviders.count) drifted=\(drifted.count) \(receipt)"
+  }
 
   var body: some View {
     List {
+      Section("Manager status") {
+        if managedProviders.isEmpty {
+          Text("No provider scopes are managed yet.")
+            .foregroundStyle(.secondary)
+        } else {
+          ForEach(managedProviders) { provider in
+            Text("\(model.providerDisplayName(provider.id)): \([provider.contents.rules ? "Rules" : nil, provider.contents.skills ? "Skills" : nil, provider.contents.mcp ? "MCP" : nil].compactMap { $0 }.joined(separator: ", "))")
+              .font(.caption)
+          }
+        }
+      }
+
+      Section("Latest operation") {
+        if let receipt = latestReceipt {
+          Text(receipt.id)
+            .font(.system(.caption, design: .monospaced))
+            .textSelection(.enabled)
+          Text("\(receipt.lifecycle.capitalized) · \(receipt.targets.count) target\(receipt.targets.count == 1 ? "" : "s")")
+          if let message = receipt.recovery.message {
+            Text(message)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+          if receipt.lifecycle == "rolled-back" {
+            Text("Resolve the reported issue, then create a fresh review before retrying.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+        } else {
+          Text("No operation receipt yet. Review & Apply creates one for every provider mutation.")
+            .foregroundStyle(.secondary)
+        }
+      }
+
       if !drifted.isEmpty {
         Section("Needs attention") {
           ForEach(drifted) { record in
-            DriftRow(record: record)
+            DriftRow(record: record, reviewedReplacement: $reviewedReplacement)
           }
         }
       }
@@ -904,6 +1241,15 @@ struct ActivityDriftManagerView: View {
           }
         }
       }
+
+      Section("Copyable diagnostics") {
+        Text(diagnostics)
+          .font(.system(.caption, design: .monospaced))
+          .textSelection(.enabled)
+        Text("Include this local summary when reporting a retry or recovery problem. It contains no resolved environment values.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
     }
     .overlay {
       if model.status == nil && !model.isWorking {
@@ -927,12 +1273,17 @@ struct ActivityDriftManagerView: View {
         .background(.regularMaterial)
       }
     }
+    .sheet(item: $reviewedReplacement) { scope in
+      ApplyPreviewView(scope: scope, close: { reviewedReplacement = nil }, applied: {})
+      .environmentObject(model)
+    }
   }
 }
 
 struct DriftRow: View {
   @EnvironmentObject private var model: SetupModel
   let record: DriftRecord
+  @Binding var reviewedReplacement: ApplyReviewScope?
 
   private var isMissing: Bool { record.status == "missing" }
 
@@ -949,8 +1300,8 @@ struct DriftRow: View {
           .foregroundStyle(.secondary)
           .textSelection(.enabled)
         Text(isMissing
-          ? "The managed file was removed. Re-apply recreates it from the master."
-          : "Import keeps the edits in the master; Re-apply overwrites them.")
+          ? "The managed file was removed. Review the replacement before recreating it from the master."
+          : "Import keeps the edits in the master; review the exact replacement before overwriting it.")
           .font(.caption)
           .foregroundStyle(.tertiary)
       }
@@ -963,169 +1314,24 @@ struct DriftRow: View {
       .disabled(isMissing || model.isWorking)
       .help("Copy the provider's edits back into the master directory")
       Button {
-        Task { await model.reapply(provider: record.provider, content: record.content) }
+        guard let content = ContentKind(rawValue: record.content) else { return }
+        Task {
+          if let preview = await model.previewApply(content: content, provider: record.provider) {
+            reviewedReplacement = ApplyReviewScope(
+              preview: preview,
+              contents: [content],
+              providers: [record.provider],
+              title: "Review Drift Replacement"
+            )
+          }
+        }
       } label: {
-        Label("Re-apply", systemImage: "arrow.clockwise.circle")
+        Label("Review Replace", systemImage: "doc.text.magnifyingglass")
       }
       .disabled(model.isWorking)
-      .help("Overwrite the provider file from the master")
+      .help("Review the exact replacement before overwriting the provider file")
     }
     .padding(.vertical, 4)
-  }
-}
-
-struct SyncManagerView: View {
-  private enum SyncMode: String, CaseIterable, Identifiable {
-    case local, cloud, selfHosted
-    var id: String { rawValue }
-    var title: String {
-      switch self {
-      case .local: "Local only"
-      case .cloud: "Reglet Cloud"
-      case .selfHosted: "Self-hosted"
-      }
-    }
-  }
-
-  @EnvironmentObject private var model: SetupModel
-  @State private var serverUrl = ""
-  @State private var token = ""
-  @State private var deviceName = ""
-  @State private var isEditingConnection = false
-  @State private var syncMode: SyncMode = .local
-
-  private var syncInfo: StatusResponse.SyncInfo? { model.status?.sync }
-  private var showsForm: Bool { !(syncInfo?.configured ?? false) || isEditingConnection }
-  private var cloudUrl: String {
-    ProcessInfo.processInfo.environment["REGLET_CLOUD_SYNC_URL"] ?? "https://sync.reglet.cloud"
-  }
-
-  var body: some View {
-    Form {
-      if showsForm {
-        Section("Sync mode") {
-          Picker("Sync mode", selection: $syncMode) {
-            ForEach(SyncMode.allCases) { mode in
-              Text(mode.title).tag(mode)
-            }
-          }
-          .pickerStyle(.segmented)
-
-          switch syncMode {
-          case .local:
-            Label("Everything stays on this Mac. No account, server, or network connection is required.", systemImage: "macbook")
-          case .cloud:
-            Label("Managed multi-device sync for people who do not want to operate a server.", systemImage: "cloud")
-          case .selfHosted:
-            Label("Connect to the public Reglet sync server you operate.", systemImage: "server.rack")
-          }
-        }
-
-        if syncMode != .local {
-          Section(syncMode == .cloud ? "Reglet Cloud beta" : "Self-hosted server") {
-            if syncMode == .selfHosted {
-              TextField("Server URL", text: $serverUrl, prompt: Text("https://sync.example.com"))
-                .textContentType(.URL)
-                .autocorrectionDisabled()
-            } else {
-              LabeledContent("Service", value: cloudUrl)
-              Text("Use the beta access token from your Reglet Cloud account.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            SecureField(syncMode == .cloud ? "Beta access token" : "Server token", text: $token)
-            TextField("Device name", text: $deviceName, prompt: Text("this-mac"))
-            HStack {
-              if isEditingConnection {
-                Button("Cancel") { isEditingConnection = false }
-              }
-              Spacer()
-              Button("Connect") {
-                Task {
-                  let selectedUrl = syncMode == .cloud ? cloudUrl : serverUrl
-                  if await model.configureSync(
-                    url: selectedUrl,
-                    token: token,
-                    device: deviceName.isEmpty ? "device" : deviceName
-                  ) {
-                    token = ""
-                    isEditingConnection = false
-                    await model.runSync()
-                  }
-                }
-              }
-              .buttonStyle(.borderedProminent)
-              .disabled((syncMode == .selfHosted && serverUrl.isEmpty) || token.isEmpty || model.isWorking)
-            }
-          }
-        }
-        Section {
-          Text(syncMode == .local
-            ? "You can add Cloud or self-hosted sync later without changing or losing your master directory."
-            : "Sync runs only when you start it. Background sync and the daemon remain separate opt-ins, and the token is stored locally in ~/.reglet/.state.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-      } else if let syncInfo {
-        Section("Connection") {
-          LabeledContent("Server", value: syncInfo.serverUrl)
-          LabeledContent("Device", value: syncInfo.deviceName)
-          HStack {
-            Button("Change Connection…") {
-              serverUrl = syncInfo.serverUrl
-              deviceName = syncInfo.deviceName
-              syncMode = syncInfo.serverUrl == cloudUrl ? .cloud : .selfHosted
-              isEditingConnection = true
-            }
-            Spacer()
-            Button {
-              Task { await model.runSync() }
-            } label: {
-              Label("Sync Now", systemImage: "arrow.triangle.2.circlepath")
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(model.isWorking)
-          }
-        }
-
-        Section("Last sync") {
-          if let error = model.lastSyncError {
-            Label {
-              Text(error).textSelection(.enabled)
-            } icon: {
-              Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
-            }
-          } else if let result = model.lastSyncResult {
-            LabeledContent("Pulled", value: "\(result.pulled.count)")
-            LabeledContent("Pushed", value: "\(result.pushed.count)")
-            LabeledContent("Deleted", value: "\(result.deleted.count)")
-            if result.conflicts.isEmpty {
-              LabeledContent("Conflicts", value: "0")
-            } else {
-              VStack(alignment: .leading, spacing: 4) {
-                Label("\(result.conflicts.count) conflict\(result.conflicts.count == 1 ? "" : "s") saved as conflict copies", systemImage: "exclamationmark.triangle.fill")
-                  .foregroundStyle(.orange)
-                ForEach(result.conflicts, id: \.self) { conflict in
-                  Text(conflict)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                }
-              }
-            }
-          } else {
-            Text("No sync has run in this session.")
-              .foregroundStyle(.secondary)
-          }
-        }
-      }
-    }
-    .formStyle(.grouped)
-    .overlay {
-      if model.status == nil && !model.isWorking {
-        ContentUnavailableView("Sync status unavailable", systemImage: "arrow.triangle.2.circlepath", description: Text("Refresh to load sync configuration."))
-      }
-    }
   }
 }
 
@@ -1141,6 +1347,8 @@ struct EmptyManagerView: View {
 struct OnboardingView: View {
   @EnvironmentObject private var model: SetupModel
   @State private var step = 0
+  @State private var onboardingReview: ApplyReviewScope?
+  @State private var confirmsOnboardingSkillOverwrite = false
 
   private var showsPromptStep: Bool {
     model.selectedContents.contains(.rules)
@@ -1196,13 +1404,15 @@ struct OnboardingView: View {
         case 4:
           PreviewView(
             back: { step = route.back(from: .preview).rawValue },
-            apply: {
-              Task {
-                guard await model.applySelection() else { return }
-                if !model.checkedSkills.isEmpty {
-                  await model.adoptSelectedSkills(limitedTo: model.selectedProviders)
+            review: {
+              if model.hasPendingSkillOverwrite(limitedTo: model.selectedProviders) {
+                confirmsOnboardingSkillOverwrite = true
+              } else {
+                Task {
+                  if let review = await model.prepareOnboardingReview() {
+                    onboardingReview = review
+                  }
                 }
-                step = 5
               }
             }
           )
@@ -1230,6 +1440,26 @@ struct OnboardingView: View {
       }
     } message: {
       Text(model.errorMessage ?? "")
+    }
+    .sheet(item: $onboardingReview) { scope in
+      ApplyPreviewView(
+        scope: scope,
+        close: { onboardingReview = nil },
+        applied: { step = 5 }
+      )
+      .environmentObject(model)
+    }
+    .confirmationDialog("Overwrite selected master skills?", isPresented: $confirmsOnboardingSkillOverwrite) {
+      Button("Overwrite and Review", role: .destructive) {
+        Task {
+          if let review = await model.prepareOnboardingReview() {
+            onboardingReview = review
+          }
+        }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("This replaces existing skill files in the master directory before the final provider review. No provider copy changes until you apply that review.")
     }
   }
 }
@@ -1283,7 +1513,7 @@ struct SafetyView: View {
 
       VStack(alignment: .leading, spacing: 12) {
         SafetyRow(symbol: "checkmark.shield", title: "No daemon starts during setup")
-        SafetyRow(symbol: "arrow.triangle.2.circlepath", title: "No sync is configured unless you enable it later")
+        SafetyRow(symbol: "network.slash", title: "Local-only: no account, service, or network connection")
         SafetyRow(symbol: "doc.badge.gearshape", title: "Provider writes are previewed before backup and apply")
         SafetyRow(symbol: "clock.arrow.circlepath", title: "Restore and revert remain available after onboarding")
       }
@@ -1583,7 +1813,7 @@ struct SkillsStepView: View {
 struct PreviewView: View {
   @EnvironmentObject private var model: SetupModel
   let back: () -> Void
-  let apply: () -> Void
+  let review: () -> Void
 
   private var selectedAdoptions: [UnmanagedSkill] {
     model.selectedProviderUnmanagedSkills
@@ -1700,7 +1930,7 @@ struct PreviewView: View {
 
         Section("Safety") {
           Label("Daemon remains off", systemImage: "checkmark.shield")
-          Label("Sync remains off", systemImage: "arrow.triangle.2.circlepath")
+          Label("No network service is configured", systemImage: "network.slash")
           Label("Notifications remain off", systemImage: "bell.slash")
         }
       }
@@ -1713,13 +1943,13 @@ struct PreviewView: View {
         Text(statusMessage)
           .foregroundStyle(.secondary)
         Button {
-          apply()
+          review()
         } label: {
-          Label("Create Backups and Apply", systemImage: "checkmark.circle")
+          Label("Review Exact Changes", systemImage: "doc.text.magnifyingglass")
         }
         .buttonStyle(.borderedProminent)
         .keyboardShortcut(.defaultAction)
-        .accessibilityHint("Creates provider backups, then applies the reviewed changes")
+        .accessibilityHint("Stages the local master content, then opens the digest-backed provider review")
         .disabled(model.isWorking || hasBlockedAdoption || hasBlockedUnifiedDraft)
       }
       .padding(20)
@@ -1734,7 +1964,7 @@ struct PreviewView: View {
     if hasBlockedUnifiedDraft {
       return "Generate or enter a unified prompt draft before applying."
     }
-    return "Daemon, sync, and notifications remain off."
+    return "Daemon and notifications remain off; Reglet is local-only."
   }
 }
 
@@ -1962,20 +2192,9 @@ struct StatusView: View {
               .foregroundStyle(.secondary)
           }
           Spacer()
-          Button {
-            Task {
-              await model.restore(provider: provider.id)
-            }
-          } label: {
-            Label("Restore", systemImage: "clock.arrow.circlepath")
-          }
-          Button {
-            Task {
-              await model.revert(provider: provider.id)
-            }
-          } label: {
-            Label("Revert", systemImage: "arrow.uturn.backward")
-          }
+          Text(provider.enabled ? "Managed" : "Available")
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
         .padding(.vertical, 4)
       }

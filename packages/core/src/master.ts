@@ -1,10 +1,25 @@
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { configPath, defaultConfig, providerNames, serializeConfig, type ProviderName } from './config.js';
+import { ensurePrivateDir } from './fsutil.js';
 import { serializeMcpServers, validateMcpServer } from './mcp.js';
 import { regletHome } from './paths.js';
 
 export interface McpServerDef {
+  command?: string;
+  args?: string[];
+  env?: Record<string, McpEnvironmentValue>;
+  url?: string;
+}
+
+export interface McpProcessEnvReference {
+  source: 'process-env';
+  name: string;
+}
+
+export type McpEnvironmentValue = McpProcessEnvReference;
+
+export interface ResolvedMcpServerDef {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
@@ -41,8 +56,8 @@ export async function initMasterDir(home = regletHome()): Promise<void> {
   await mkdir(path.join(home, 'rules'), { recursive: true });
   await mkdir(path.join(home, 'skills'), { recursive: true });
   await mkdir(path.join(home, 'mcp'), { recursive: true });
-  await mkdir(path.join(home, '.state', 'backups'), { recursive: true });
-  await mkdir(path.join(home, '.state', 'sync-base'), { recursive: true });
+  await ensurePrivateDir(path.join(home, '.state'));
+  await ensurePrivateDir(path.join(home, '.state', 'backups'));
 
   await writeFileIfMissing(path.join(home, 'mcp', 'servers.json'), serializeMcpServers({}));
   await writeFileIfMissing(
@@ -231,7 +246,7 @@ function isMcpServerDef(value: unknown): value is McpServerDef {
   return (
     readOptionalString(value.command) &&
     readOptionalStringArray(value.args) &&
-    readOptionalStringRecord(value.env) &&
+    readOptionalMcpEnvRecord(value.env) &&
     readOptionalString(value.url)
   );
 }
@@ -244,11 +259,15 @@ function readOptionalStringArray(value: unknown): boolean {
   return value === undefined || (Array.isArray(value) && value.every((item) => typeof item === 'string'));
 }
 
-function readOptionalStringRecord(value: unknown): boolean {
+function readOptionalMcpEnvRecord(value: unknown): boolean {
   return (
     value === undefined ||
-    (isRecord(value) && Object.values(value).every((item) => typeof item === 'string'))
+    (isRecord(value) && Object.values(value).every(isMcpEnvironmentValue))
   );
+}
+
+function isMcpEnvironmentValue(value: unknown): value is McpEnvironmentValue {
+  return isRecord(value) && value.source === 'process-env' && typeof value.name === 'string';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -8,6 +8,7 @@ Before submitting changes:
 bun run typecheck
 bun test
 bun run lint
+swift test --package-path apps/macos/RegletSetup
 ```
 
 Guidelines:
@@ -16,4 +17,5 @@ Guidelines:
 - Use `REGLET_HOME` and `REGLET_PROVIDER_HOME` for sandboxed filesystem tests.
 - Preserve user-owned provider config keys and files.
 - Add focused tests for every file-writing path.
+- Keep public V1 local-only: do not add account, pairing, remote-configuration, or configuration-network behavior to the public CLI or manager.
 - Document provider caveats in `docs/providers.md`.

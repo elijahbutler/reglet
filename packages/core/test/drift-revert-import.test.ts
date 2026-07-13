@@ -135,7 +135,7 @@ describe('drift, import, and revert', () => {
     expect(await readFile(path.join(home, 'skills', 'claude', 'scoped-skill', 'SKILL.md'), 'utf8')).toBe('edited scoped\n');
 
     // A second import finds nothing new only after re-apply refreshes hashes.
-    await applyAll({ providers: ['claude'], contents: ['skills'] });
+    await applyAll({ providers: ['claude'], contents: ['skills'], reviewedReplacement: true });
     expect((await importDriftedSkills('claude', home)).imported).toEqual([]);
   });
 
@@ -164,6 +164,27 @@ describe('drift, import, and revert', () => {
     };
     expect(master.mcpServers.managed).toEqual({ command: 'ruby' });
     expect(master.mcpServers.user).toBeUndefined();
+  });
+
+  test('importDriftedMcp rejects raw provider env values without persisting them', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await mkdir(path.join(home, 'mcp'), { recursive: true });
+    await enableProviders(home, ['claude']);
+    await writeFile(
+      path.join(home, 'mcp', 'servers.json'),
+      `${JSON.stringify({ mcpServers: { managed: { command: 'node' } } }, null, 2)}\n`,
+    );
+    await applyAll({ providers: ['claude'], contents: ['mcp'] });
+    await writeFile(
+      path.join(providerHome, '.claude.json'),
+      `${JSON.stringify({ mcpServers: { managed: { command: 'node', env: { TOKEN: 'secret' } } } }, null, 2)}\n`,
+    );
+
+    await expect(importDriftedMcp('claude', home)).rejects.toThrow('raw env values');
+    const master = JSON.parse(await readFile(path.join(home, 'mcp', 'servers.json'), 'utf8')) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(master.mcpServers.managed).toEqual({ command: 'node' });
   });
 
   test('importDriftedMcp imports removal of a managed server', async () => {

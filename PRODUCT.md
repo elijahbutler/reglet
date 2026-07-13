@@ -18,7 +18,7 @@ Calm technical, startup-forward, and trustworthy. The product should feel modern
 
 ## Anti-references
 
-Avoid Electron-style dashboards, marketing-heavy setup wizards, terminal-only first-run flows, noisy card grids, and any onboarding that hides file writes or makes daemon/sync activation feel automatic.
+Avoid Electron-style dashboards, marketing-heavy setup wizards, terminal-only first-run flows, noisy card grids, and any onboarding that hides file writes or makes background/network behavior feel automatic.
 
 ## Design Principles
 

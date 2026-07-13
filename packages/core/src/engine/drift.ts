@@ -1,9 +1,10 @@
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseToml } from 'smol-toml';
-import { sha256File, sha256String } from '../fsutil.js';
+import { assertPrivateFile, writePrivateJson, sha256File, sha256String } from '../fsutil.js';
 import { loadManifest, type ManagedContent } from '../manifest.js';
-import { loadMasterDir, type McpServerDef } from '../master.js';
+import { loadMasterDir, type McpServerDef, type ResolvedMcpServerDef } from '../master.js';
+import { resolveMcpServersEnv } from '../mcp.js';
 import { regletHome } from '../paths.js';
 import { isNodeError, isRecord } from '../providers/common.js';
 import type { ProviderId } from '../providers/types.js';
@@ -68,7 +69,9 @@ export async function appendDriftEvent(event: DriftRecord, home = regletHome()):
 
 export async function listDriftEvents(home = regletHome()): Promise<DriftQueue> {
   try {
-    const parsed = JSON.parse(await readFile(driftQueuePath(home), 'utf8')) as unknown;
+    const targetPath = driftQueuePath(home);
+    await assertPrivateFile(targetPath);
+    const parsed = JSON.parse(await readFile(targetPath, 'utf8')) as unknown;
     if (!isRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.events)) {
       return emptyDriftQueue();
     }
@@ -94,9 +97,7 @@ function driftQueuePath(home: string): string {
 }
 
 async function saveDriftQueue(queue: DriftQueue, home: string): Promise<void> {
-  const targetPath = driftQueuePath(home);
-  await mkdir(path.dirname(targetPath), { recursive: true });
-  await writeFile(targetPath, `${JSON.stringify(queue, null, 2)}\n`);
+  await writePrivateJson(driftQueuePath(home), queue);
 }
 
 function emptyDriftQueue(): DriftQueue {
@@ -111,7 +112,8 @@ async function detectMcpStatus(
 ): Promise<DriftStatus> {
   const current = await readProviderMcpServers(outputPath, provider);
   for (const key of managedKeys) {
-    const expected = masterServers[key] === undefined ? undefined : convertMcpServer(provider, masterServers[key]);
+    const resolved = masterServers[key] === undefined ? undefined : resolveMcpServersEnv({ [key]: masterServers[key] })[key];
+    const expected = resolved === undefined ? undefined : convertMcpServer(provider, resolved);
     if (!deepEqual(current[key], expected)) {
       return 'modified';
     }
@@ -137,7 +139,7 @@ async function readProviderMcpServers(outputPath: string, provider: ProviderId):
   return isRecord(parsed.mcpServers) ? parsed.mcpServers : {};
 }
 
-function convertMcpServer(provider: ProviderId, server: McpServerDef): unknown {
+function convertMcpServer(provider: ProviderId, server: ResolvedMcpServerDef): unknown {
   if (provider === 'opencode') {
     if (server.url !== undefined && server.command === undefined) {
       return { type: 'remote', url: server.url };

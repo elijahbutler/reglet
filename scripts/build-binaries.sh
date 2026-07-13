@@ -17,6 +17,5 @@ build_target() {
 
 build_target bun-darwin-arm64 reglet-darwin-arm64
 build_target bun-darwin-x64 reglet-darwin-x64
-build_target bun-windows-x64 reglet-windows-x64.exe
 
 echo "Built binaries in $OUT_DIR"

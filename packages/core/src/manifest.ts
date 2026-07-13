@@ -1,5 +1,6 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { assertPrivateFile, writePrivateJson } from './fsutil.js';
 import { regletHome } from './paths.js';
 
 export type ManagedContent = 'rules' | 'skills' | 'mcp';
@@ -31,7 +32,9 @@ export function manifestPath(home = regletHome()): string {
 
 export async function loadManifest(home = regletHome()): Promise<Manifest> {
   try {
-    return normalizeManifest(JSON.parse(await readFile(manifestPath(home), 'utf8')) as unknown);
+    const targetPath = manifestPath(home);
+    await assertPrivateFile(targetPath);
+    return normalizeManifest(JSON.parse(await readFile(targetPath, 'utf8')) as unknown);
   } catch (error) {
     if (isNodeError(error) && error.code === 'ENOENT') {
       return defaultManifest();
@@ -41,9 +44,7 @@ export async function loadManifest(home = regletHome()): Promise<Manifest> {
 }
 
 export async function saveManifest(manifest: Manifest, home = regletHome()): Promise<void> {
-  const targetPath = manifestPath(home);
-  await mkdir(path.dirname(targetPath), { recursive: true });
-  await writeFile(targetPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  await writePrivateJson(manifestPath(home), manifest);
 }
 
 export async function recordOutput(

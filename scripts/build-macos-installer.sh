@@ -25,6 +25,23 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
+for required in \
+  CODESIGN_IDENTITY \
+  PRODUCTSIGN_IDENTITY \
+  NOTARY_KEY_PATH \
+  APPLE_NOTARY_KEY_ID \
+  APPLE_NOTARY_ISSUER_ID; do
+  if [[ -z "${!required:-}" ]]; then
+    echo "Public macOS release packaging requires $required." >&2
+    exit 1
+  fi
+done
+
+if [[ ! -f "$NOTARY_KEY_PATH" ]]; then
+  echo "Notary key does not exist: $NOTARY_KEY_PATH" >&2
+  exit 1
+fi
+
 if [[ ! -x "$CLI_BINARY" ]]; then
   echo "Missing CLI binary: $CLI_BINARY" >&2
   echo "Run: bun run build:binaries" >&2
@@ -81,19 +98,33 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
-  codesign --force --timestamp --options runtime --sign "$CODESIGN_IDENTITY" "$PAYLOAD_DIR/usr/local/bin/reglet"
-  codesign --force --timestamp --options runtime --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE/Contents/Resources/reglet"
-  codesign --force --timestamp --options runtime --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE/Contents/MacOS/RegletSetup"
-  codesign --force --timestamp --options runtime --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE"
-  codesign --verify --strict --verbose=2 "$APP_BUNDLE"
-else
-  echo "CODESIGN_IDENTITY is not set; ad-hoc signing the completed app bundle." >&2
-  codesign --force --sign - "$APP_BUNDLE/Contents/Resources/reglet"
-  codesign --force --sign - "$APP_BUNDLE/Contents/MacOS/RegletSetup"
-  codesign --force --sign - "$APP_BUNDLE"
-  codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
-fi
+sign_file() {
+  local target="$1"
+  codesign --force --timestamp --options runtime --sign "$CODESIGN_IDENTITY" "$target"
+  codesign --verify --strict --verbose=2 "$target"
+}
+
+sign_file "$PAYLOAD_DIR/usr/local/bin/reglet"
+sign_file "$APP_BUNDLE/Contents/Resources/reglet"
+sign_file "$APP_BUNDLE/Contents/MacOS/RegletSetup"
+codesign --force --timestamp --options runtime --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE"
+codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+
+notarize() {
+  local target="$1"
+  xcrun notarytool submit "$target" \
+    --key "$NOTARY_KEY_PATH" \
+    --key-id "$APPLE_NOTARY_KEY_ID" \
+    --issuer "$APPLE_NOTARY_ISSUER_ID" \
+    --wait
+}
+
+ditto -c -k --keepParent "$APP_BUNDLE" "$APP_ZIP_PATH"
+notarize "$APP_ZIP_PATH"
+xcrun stapler staple "$APP_BUNDLE"
+xcrun stapler validate "$APP_BUNDLE"
+rm -f "$APP_ZIP_PATH"
+ditto -c -k --keepParent "$APP_BUNDLE" "$APP_ZIP_PATH"
 
 pkgbuild \
   --root "$PAYLOAD_DIR" \
@@ -102,27 +133,13 @@ pkgbuild \
   --install-location "/" \
   "$UNSIGNED_PKG_PATH"
 
-if [[ -n "${PRODUCTSIGN_IDENTITY:-}" ]]; then
-  productsign --sign "$PRODUCTSIGN_IDENTITY" "$UNSIGNED_PKG_PATH" "$PKG_PATH"
-  pkgutil --check-signature "$PKG_PATH"
-else
-  echo "PRODUCTSIGN_IDENTITY is not set; publishing an unsigned package." >&2
-  cp "$UNSIGNED_PKG_PATH" "$PKG_PATH"
-fi
-
-if [[ -n "${NOTARY_KEY_PATH:-}" && -n "${APPLE_NOTARY_KEY_ID:-}" && -n "${APPLE_NOTARY_ISSUER_ID:-}" ]]; then
-  xcrun notarytool submit "$PKG_PATH" \
-    --key "$NOTARY_KEY_PATH" \
-    --key-id "$APPLE_NOTARY_KEY_ID" \
-    --issuer "$APPLE_NOTARY_ISSUER_ID" \
-    --wait
-  xcrun stapler staple "$PKG_PATH"
-  xcrun stapler validate "$PKG_PATH"
-else
-  echo "Notary credentials are not set; package is not notarized." >&2
-fi
-
-ditto -c -k --keepParent "$APP_BUNDLE" "$APP_ZIP_PATH"
+productsign --sign "$PRODUCTSIGN_IDENTITY" "$UNSIGNED_PKG_PATH" "$PKG_PATH"
+pkgutil --check-signature "$PKG_PATH"
+notarize "$PKG_PATH"
+xcrun stapler staple "$PKG_PATH"
+xcrun stapler validate "$PKG_PATH"
+spctl --assess --type execute --verbose=4 "$APP_BUNDLE"
+spctl --assess --type install --verbose=4 "$PKG_PATH"
 
 echo "Built $PKG_PATH"
 echo "Built $APP_ZIP_PATH"

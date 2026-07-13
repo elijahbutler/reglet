@@ -7,18 +7,18 @@ The app does not implement provider logic directly. It shells out to the install
 ```bash
 reglet scan --json
 reglet plan --json
-reglet init --provider <providers> --content <contents>
-reglet status --json
-reglet rules list --json
+reglet init --provider <providers> --content <contents> --no-apply
+reglet manager snapshot --json
+reglet apply-structured preview --provider <providers> --content <contents>
+reglet apply-structured apply --digest <digest> --provider <providers> --content <contents>
 reglet rules read <path>
 reglet rules write <path>
-reglet diff --content rules
-reglet apply --content rules
-reglet login <url> --token <token> --device <name>
-reglet sync --json
-reglet restore <provider>
-reglet revert <provider>
+reglet operations show <receipt-id> --json
+reglet operations restore <receipt-id>
+reglet state legacy-network-status --json
 ```
+
+All app-originated provider writes use the structured preview/apply pair. Master edits and onboarding import are staged locally first; the app then displays the fresh redacted review before it can write a provider output.
 
 ## Local development
 

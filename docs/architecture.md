@@ -1,14 +1,16 @@
 # Architecture
 
-Reglet has three packages:
+Public V1 consists of three local components:
 
-- `packages/core`: master directory loading, provider adapters, safe apply, drift, revert, and sync engines.
-- `packages/cli`: command-line interface and daemon.
-- `packages/server`: self-hosted sync server.
+- `packages/core`: master-directory model, provider adapters, transaction engine, drift detection, and recovery.
+- `packages/cli`: local automation and the JSON contracts used by the manager.
+- `apps/macos/RegletSetup`: the native manager.
 
-## Master Directory
+There is no public service dependency. The configuration workflow does not make network requests.
 
-Default path: `~/.reglet/`.
+## Master directory
+
+The default master directory is `~/.reglet/`:
 
 ```text
 rules/
@@ -17,26 +19,42 @@ skills/<provider>/
 mcp/servers.json
 reglet.toml
 .state/
+  manifest.json
+  backups/
+  operations/
+    journals/
+    receipts/
+    snapshots/
 ```
 
-`skills/<skill-name>/` entries are shared skills. `skills/<provider>/<skill-name>/` entries are provider-specific skills that are applied only to that provider, with provider-specific names overriding shared names during apply.
+Shared skills in `skills/<skill-name>/` apply to every enrolled provider that supports skills. Provider-scoped skills in `skills/<provider>/<skill-name>/` apply only to that provider and override an equally named shared skill.
 
-Tests use `REGLET_HOME` and `REGLET_PROVIDER_HOME` so they never touch the real home directory.
+Reglet makes state directories owner-only (`0700`) and state files owner-only (`0600`). It fails a mutation rather than continuing when those permissions cannot be enforced.
 
-## Apply Engine
+## Review and transaction engine
 
-The apply engine reads the master directory, checks enrollment in `reglet.toml`, converts content for each provider, and writes through one safe writer. The writer creates a first backup and records the generated hash in `.state/manifest.json`.
+`apply-structured preview` renders every selected provider output, reports expected target hashes and drift, redacts sensitive values, and produces a digest. The digest incorporates non-reversible fingerprints of resolved MCP environment values without storing the values themselves.
 
-## Drift
+`apply-structured apply` re-renders the scope and accepts only the still-current digest. Before its first replacement it creates a durable operation journal and snapshots every changed file or directory. Replacements use sibling staging and atomic rename. If a mutation fails, the engine restores all targets from the operation; after interruption, it recovers the journal before any new mutation.
 
-Drift detection compares current provider outputs to the manifest. For MCP files, it only compares managed server entries and ignores user-owned entries in the same config file.
+Each completed operation has an immutable receipt with affected paths, snapshot sources, lifecycle, and plan digest. Receipts and snapshots are retained indefinitely in V1.
 
-## Daemon
+## MCP data contract
 
-The daemon watches the master directory for changes and provider outputs for drift. It is opt-in and refuses to run before onboarding has enrolled at least one provider. macOS notifications are opt-in with `REGLET_ENABLE_NOTIFICATIONS=1`.
+MCP environment values use only process-environment references:
 
-## Sync
+```json
+{ "TOKEN": { "source": "process-env", "name": "LOCAL_TOKEN" } }
+```
 
-The sync server stores versioned per-file snapshots in SQLite. The client pulls changes, writes clean remote files into the master directory, pushes local changes, and creates conflict copies when unsynced local edits would be overwritten.
+Raw values are invalid. Resolution happens only in memory while generating the provider-specific output. The manager, CLI previews, logs, diagnostics, operation journal, and receipt use redacted representations.
 
-Sync walks the full master `skills/` tree, so provider-specific skill files under `skills/<provider>/` are synchronized between devices without a separate filter.
+## Drift, recovery, and detaching
+
+The manifest records the generated hash and managed MCP keys for each provider output. Drift detection compares the current output to that state and avoids treating user-owned MCP keys as managed changes. Plain automation refuses unreviewed drift replacement.
+
+`operations list`, `operations show`, and `operations restore` expose receipt-backed recovery. `restore` and `revert` remain compatibility shorthands. `unenroll` detaches Reglet ownership while leaving current provider content in place; rules headers are removed during that detach.
+
+## Manager contract
+
+The macOS manager requests `reglet manager snapshot --json` for a consolidated, redacted local view instead of composing several mutable commands. Its apply actions use structured previews, scoped provider/content selection, and receipt results. Automatic update checks are off by default; a manual check is a separate user action.

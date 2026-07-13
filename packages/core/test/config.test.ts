@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -34,10 +34,21 @@ describe('config', () => {
     const config = defaultConfig();
     config.providers.claude.enabled = true;
     config.providers.claude.mcp = false;
-    config.sync.server_url = 'https://example.test';
 
     await saveConfig(config, home);
 
     expect(await loadConfig(home)).toEqual(config);
+  });
+
+  test('ignores legacy network configuration rather than making it a public config capability', async () => {
+    const home = await useTempHome();
+    await writeFile(
+      path.join(home, 'reglet.toml'),
+      '[providers.claude]\nenabled = true\nrules = true\nskills = true\nmcp = true\n\n[sync]\nserver_url = "https://legacy.example.test"\n',
+    );
+
+    const config = await loadConfig(home);
+    expect(config.providers.claude.enabled).toBe(true);
+    expect(JSON.stringify(config)).not.toContain('legacy.example.test');
   });
 });

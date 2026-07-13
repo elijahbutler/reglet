@@ -2,229 +2,118 @@
 
 ![Reglet engineering control plane banner](docs/assets/reglet-banner.svg)
 
-Reglet is a local-first control plane for AI agent configuration. It turns rules, skills, and MCP servers into infrastructure: one versionable master directory, deterministic provider adapters, backups, drift detection, optional daemon apply, and self-hosted sync.
+Reglet is a local-only macOS manager and CLI for global AI-agent rules, skills, and MCP configurations. It keeps one versionable master directory, renders it to the six supported providers, makes every provider write reviewable, and retains recovery data indefinitely.
 
-Reglet is complete in local-only mode: installing the app or CLI does not install a server, create an account, make network requests, or enable background work. Multi-device sync is optional through either Reglet Cloud or the standalone public self-hosted server.
+Public V1 has no account, device-linking, remote configuration, background network transfer, or network management commands. Its configuration path stays on the Mac. A manual software-update check is separately disclosed and off by default.
 
 ```text
 ~/.reglet/                 provider outputs
   rules/*.md        -+     ~/.claude/CLAUDE.md
   skills/*/          +-->  ~/.codex/AGENTS.md
-  skills/codex/*/    |     provider skill dirs
   mcp/servers.json  -+     ~/.cursor/mcp.json
   reglet.toml              ~/.gemini/settings.json
-                           ~/.codeium/.../mcp_config.json
-                           ~/.config/opencode/opencode.json
+  .state/                  recovery journals and receipts
 ```
 
-Reglet is built for engineers who treat agent setup as workstation infrastructure, not a hand-copied dotfile habit.
+## What V1 provides
 
-## Status
-
-| Surface | State |
-|---|---|
-| Master directory | implemented |
-| Provider adapters | Claude Code, Codex CLI, Cursor, Gemini CLI, Windsurf, OpenCode |
-| Selective onboarding import | implemented |
-| Safe apply + backups | implemented |
-| Drift detection + import | implemented |
-| Restore / revert | implemented |
-| Daemon watching | opt-in, implemented |
-| Self-hosted sync | implemented |
-| Reglet Cloud | private hosted beta in progress |
-| Homebrew tap | implemented |
-| Mac setup app | implemented, installer blocked on Developer ID |
-| Signed/notarized installer | blocked |
-| Hosted/team product | roadmap |
+- Rules, shared skills, provider-scoped skills, and managed MCP entries for Claude Code, Codex CLI, Cursor, Gemini CLI, Windsurf, and OpenCode.
+- A native macOS manager with Providers, Rules, Skills, MCP, Activity & Drift, and Recovery screens.
+- Digest-backed Review & Apply plans with exact redacted diffs, drift checks, durable operation receipts, and explicit receipt restore.
+- Typed local MCP environment references. Raw credential strings are invalid and are never copied into previews, logs, diagnostics, journals, or receipts.
+- Owner-only Reglet state, journal, and snapshot permissions (`0700` directories and `0600` files).
 
 ## Install
 
-Recommended macOS install:
+Install only a signed and notarized V1 release:
 
 ```bash
 brew tap elijahbutler/reglet
 brew install --cask elijahbutler/reglet/reglet
 ```
 
-This installs `Reglet.app` and exposes its bundled CLI as `reglet`. Until Apple Developer ID signing and notarization are configured, the cask removes quarantine from the checksum-verified app bundle. It does not install a daemon, start a background process, configure sync, or write provider files without confirmation.
+The cask preserves macOS quarantine and Gatekeeper verification. It installs `Reglet.app` and exposes the bundled `reglet` CLI; it does not write provider files or start background services.
 
-CLI-only install:
+CLI-only installs use the matching formula:
 
 ```bash
-brew trust --formula elijahbutler/reglet/reglet
 brew install --formula elijahbutler/reglet/reglet
 ```
 
-GitHub Releases also include raw CLI binaries:
+See [installation](docs/installation.md) for release verification and source setup.
 
-```text
-https://github.com/elijahbutler/reglet/releases
-```
-
-The Homebrew cask uses an ad-hoc-signed app until Apple Developer ID signing and notarization are configured. Direct app downloads are not suitable for broad Mac distribution yet.
-
-Source checkout:
+## Safe workflow
 
 ```bash
-git clone https://github.com/elijahbutler/reglet.git
-cd reglet
-bun install
-bun packages/cli/src/index.ts scan
-```
-
-## CLI
-
-```bash
-# inspect local provider inventory
+# Inspect local providers without changing files.
 reglet scan
-reglet scan --json
 
-# preview first-run onboarding for setup UIs
-reglet plan --provider claude,codex --content rules,mcp --json
-
-# create ~/.reglet, import selected content, then apply
+# Create the master directory and select scopes to manage.
 reglet init
 
-# compile ~/.reglet into enrolled provider outputs
-reglet apply
-reglet diff
+# Produce the exact, redacted transaction plan.
+reglet apply-structured preview --provider claude codex --content rules mcp
 
-# detect direct edits to generated files
-reglet status --check
+# Apply only the still-current reviewed plan.
+reglet apply-structured apply --digest <digest> --provider claude codex --content rules mcp
 
-# recover from provider writes
-reglet restore claude
-reglet revert
+# Inspect operation receipts and explicitly restore one if needed.
+reglet operations list
+reglet operations show <receipt-id>
+reglet operations restore <receipt-id>
 ```
 
-## Safety Invariants
+Plain `reglet apply` remains suitable for automation, but refuses to replace detected provider drift unless the caller explicitly supplies `--reviewed-replacement`.
 
-Reglet is conservative because global agent config is operational surface area.
+## MCP environment references
 
-```text
-no onboarding       -> no provider writes
-no enrollment       -> no daemon
-no sync login       -> no sync
-no explicit command -> no launchd service
-every managed write -> backup + manifest record
+Canonical MCP definitions contain named process-environment references rather than credential values:
+
+```json
+{
+  "mcpServers": {
+    "example": {
+      "command": "node",
+      "env": {
+        "TOKEN": { "source": "process-env", "name": "LOCAL_TOKEN" }
+      }
+    }
+  }
+}
 ```
 
-- Provider files are backed up before managed writes.
-- Generated rules files include a Reglet header pointing back to `~/.reglet/`.
-- Drift is reported instead of silently overwritten.
-- Reglet-owned MCP entries are merged without deleting unmanaged provider keys.
-- Daemon execution, macOS notifications, and sync are opt-in.
+Reglet resolves a reference only in memory while rendering a provider output. A missing variable blocks the plan. Resolved values are redacted from review output and persisted state.
 
-## System Model
+## Recovery and lifecycle
 
-![Reglet lifecycle system diagram](docs/assets/reglet-lifecycle.svg)
+Every changed file or directory is snapshotted before replacement. A journal is recovered before another mutation is allowed; an interrupted or failed multi-provider operation rolls its writes back together.
 
-```text
-scan/import -> master dir -> provider adapters -> generated outputs
-                  ^                    |
-                  |                    v
-             sync base            drift queue
-                  ^                    |
-                  └──── restore / import / apply
-```
+`reglet unenroll provider[:rules|skills|mcp]` stops managing the selected scope while preserving its current provider content. When detaching rules, Reglet removes its generated header. Destructive removal is available only through explicit recovery actions.
 
-Master directory:
+If an older installation left pre-V1 network state behind, it is inert and never read for credentials or network access. Inspect paths only with `reglet state legacy-network-status`, then explicitly remove it with `reglet state clear-legacy-network-state`.
 
-```text
-~/.reglet/
-|-- rules/                 # canonical agent instructions
-|-- skills/                # shared and provider-specific skill directories
-|-- mcp/servers.json       # canonical MCP definitions
-|-- reglet.toml            # enrollment and sync config
-`-- .state/                # manifest, backups, drift queue, sync cursor
-```
-
-Shared skills live directly under `skills/<skill-name>/` and are applied to every enrolled provider with skills support. Provider-specific skills live under `skills/<provider>/<skill-name>/`, for example `skills/codex/my-skill/`, and are applied only to that provider. If a provider-specific skill has the same name as a shared skill, the provider-specific version overrides the shared version for that provider.
-
-## Provider Matrix
-
-| Provider | Rules | Skills | MCP |
-|---|---|---|---|
-| Claude Code | `~/.claude/CLAUDE.md` | `~/.claude/skills/` | `~/.claude.json` |
-| Codex CLI | `~/.codex/AGENTS.md` | `~/.agents/skills/` | `~/.codex/config.toml` |
-| Cursor | unsupported global rules | `~/.cursor/skills/` | `~/.cursor/mcp.json` |
-| Gemini CLI | `~/.gemini/GEMINI.md` | `~/.gemini/skills/` | `~/.gemini/settings.json` |
-| Windsurf | `~/.codeium/windsurf/memories/global_rules.md` | unsupported | `~/.codeium/windsurf/mcp_config.json` |
-| OpenCode | `~/.config/opencode/AGENTS.md` | `~/.config/opencode/skills/` | `~/.config/opencode/opencode.json` |
-
-## Packages
-
-```text
-packages/core
-  config, master dir, manifest, writer
-  provider adapters and MCP merges
-  apply, drift, import, restore/revert
-  sync client and merge engine
-
-packages/cli
-  init, scan, plan, apply, diff, status
-  enroll, unenroll, import, restore, revert
-  login, sync
-  daemon run/start/stop/install
-
-packages/server
-  Bun + Hono API
-  SQLite persistence
-  token and account/device modes
-  Docker-ready self-hosting
-
-apps/macos/RegletSetup
-  SwiftUI first-run setup shell
-  consumes scan/plan JSON from the CLI
-```
-
-## Self-Hosted Sync
-
-The sync server is distributed separately from the Reglet client. The app, CLI, Homebrew cask, and daemon do not bundle or run it.
-
-Recommended container install:
-
-```bash
-export REGLET_TOKEN="$(openssl rand -base64 32)"
-docker compose up -d
-```
-
-Run a local sync server:
-
-```bash
-REGLET_TOKEN=dev-token REGLET_DB=./reglet.sqlite bun packages/server/src/index.ts
-```
-
-Connect a client:
-
-```bash
-reglet login http://localhost:3000 --token dev-token --device laptop
-reglet sync
-```
-
-Sync scope is the master directory only: `rules/`, `skills/`, `mcp/servers.json`, and `reglet.toml`. Provider-specific skills sync naturally because they are nested under `skills/<provider>/`. Reglet never syncs `.state/`.
-
-The independently versioned multi-architecture image is published as `ghcr.io/elijahbutler/reglet-sync`. See [Self-hosting](docs/self-hosting.md) for upgrades, backups, rollback, and the public protocol contract.
-
-## Development
-
-```bash
-bun run typecheck
-bun test
-bun run lint
-bun run build:binaries
-bun run build:macos-installer
-```
-
-## Docs
+## Documentation
 
 - [Installation](docs/installation.md)
 - [Usage](docs/usage.md)
 - [Architecture](docs/architecture.md)
 - [Providers](docs/providers.md)
-- [Self-hosting](docs/self-hosting.md)
-- [Development](docs/development.md)
+- [Recovery](docs/recovery.md)
+- [Privacy and network behavior](docs/privacy.md)
+- [Security reporting](SECURITY.md)
+- [Release verification](docs/release.md)
+- [Release notes](docs/release-notes.md)
 - [Roadmap](ROADMAP.md)
+
+## Development
+
+```bash
+bun install --frozen-lockfile
+bun test
+bun run typecheck
+bun run lint
+swift test --package-path apps/macos/RegletSetup
+```
 
 ## License
 

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { GENERATED_HEADER } from '../header.js';
 import { loadManifest } from '../manifest.js';
 import { loadMasterDir } from '../master.js';
+import { isCanonicalMcpServerDef, serializeMcpServers } from '../mcp.js';
 import { regletHome } from '../paths.js';
 import { readProviderMcpServers } from '../providers/mcp-read.js';
 import type { ProviderId } from '../providers/types.js';
@@ -113,6 +114,9 @@ export async function importDriftedMcp(provider: ProviderId, home = regletHome()
   for (const key of output.managedKeys ?? []) {
     const server = current[key];
     if (server !== undefined) {
+      if (!isCanonicalMcpServerDef(key, server)) {
+        throw new Error(`Cannot import MCP server ${key}: raw env values must be replaced with process-env references in mcp/servers.json`);
+      }
       nextServers[key] = server;
       importedServers.push(key);
     } else {
@@ -122,7 +126,7 @@ export async function importDriftedMcp(provider: ProviderId, home = regletHome()
 
   const importedPath = path.join(home, 'mcp', 'servers.json');
   await mkdir(path.dirname(importedPath), { recursive: true });
-  await writeFile(importedPath, `${JSON.stringify({ mcpServers: nextServers }, null, 2)}\n`);
+  await writeFile(importedPath, serializeMcpServers(nextServers));
 
   return { provider, sourcePath, importedPath, importedServers };
 }

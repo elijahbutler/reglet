@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { parse as parseToml } from 'smol-toml';
-import type { McpServerDef } from '../master.js';
+import type { McpServerDef, ResolvedMcpServerDef } from '../master.js';
 import { isNodeError, isRecord } from './common.js';
 import type { ProviderId } from './types.js';
 
@@ -8,7 +8,7 @@ import type { ProviderId } from './types.js';
 export async function readProviderMcpServers(
   provider: ProviderId,
   mcpPath: string,
-): Promise<Record<string, McpServerDef>> {
+): Promise<Record<string, McpServerDef | ResolvedMcpServerDef>> {
   if (provider === 'codex') {
     return readCodexMcpServers(mcpPath);
   }
@@ -20,7 +20,7 @@ export async function readProviderMcpServers(
   return readJsonMcpServers(mcpPath);
 }
 
-async function readJsonMcpServers(mcpPath: string): Promise<Record<string, McpServerDef>> {
+async function readJsonMcpServers(mcpPath: string): Promise<Record<string, McpServerDef | ResolvedMcpServerDef>> {
   const config = await readJsonObject(mcpPath);
   if (!isRecord(config.mcpServers)) {
     return {};
@@ -28,7 +28,7 @@ async function readJsonMcpServers(mcpPath: string): Promise<Record<string, McpSe
   return normalizeMcpServers(config.mcpServers);
 }
 
-async function readCodexMcpServers(mcpPath: string): Promise<Record<string, McpServerDef>> {
+async function readCodexMcpServers(mcpPath: string): Promise<Record<string, McpServerDef | ResolvedMcpServerDef>> {
   try {
     const parsed = parseToml(await readFile(mcpPath, 'utf8')) as unknown;
     if (!isRecord(parsed) || !isRecord(parsed.mcp_servers)) {
@@ -43,13 +43,13 @@ async function readCodexMcpServers(mcpPath: string): Promise<Record<string, McpS
   }
 }
 
-async function readOpenCodeMcpServers(mcpPath: string): Promise<Record<string, McpServerDef>> {
+async function readOpenCodeMcpServers(mcpPath: string): Promise<Record<string, McpServerDef | ResolvedMcpServerDef>> {
   const config = await readJsonObject(mcpPath);
   if (!isRecord(config.mcp)) {
     return {};
   }
 
-  const servers: Record<string, McpServerDef> = {};
+  const servers: Record<string, McpServerDef | ResolvedMcpServerDef> = {};
   for (const [name, server] of Object.entries(config.mcp)) {
     const normalized = normalizeOpenCodeServer(server);
     if (normalized !== null) {
@@ -71,8 +71,8 @@ async function readJsonObject(filePath: string): Promise<Record<string, unknown>
   }
 }
 
-function normalizeMcpServers(value: Record<string, unknown>): Record<string, McpServerDef> {
-  const servers: Record<string, McpServerDef> = {};
+function normalizeMcpServers(value: Record<string, unknown>): Record<string, McpServerDef | ResolvedMcpServerDef> {
+  const servers: Record<string, McpServerDef | ResolvedMcpServerDef> = {};
   for (const [name, server] of Object.entries(value)) {
     if (isMcpServerDef(server)) {
       servers[name] = server;
@@ -81,7 +81,7 @@ function normalizeMcpServers(value: Record<string, unknown>): Record<string, Mcp
   return servers;
 }
 
-function normalizeOpenCodeServer(value: unknown): McpServerDef | null {
+function normalizeOpenCodeServer(value: unknown): McpServerDef | ResolvedMcpServerDef | null {
   if (!isRecord(value) || typeof value.type !== 'string') {
     return null;
   }
@@ -110,7 +110,7 @@ function normalizeOpenCodeServer(value: unknown): McpServerDef | null {
   };
 }
 
-function isMcpServerDef(value: unknown): value is McpServerDef {
+function isMcpServerDef(value: unknown): value is McpServerDef | ResolvedMcpServerDef {
   if (!isRecord(value)) {
     return false;
   }

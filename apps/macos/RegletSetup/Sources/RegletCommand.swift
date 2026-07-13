@@ -50,6 +50,11 @@ struct RegletCommand {
     return try decode(ScanResponse.self, from: result.stdout, command: "reglet scan --json")
   }
 
+  func managerSnapshot() async throws -> ManagerSnapshotResponse {
+    let result = try await run(["manager", "snapshot", "--json"])
+    return try decode(ManagerSnapshotResponse.self, from: result.stdout, command: "reglet manager snapshot --json")
+  }
+
   func plan(providers: [String], contents: [ContentKind]) async throws -> PlanResponse {
     var arguments = ["plan"]
     if !providers.isEmpty {
@@ -66,7 +71,12 @@ struct RegletCommand {
     return try decode(PlanResponse.self, from: result.stdout, command: "reglet \(arguments.joined(separator: " "))")
   }
 
-  func onboard(providers: [String], contents: [ContentKind], includeEmptyContent: Bool = false) async throws -> CommandResult {
+  func onboard(
+    providers: [String],
+    contents: [ContentKind],
+    includeEmptyContent: Bool = false,
+    stageOnly: Bool = true
+  ) async throws -> CommandResult {
     var arguments = ["init"]
     if !providers.isEmpty {
       arguments.append("--provider")
@@ -76,6 +86,9 @@ struct RegletCommand {
       arguments.append("--content")
       arguments.append(contents.map(\.rawValue).joined(separator: ","))
     }
+    if stageOnly {
+      arguments.append("--no-apply")
+    }
     return try await run(arguments)
   }
 
@@ -83,12 +96,8 @@ struct RegletCommand {
     try await run(["enroll", target])
   }
 
-  func restore(provider: String) async throws -> CommandResult {
-    try await run(["restore", provider])
-  }
-
-  func revert(provider: String) async throws -> CommandResult {
-    try await run(["revert", provider])
+  func unenroll(_ target: String) async throws -> CommandResult {
+    try await run(["unenroll", target])
   }
 
   func status() async throws -> StatusResponse {
@@ -96,21 +105,8 @@ struct RegletCommand {
     return try decode(StatusResponse.self, from: result.stdout, command: "reglet status --json")
   }
 
-  func applyContent(provider: String, content: String) async throws -> CommandResult {
-    try await run(["apply", "--provider", provider, "--content", content])
-  }
-
   func importDrifted(provider: String, content: String) async throws -> CommandResult {
     try await run(["import", "\(provider):\(content)"])
-  }
-
-  func login(url: String, token: String, device: String) async throws -> CommandResult {
-    try await run(["login", url, "--token", token, "--device", device])
-  }
-
-  func syncNow() async throws -> SyncRunResponse {
-    let result = try await run(["sync", "--json"])
-    return try decode(SyncRunResponse.self, from: result.stdout, command: "reglet sync --json")
   }
 
   func rulesList() async throws -> RulesListResponse {
@@ -137,21 +133,9 @@ struct RegletCommand {
     return try decode(RuleMergeDraftResponse.self, from: result.stdout, command: "reglet \(arguments.joined(separator: " "))")
   }
 
-  func diffRules() async throws -> String {
-    try await run(["diff", "--content", "rules"]).stdout
-  }
-
-  func applyRules() async throws -> CommandResult {
-    try await run(["apply", "--content", "rules"])
-  }
-
   func skillsList() async throws -> SkillsOverviewResponse {
     let result = try await run(["skills", "list", "--json"])
     return try decode(SkillsOverviewResponse.self, from: result.stdout, command: "reglet skills list --json")
-  }
-
-  func applySkills() async throws -> CommandResult {
-    try await run(["apply", "--content", "skills"])
   }
 
   func skillTree(name: String, provider: String?) async throws -> SkillTreeResponse {
@@ -220,14 +204,37 @@ struct RegletCommand {
     _ = try await run(["mcp", "delete", name])
   }
 
-  func previewApply(content: ContentKind) async throws -> StructuredApplyPreview {
-    let arguments = ["apply-structured", "preview", "--content", content.rawValue]
+  func previewApply(contents: [ContentKind], providers: [String] = []) async throws -> StructuredApplyPreview {
+    var arguments = ["apply-structured", "preview", "--content", contents.map(\.rawValue).joined(separator: ",")]
+    if !providers.isEmpty {
+      arguments += ["--provider", providers.sorted().joined(separator: ",")]
+    }
     let result = try await run(arguments)
     return try decode(StructuredApplyPreview.self, from: result.stdout, command: "reglet \(arguments.joined(separator: " "))")
   }
 
-  func applyPreview(_ preview: StructuredApplyPreview, content: ContentKind) async throws {
-    _ = try await run(["apply-structured", "apply", "--digest", preview.digest, "--content", content.rawValue])
+  func previewApply(content: ContentKind, provider: String? = nil) async throws -> StructuredApplyPreview {
+    try await previewApply(contents: [content], providers: provider.map { [$0] } ?? [])
+  }
+
+  func applyPreview(_ preview: StructuredApplyPreview, contents: [ContentKind], providers: [String] = []) async throws {
+    var arguments = ["apply-structured", "apply", "--digest", preview.digest, "--content", contents.map(\.rawValue).joined(separator: ",")]
+    if !providers.isEmpty {
+      arguments += ["--provider", providers.sorted().joined(separator: ",")]
+    }
+    _ = try await run(arguments)
+  }
+
+  func applyPreview(_ preview: StructuredApplyPreview, content: ContentKind, provider: String? = nil) async throws {
+    try await applyPreview(preview, contents: [content], providers: provider.map { [$0] } ?? [])
+  }
+
+  func restoreOperation(_ id: String) async throws -> CommandResult {
+    try await run(["operations", "restore", id])
+  }
+
+  func clearLegacyNetworkState() async throws -> CommandResult {
+    try await run(["state", "clear-legacy-network-state"])
   }
 
   func adoptSkill(_ skill: UnmanagedSkill, scope: SkillAdoptionScope, overwrite: Bool = false) async throws -> SkillAdoptionResponse {
