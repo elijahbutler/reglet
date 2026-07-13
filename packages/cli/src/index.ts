@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { execFile, spawn } from 'node:child_process';
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { confirm, isCancel, multiselect, outro } from '@clack/prompts';
@@ -21,6 +21,7 @@ import {
   importDriftedSkills,
   initMasterDir,
   loadConfig,
+  loadManifest,
   loadMasterDir,
   listMcpServers,
   listOperationReceipts,
@@ -34,8 +35,18 @@ import {
   readSkillFile,
   regletHome,
   isCanonicalMcpServerDef,
+  inventoryItems,
+  mcpServerSummary,
+  needsAttentionCapability,
   publicReleaseCapabilities,
+  receiptDetail,
+  receiptListItem,
+  deriveMasterRevisions,
+  sha256String,
+  supportedCapability,
   inspectLegacySyncState,
+  unsupportedCapability,
+  validateManagerSnapshotV2,
   clearLegacySyncState,
   getOperationReceipt,
   restoreOperationReceipt,
@@ -53,6 +64,18 @@ import {
   type ProviderInventory,
   type SkillAdoptionScope,
   type SkillScope,
+  type CapabilityState,
+  type ManagerContractVersion,
+  type ManagerDriftInboxItemV2,
+  type ManagerDerivedStateV2,
+  type ManagerEffectiveProviderCompositionV2,
+  type ManagerEnrollmentProviderV2,
+  type ManagerMasterSummaryV2,
+  type ManagerProviderDiscoveryV2,
+  type ManagerSnapshotV2,
+  type ManagerSourceInventoryItemV2,
+  type ManagerStructuredPlanEntryV2,
+  resolveMcpServersEnv,
   upsertMcpServer,
   writeSkillFile,
 } from '@reglet/core';
@@ -125,25 +148,24 @@ manager
   .command('snapshot')
   .description('Return one redacted local manager snapshot')
   .option('--json', 'print machine-readable JSON')
-  .action(async (options: { json?: boolean }) => {
-    const master = await loadMasterDir();
-    const skills = await listSkills();
-    const mcpServers = await listMcpServers();
-    const snapshot = {
-      version: 1,
-      scan: await buildScanJson(),
-      status: await buildStatusJson(),
-      skills: { version: 1, regletHome: regletHome(), ...skills },
-      rules: { version: 1, documents: ruleDocuments(master) },
-      mcp: { version: 1, servers: mcpServers.servers },
-      operations: await listOperationReceipts(),
-      legacyNetworkState: await inspectLegacySyncState(),
-    };
+  .option('--contract-version <version>', 'manager snapshot contract version: 1 or 2', parseManagerContractVersion)
+  .action(async (options: { json?: boolean; contractVersion?: ManagerContractVersion }) => {
+    const contractVersion = options.contractVersion ?? 1;
+    if (contractVersion === 1) {
+      const snapshot = await buildManagerSnapshotV1();
+      if (options.json === true) {
+        printJson(snapshot);
+        return;
+      }
+      console.log(`manager-snapshot\tproviders=${snapshot.scan.providers.length}\tdrift=${snapshot.status.driftedCount}\toperations=${snapshot.operations.length}`);
+      return;
+    }
+    const snapshot = await buildManagerSnapshotV2();
     if (options.json === true) {
       printJson(snapshot);
       return;
     }
-    console.log(`manager-snapshot\tproviders=${snapshot.scan.providers.length}\tdrift=${snapshot.status.driftedCount}\toperations=${snapshot.operations.length}`);
+    console.log(`manager-snapshot-v2\tproviders=${snapshot.providerDiscovery.length}\tdrift=${snapshot.driftInbox.length}\treceipts=${snapshot.receipts.list.length}`);
   });
 
 program
@@ -843,6 +865,17 @@ interface SafetyJson {
   requiresExplicitConfirmation: true;
 }
 
+interface ManagerSnapshotV1Json {
+  version: 1;
+  scan: ScanJson;
+  status: StatusJson;
+  skills: { version: 1; regletHome: string } & Awaited<ReturnType<typeof listSkills>>;
+  rules: { version: 1; documents: RuleDocumentJson[] };
+  mcp: { version: 1; servers: Awaited<ReturnType<typeof listMcpServers>>['servers'] };
+  operations: Awaited<ReturnType<typeof listOperationReceipts>>;
+  legacyNetworkState: Awaited<ReturnType<typeof inspectLegacySyncState>>;
+}
+
 interface BuildOnboardingPlanOptions {
   providers: ProviderId[];
   contents: ApplyContent[];
@@ -892,6 +925,12 @@ function parseContent(value: string): ApplyContent {
     return value as ApplyContent;
   }
   throw new InvalidArgumentError(`Unknown content type: ${value}`);
+}
+
+function parseManagerContractVersion(value: string): ManagerContractVersion {
+  if (value === '1' || value === 'v1') return 1;
+  if (value === '2' || value === 'v2') return 2;
+  throw new InvalidArgumentError(`Unsupported manager snapshot contract version: ${value}`);
 }
 
 function parseProviderList(value: string, previous: ProviderId[] = []): ProviderId[] {
@@ -987,6 +1026,378 @@ function normalizeProviderSelections(values: readonly string[]): ProviderId[] {
 
 function normalizeContentSelections(values: readonly string[]): ApplyContent[] {
   return values.map(parseContent);
+}
+
+async function buildManagerSnapshotV1(): Promise<ManagerSnapshotV1Json> {
+  const master = await loadMasterDir();
+  const skills = await listSkills();
+  const mcpServers = await listMcpServers();
+  return {
+    version: 1,
+    scan: await buildScanJson(),
+    status: await buildStatusJson(),
+    skills: { version: 1, regletHome: regletHome(), ...skills },
+    rules: { version: 1, documents: ruleDocuments(master) },
+    mcp: { version: 1, servers: mcpServers.servers },
+    operations: await listOperationReceipts(),
+    legacyNetworkState: await inspectLegacySyncState(),
+  };
+}
+
+async function buildManagerSnapshotV2(): Promise<ManagerSnapshotV2> {
+  const [config, master, mcpServers, receipts, legacyNetworkState, manifest] = await Promise.all([
+    loadConfig(),
+    loadMasterDir(),
+    listMcpServers(),
+    listOperationReceipts(),
+    inspectLegacySyncState(),
+    loadManifest(),
+  ]);
+  const revisions = await deriveMasterRevisions(master, config);
+  const discovery: ManagerProviderDiscoveryV2[] = [];
+  const sourceInventory: ManagerSourceInventoryItemV2[] = [];
+  const enrollmentMatrix: ManagerEnrollmentProviderV2[] = [];
+  const structuredEntries: ManagerStructuredPlanEntryV2[] = [];
+
+  for (const adapter of allAdapters()) {
+    const providerConfig = config.providers[adapter.id];
+    const state = await readProviderState(adapter.id);
+    const capabilities = contentCapabilities(state);
+    discovery.push({
+      provider: adapter.id,
+      displayName: adapter.displayName,
+      presence: Object.keys(state.contentIssues).length === 0 ? (state.detected ? 'installed' : 'not-found') : 'needs-attention',
+      detected: state.detected,
+      capabilities,
+    });
+    sourceInventory.push(...inventoryItems(adapter.id, state.inventory, state.contentIssues));
+
+    const cells = Object.fromEntries(
+      contentIds.map((content): [ContentId, ManagerEnrollmentProviderV2['cells'][ContentId]] => {
+        const capability = capabilities[content];
+        const cell = {
+          provider: adapter.id,
+          content,
+          enrolled: providerConfig.enabled && providerConfig[content],
+          capability,
+          destinationPath: destinationPath(state.inventory, content),
+        };
+        structuredEntries.push(planEntry(cell));
+        return [content, cell];
+      }),
+    ) as ManagerEnrollmentProviderV2['cells'];
+    enrollmentMatrix.push({
+      provider: adapter.id,
+      displayName: adapter.displayName,
+      enabled: providerConfig.enabled,
+      cells,
+    });
+  }
+
+  const snapshot: ManagerSnapshotV2 = {
+    version: 2,
+    contract: 'manager-snapshot',
+    regletHome: regletHome(),
+    safety: {
+      localOnly: true,
+      networkSync: false,
+      daemon: false,
+      notifications: false,
+      requiresExplicitReview: true,
+    },
+    providerDiscovery: discovery,
+    sourceInventory,
+    enrollmentMatrix,
+    master: masterSummary(master, mcpServers.servers),
+    masterRevision: revisions.masterRevision,
+    state: await deriveManagerState(enrollmentMatrix, manifest, receipts, revisions.compositionRevisions, master),
+    effectiveProviders: effectiveProviders(enrollmentMatrix, master, manifest, receipts, revisions.compositionRevisions),
+    structuredPlan: {
+      available: false,
+      reason: 'snapshot-read-only',
+      entries: structuredEntries,
+    },
+    driftInbox: await driftInboxFromManifest(manifest),
+    receipts: {
+      list: receipts.map(receiptListItem),
+      details: receipts.map(receiptDetail),
+    },
+    legacyNetworkState,
+  };
+  return validateManagerSnapshotV2(snapshot);
+}
+
+async function readProviderState(provider: ProviderId): Promise<{
+  detected: boolean;
+  inventory: ProviderInventory;
+  contentIssues: Partial<Record<ContentId, string>>;
+}> {
+  const adapter = getAdapter(provider);
+  let detected = false;
+  try {
+    detected = await adapter.detect();
+    return { detected, inventory: await adapter.inventory(), contentIssues: {} };
+  } catch (error) {
+    const issue = error instanceof Error ? error.message : String(error);
+    const rulesPath = adapter.rulesPath();
+    const skillsDir = adapter.skillsDir();
+    return {
+      detected,
+      inventory: {
+        rulesPath,
+        rulesExists: rulesPath !== null && await fileExistsForSnapshot(rulesPath),
+        skillsDir,
+        skills: await childDirsForSnapshot(skillsDir),
+        mcpPath: adapter.mcpPath(),
+        mcpServers: [],
+      },
+      contentIssues: { mcp: issue },
+    };
+  }
+}
+
+function contentCapabilities(state: { inventory: ProviderInventory; contentIssues: Partial<Record<ContentId, string>> }): Record<ContentId, CapabilityState> {
+  return {
+    rules: state.contentIssues.rules === undefined
+      ? state.inventory.rulesPath === null ? unsupportedCapability('provider has no system-instructions path') : supportedCapability()
+      : needsAttentionCapability(state.contentIssues.rules),
+    skills: state.contentIssues.skills === undefined
+      ? state.inventory.skillsDir === null ? unsupportedCapability('provider has no skills directory') : supportedCapability()
+      : needsAttentionCapability(state.contentIssues.skills),
+    mcp: state.contentIssues.mcp === undefined
+      ? state.inventory.mcpPath === null ? unsupportedCapability('provider has no MCP configuration path') : supportedCapability()
+      : needsAttentionCapability(state.contentIssues.mcp),
+  };
+}
+
+async function fileExistsForSnapshot(filePath: string): Promise<boolean> {
+  try {
+    return (await stat(filePath)).isFile();
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+async function childDirsForSnapshot(dirPath: string | null): Promise<string[]> {
+  if (dirPath === null) return [];
+  try {
+    return (await readdir(dirPath, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort((left, right) => left.localeCompare(right));
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+function planEntry(cell: ManagerEnrollmentProviderV2['cells'][ContentId]): ManagerStructuredPlanEntryV2 {
+  if (cell.capability.state === 'unsupported') {
+    return { provider: cell.provider, content: cell.content, destinationPath: cell.destinationPath, state: 'unsupported', reason: cell.capability.reason };
+  }
+  if (cell.capability.state === 'needs-attention') {
+    return { provider: cell.provider, content: cell.content, destinationPath: cell.destinationPath, state: 'needs-attention', reason: cell.capability.reason };
+  }
+  if (!cell.enrolled) {
+    return { provider: cell.provider, content: cell.content, destinationPath: cell.destinationPath, state: 'unenrolled' };
+  }
+  return { provider: cell.provider, content: cell.content, destinationPath: cell.destinationPath, state: 'eligible' };
+}
+
+function destinationPath(inventory: ProviderInventory, content: ContentId): string | null {
+  if (content === 'rules') return inventory.rulesPath;
+  if (content === 'skills') return inventory.skillsDir;
+  return inventory.mcpPath;
+}
+
+function masterSummary(master: Awaited<ReturnType<typeof loadMasterDir>>, mcpServers: Awaited<ReturnType<typeof listMcpServers>>['servers']): ManagerMasterSummaryV2 {
+  return {
+    rules: {
+      sharedDocuments: master.rules.length,
+      providerOverlays: providerCountRecord((provider) => master.providerRules[provider].length),
+    },
+    skills: {
+      sharedSkills: master.skills.length,
+      providerScopedSkills: providerCountRecord((provider) => master.providerSkills[provider].length),
+    },
+    mcp: {
+      sharedServers: mcpServers.map(mcpServerSummary),
+    },
+  };
+}
+
+function effectiveProviders(
+  enrollmentMatrix: ManagerEnrollmentProviderV2[],
+  master: Awaited<ReturnType<typeof loadMasterDir>>,
+  manifest: Awaited<ReturnType<typeof loadManifest>>,
+  receipts: Awaited<ReturnType<typeof listOperationReceipts>>,
+  compositionRevisions: Awaited<ReturnType<typeof deriveMasterRevisions>>['compositionRevisions'],
+): ManagerEffectiveProviderCompositionV2[] {
+  return enrollmentMatrix
+    .filter((provider) => Object.values(provider.cells).some((cell) => cell.enrolled))
+    .map((provider) => {
+      const contents: ManagerEffectiveProviderCompositionV2['contents'] = {};
+      for (const content of contentIds) {
+        const cell = provider.cells[content];
+        if (!cell.enrolled || cell.destinationPath === null) continue;
+        const lastAppliedCompositionRevision = findLastAppliedCompositionRevision(cell, manifest, receipts);
+        contents[content] = {
+          enrolled: true,
+          destinationPath: cell.destinationPath,
+          masterItems: masterItemCount(master, provider.provider, content),
+          capability: cell.capability,
+          compositionRevision: compositionRevisions[provider.provider][content],
+          ...(typeof lastAppliedCompositionRevision === 'string' ? { lastAppliedCompositionRevision } : {}),
+        };
+      }
+      return {
+        provider: provider.provider,
+        displayName: provider.displayName,
+        contents,
+      };
+    });
+}
+
+async function deriveManagerState(
+  enrollmentMatrix: ManagerEnrollmentProviderV2[],
+  manifest: Awaited<ReturnType<typeof loadManifest>>,
+  receipts: Awaited<ReturnType<typeof listOperationReceipts>>,
+  compositionRevisions: Awaited<ReturnType<typeof deriveMasterRevisions>>['compositionRevisions'],
+  master: Awaited<ReturnType<typeof loadMasterDir>>,
+): Promise<ManagerDerivedStateV2> {
+  const enrolledCells = enrollmentMatrix.flatMap((provider) =>
+    contentIds
+      .map((content) => provider.cells[content])
+      .filter((cell) => cell.enrolled),
+  );
+  if (enrolledCells.length === 0) {
+    return { state: 'draftOnly', reasons: ['noDestinationsEnrolled'] };
+  }
+
+  const reasons = new Set<ManagerDerivedStateV2['reasons'][number]>();
+  if (enrolledCells.some((cell) => cell.capability.state === 'needs-attention')) {
+    reasons.add('contentNeedsAttention');
+  }
+  if (enrolledCells.some((cell) => cell.capability.state === 'unsupported')) {
+    reasons.add('contentUnsupported');
+  }
+  try {
+    resolveMcpServersEnv(master.mcpServers);
+  } catch {
+    if (enrolledCells.some((cell) => cell.content === 'mcp')) {
+      reasons.add('requiredMcpEnvironmentMissing');
+    }
+  }
+  if (reasons.has('contentNeedsAttention') || reasons.has('contentUnsupported') || reasons.has('requiredMcpEnvironmentMissing')) {
+    return { state: 'blocked', reasons: Array.from(reasons).sort() };
+  }
+
+  const driftByPath = new Map((await detectDrift()).map((record) => [record.outputPath, record.status] as const));
+  for (const outputPath of Object.keys(manifest.outputs)) {
+    const status = driftByPath.get(outputPath);
+    if (status === 'missing') reasons.add('managedOutputMissing');
+    if (status === 'modified') reasons.add('managedOutputModified');
+  }
+  if (reasons.has('managedOutputMissing') || reasons.has('managedOutputModified')) {
+    return { state: 'driftDetected', reasons: Array.from(reasons).sort() };
+  }
+
+  for (const cell of enrolledCells) {
+    if (cell.destinationPath === null) continue;
+    const appliedRevision = findLastAppliedCompositionRevision(cell, manifest, receipts);
+    if (appliedRevision === undefined) {
+      reasons.add('noAppliedRevision');
+      continue;
+    }
+    if (appliedRevision === null || appliedRevision !== compositionRevisions[cell.provider][cell.content]) {
+      reasons.add('compositionRevisionChanged');
+    }
+  }
+
+  if (reasons.has('noAppliedRevision') || reasons.has('compositionRevisionChanged')) {
+    return { state: 'changesReady', reasons: Array.from(reasons).sort() };
+  }
+  return { state: 'upToDate', reasons: ['compositionRevisionCurrent'] };
+}
+
+function findLastAppliedCompositionRevision(
+  cell: ManagerEnrollmentProviderV2['cells'][ContentId],
+  manifest: Awaited<ReturnType<typeof loadManifest>>,
+  receipts: Awaited<ReturnType<typeof listOperationReceipts>>,
+): string | null | undefined {
+  if (cell.destinationPath === null) return undefined;
+  const matchingOutputs = Object.entries(manifest.outputs).filter(([outputPath, output]) =>
+    output.provider === cell.provider &&
+    output.content === cell.content &&
+    (cell.content === 'skills' ? path.dirname(outputPath) === cell.destinationPath : outputPath === cell.destinationPath),
+  );
+  if (matchingOutputs.length > 0) {
+    const revisions = new Set(
+      matchingOutputs.flatMap(([, output]) => output.compositionRevision === undefined ? [] : [output.compositionRevision]),
+    );
+    if (revisions.size === 0) return undefined;
+    if (revisions.size > 1 || revisions.size !== matchingOutputs.length) return null;
+    return revisions.values().next().value;
+  }
+
+  const key = `${cell.provider}:${cell.content}`;
+  return receipts.find((receipt) => receipt.lifecycle === 'completed' && receipt.compositionRevisions?.[key] !== undefined)
+    ?.compositionRevisions?.[key];
+}
+
+function masterItemCount(master: Awaited<ReturnType<typeof loadMasterDir>>, provider: ProviderId, content: ContentId): number {
+  if (content === 'rules') return master.rules.length + master.providerRules[provider].length;
+  if (content === 'skills') return new Set([...master.skills.map((skill) => skill.name), ...master.providerSkills[provider].map((skill) => skill.name)]).size;
+  return Object.keys(master.mcpServers).length;
+}
+
+function providerCountRecord(read: (provider: ProviderId) => number): Record<ProviderId, number> {
+  return Object.fromEntries(providerIds.map((provider) => [provider, read(provider)])) as Record<ProviderId, number>;
+}
+
+async function driftInboxFromManifest(manifest: Awaited<ReturnType<typeof loadManifest>>): Promise<ManagerDriftInboxItemV2[]> {
+  const items: ManagerDriftInboxItemV2[] = [];
+  for (const [outputPath, output] of Object.entries(manifest.outputs)) {
+    items.push({
+      provider: output.provider,
+      content: output.content,
+      outputPath,
+      ...(await driftStatusWithoutSecrets(outputPath, output.hash)),
+    });
+  }
+  return items;
+}
+
+async function driftStatusWithoutSecrets(outputPath: string, expectedHash: string): Promise<Pick<ManagerDriftInboxItemV2, 'status' | 'issue'>> {
+  try {
+    const current = await currentTargetHash(outputPath);
+    return { status: current === expectedHash ? 'clean' : 'modified' };
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return { status: 'missing' };
+    }
+    return { status: 'unknown', issue: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function currentTargetHash(outputPath: string): Promise<string> {
+  const info = await stat(outputPath);
+  if (!info.isDirectory()) return sha256String(await readFile(outputPath));
+  const parts: string[] = [];
+  async function visit(currentDir: string): Promise<void> {
+    const entries = await readdir(currentDir, { withFileTypes: true });
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      const entryPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        await visit(entryPath);
+      } else if (entry.isFile()) {
+        parts.push(`${path.relative(outputPath, entryPath).split(path.sep).join('/')}\0${await readFile(entryPath, 'utf8')}`);
+      }
+    }
+  }
+  await visit(outputPath);
+  return sha256String(parts.join('\0'));
 }
 
 async function buildScanJson(): Promise<ScanJson> {

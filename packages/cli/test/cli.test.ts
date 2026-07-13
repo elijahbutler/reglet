@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -846,5 +846,193 @@ describe('reglet CLI', () => {
     expect(snapshot.operations).toEqual([]);
     expect(snapshot.legacyNetworkState).toEqual({ present: true, paths: [path.join(home, '.state', 'sync.json')] });
     expect(result.stdout).not.toContain('legacy-network-secret');
+  });
+
+  test('manager snapshot defaults to legacy v1 for the retained Swift decoder', async () => {
+    const { home, providerHome } = await useTempHomes();
+
+    const result = await runCli(['manager', 'snapshot', '--json'], home, providerHome);
+    const snapshot = JSON.parse(result.stdout) as { version: number; scan?: unknown; providerDiscovery?: unknown };
+
+    expect(snapshot.version).toBe(1);
+    expect(snapshot.scan).toBeDefined();
+    expect(snapshot.providerDiscovery).toBeUndefined();
+  });
+
+  test('manager snapshot v2 does not create local state while reading an empty home', async () => {
+    const { home, providerHome } = await useTempHomes();
+
+    const result = await runCli(['manager', 'snapshot', '--json', '--contract-version', '2'], home, providerHome);
+    const snapshot = JSON.parse(result.stdout) as { state: { state: string; reasons: string[] } };
+
+    expect(snapshot.state).toEqual({ state: 'draftOnly', reasons: ['noDestinationsEnrolled'] });
+    await expect(stat(path.join(home, '.state'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  test('manager snapshot v2 separates discovery, sources, enrollment, and effective destinations', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const claudeRules = path.join(providerHome, '.claude', 'CLAUDE.md');
+    const codexRules = path.join(providerHome, '.codex', 'AGENTS.md');
+    await mkdir(path.dirname(claudeRules), { recursive: true });
+    await mkdir(path.dirname(codexRules), { recursive: true });
+    await writeFile(claudeRules, 'claude source\n');
+    await writeFile(codexRules, 'codex source only\n');
+    await mkdir(path.join(home, 'rules'), { recursive: true });
+    await writeFile(path.join(home, 'rules', '00-general.md'), 'master\n');
+    await runCli(['enroll', 'claude'], home, providerHome);
+
+    const result = await runCli(['manager', 'snapshot', '--json', '--contract-version', '2'], home, providerHome);
+    const snapshot = JSON.parse(result.stdout) as {
+      version: number;
+      safety: { localOnly: boolean; networkSync: boolean };
+      providerDiscovery: { provider: string; capabilities: { skills: { state: string; reason?: string } } }[];
+      sourceInventory: { provider: string; content: string; path: string | null }[];
+      enrollmentMatrix: { provider: string; cells: { rules: { enrolled: boolean } } }[];
+      effectiveProviders: { provider: string }[];
+    };
+
+    expect(snapshot.version).toBe(2);
+    expect(snapshot.safety).toMatchObject({ localOnly: true, networkSync: false });
+    expect(snapshot.providerDiscovery).toHaveLength(6);
+    expect(snapshot.providerDiscovery.find((provider) => provider.provider === 'windsurf')?.capabilities.skills)
+      .toEqual({ state: 'unsupported', reason: 'provider has no skills directory' });
+    expect(snapshot.sourceInventory).toContainEqual(expect.objectContaining({ provider: 'codex', content: 'rules', path: codexRules }));
+    expect(snapshot.enrollmentMatrix.find((provider) => provider.provider === 'claude')?.cells.rules.enrolled).toBe(true);
+    expect(snapshot.effectiveProviders.map((provider) => provider.provider)).toEqual(['claude']);
+  });
+
+  test('manager snapshot v2 derives changes, current, and drift states from revisions and hashes', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await mkdir(path.join(home, 'rules'), { recursive: true });
+    await writeFile(path.join(home, 'rules', '00-general.md'), 'master\n');
+    await runCli(['enroll', 'claude'], home, providerHome);
+    await runCli(['unenroll', 'claude:skills'], home, providerHome);
+    await runCli(['unenroll', 'claude:mcp'], home, providerHome);
+
+    const changes = JSON.parse(
+      (await runCli(['manager', 'snapshot', '--json', '--contract-version', '2'], home, providerHome)).stdout,
+    ) as { state: { state: string; reasons: string[] } };
+    expect(changes.state).toEqual({ state: 'changesReady', reasons: ['noAppliedRevision'] });
+
+    await runCli(['apply', '--provider', 'claude', '--content', 'rules'], home, providerHome);
+    const current = JSON.parse(
+      (await runCli(['manager', 'snapshot', '--json', '--contract-version', '2'], home, providerHome)).stdout,
+    ) as { state: { state: string; reasons: string[] }; effectiveProviders: { contents: { rules?: { compositionRevision?: string; lastAppliedCompositionRevision?: string } } }[] };
+    expect(current.state).toEqual({ state: 'upToDate', reasons: ['compositionRevisionCurrent'] });
+    expect(current.effectiveProviders[0]?.contents.rules?.lastAppliedCompositionRevision)
+      .toBe(current.effectiveProviders[0]?.contents.rules?.compositionRevision);
+
+    await writeFile(path.join(providerHome, '.claude', 'CLAUDE.md'), 'local edit\n');
+    const drift = JSON.parse(
+      (await runCli(['manager', 'snapshot', '--json', '--contract-version', '2'], home, providerHome)).stdout,
+    ) as { state: { state: string; reasons: string[] } };
+    expect(drift.state).toEqual({ state: 'driftDetected', reasons: ['managedOutputModified'] });
+  });
+
+  test('manager snapshot v2 loads legacy manifests without silently rewriting them', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const outputPath = path.join(providerHome, '.claude', 'CLAUDE.md');
+    await mkdir(path.dirname(outputPath), { recursive: true });
+    await writeFile(outputPath, 'legacy output\n');
+    await mkdir(path.join(home, '.state'), { recursive: true, mode: 0o700 });
+    const manifestPath = path.join(home, '.state', 'manifest.json');
+    const legacyManifest = `${JSON.stringify({
+      version: 1,
+      outputs: {
+        [outputPath]: {
+          provider: 'claude',
+          content: 'rules',
+          hash: 'legacy-hash',
+          appliedAt: '2026-07-13T00:00:00.000Z',
+          backedUpTo: null,
+        },
+      },
+    }, null, 2)}\n`;
+    await writeFile(manifestPath, legacyManifest, { mode: 0o600 });
+
+    const result = await runCli(['manager', 'snapshot', '--json', '--contract-version', '2'], home, providerHome);
+    const snapshot = JSON.parse(result.stdout) as { driftInbox: { status: string }[] };
+
+    expect(snapshot.driftInbox[0]?.status).toBe('modified');
+    expect(await readFile(manifestPath, 'utf8')).toBe(legacyManifest);
+  });
+
+  test('manager snapshot v2 tracks an applied skills composition across per-skill outputs', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await mkdir(path.join(home, 'skills', 'review'), { recursive: true });
+    await writeFile(path.join(home, 'skills', 'review', 'SKILL.md'), '# Review\n');
+    await runCli(['enroll', 'claude'], home, providerHome);
+    await runCli(['unenroll', 'claude:rules'], home, providerHome);
+    await runCli(['unenroll', 'claude:mcp'], home, providerHome);
+
+    await runCli(['apply', '--provider', 'claude', '--content', 'skills'], home, providerHome);
+    const snapshot = JSON.parse(
+      (await runCli(['manager', 'snapshot', '--json', '--contract-version', '2'], home, providerHome)).stdout,
+    ) as { state: { state: string; reasons: string[] }; effectiveProviders: { contents: { skills?: { compositionRevision?: string; lastAppliedCompositionRevision?: string } } }[] };
+
+    expect(snapshot.state).toEqual({ state: 'upToDate', reasons: ['compositionRevisionCurrent'] });
+    expect(snapshot.effectiveProviders[0]?.contents.skills?.lastAppliedCompositionRevision)
+      .toBe(snapshot.effectiveProviders[0]?.contents.skills?.compositionRevision);
+
+    await rm(path.join(home, 'skills', 'review'), { recursive: true });
+    await runCli(['apply', '--provider', 'claude', '--content', 'skills'], home, providerHome);
+    const emptySnapshot = JSON.parse(
+      (await runCli(['manager', 'snapshot', '--json', '--contract-version', '2'], home, providerHome)).stdout,
+    ) as { state: { state: string; reasons: string[] }; effectiveProviders: { contents: { skills?: { compositionRevision?: string; lastAppliedCompositionRevision?: string } } }[] };
+    expect(emptySnapshot.state).toEqual({ state: 'upToDate', reasons: ['compositionRevisionCurrent'] });
+    expect(emptySnapshot.effectiveProviders[0]?.contents.skills?.lastAppliedCompositionRevision)
+      .toBe(emptySnapshot.effectiveProviders[0]?.contents.skills?.compositionRevision);
+  });
+
+  test('manager snapshot v2 reports needs-attention cells and does not resolve MCP secret environment values', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await mkdir(path.join(providerHome, '.claude'), { recursive: true });
+    await writeFile(path.join(providerHome, '.claude.json'), '{not-json');
+    await mkdir(path.join(home, 'mcp'), { recursive: true });
+    await writeFile(
+      path.join(home, 'mcp', 'servers.json'),
+      `${JSON.stringify({ mcpServers: { secretServer: { command: 'node', env: { TOKEN: { source: 'process-env', name: 'REGLET_TEST_SECRET' } } } } }, null, 2)}\n`,
+    );
+    await runCli(['enroll', 'claude'], home, providerHome);
+
+    const result = await runCli(
+      ['manager', 'snapshot', '--json', '--contract-version', '2'],
+      home,
+      providerHome,
+      { REGLET_TEST_SECRET: 'resolved-secret-value' },
+    );
+    const snapshot = JSON.parse(result.stdout) as {
+      providerDiscovery: { provider: string; capabilities: { mcp: { state: string; reason?: string } } }[];
+      enrollmentMatrix: { provider: string; cells: { mcp: { enrolled: boolean; capability: { state: string } } } }[];
+      master: { mcp: { sharedServers: { name: string; envKeys: string[] }[] } };
+    };
+
+    expect(result.stdout).not.toContain('resolved-secret-value');
+    expect(snapshot.master.mcp.sharedServers).toEqual([{ name: 'secretServer', transport: 'command', envKeys: ['TOKEN'], issues: [] }]);
+    expect(snapshot.providerDiscovery.find((provider) => provider.provider === 'claude')?.capabilities.mcp.state)
+      .toBe('needs-attention');
+    expect(snapshot.enrollmentMatrix.find((provider) => provider.provider === 'claude')?.cells.mcp.enrolled).toBe(true);
+  });
+
+  test('manager snapshot v2 reports blocked state for missing MCP environment', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await mkdir(path.join(home, 'mcp'), { recursive: true });
+    await writeFile(
+      path.join(home, 'mcp', 'servers.json'),
+      `${JSON.stringify({ mcpServers: { local: { command: 'node', env: { TOKEN: { source: 'process-env', name: 'REGLET_MISSING_SECRET' } } } } }, null, 2)}\n`,
+    );
+    await runCli(['enroll', 'claude'], home, providerHome);
+
+    const result = await runCli(['manager', 'snapshot', '--json', '--contract-version', '2'], home, providerHome);
+    const snapshot = JSON.parse(result.stdout) as { state: { state: string; reasons: string[] } };
+
+    expect(snapshot.state).toEqual({ state: 'blocked', reasons: ['requiredMcpEnvironmentMissing'] });
+  });
+
+  test('manager snapshot rejects unsupported contract versions', async () => {
+    const { home, providerHome } = await useTempHomes();
+
+    await expect(runCli(['manager', 'snapshot', '--json', '--contract-version', '3'], home, providerHome))
+      .rejects.toMatchObject({ code: 1 });
   });
 });

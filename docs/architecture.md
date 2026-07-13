@@ -60,4 +60,4 @@ The manifest records the generated hash and managed MCP keys for each provider o
 
 ## Manager contract
 
-The macOS manager requests `reglet manager snapshot --json` for a consolidated, redacted local view instead of composing several mutable commands. Its apply actions use structured previews, scoped provider/content selection, and receipt results. Automatic update checks are off by default; a manual check is a separate user action.
+The retained macOS manager requests `reglet manager snapshot --json`, which remains the version 1 compatibility response. New Manager work requests `reglet manager snapshot --json --contract-version 2` and validates the response against `packages/core/schemas/manager-snapshot-v2.schema.json`. Version 2 separates discovered sources from persisted destination enrollment and is read-only; unknown versions fail closed. Apply actions use structured previews, scoped provider/content selection, and receipt results. Automatic update checks are off by default; a manual check is a separate user action.

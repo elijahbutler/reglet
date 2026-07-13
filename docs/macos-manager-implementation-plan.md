@@ -35,6 +35,8 @@ Phase 3 and Phase 4 UI work can proceed in parallel only after Phase 2 establish
 
 ### Round 0.2: versioned Manager contract
 
+Status: Complete.
+
 Goal: give the Manager one stable, read-only representation of sources, destinations, capabilities, and effective scope.
 
 Deliverables:
@@ -67,6 +69,8 @@ Merge gate:
 - Existing CLI and Swift tests remain green.
 
 ### Round 0.3: Master revision and applied composition
+
+Status: Complete.
 
 Goal: make draft, applied, and drift states exact and reproducible.
 

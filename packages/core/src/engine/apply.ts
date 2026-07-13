@@ -7,6 +7,7 @@ import { listMcpServers, resolveMcpServersEnv } from '../mcp.js';
 import { regletHome } from '../paths.js';
 import { allAdapters, getAdapter } from '../providers/registry.js';
 import type { ApplyResult, ProviderAdapter, ProviderId } from '../providers/types.js';
+import { compositionRevisionKey, deriveMasterRevisions, type MasterRevisionSet } from '../revisions.js';
 import { detectDrift } from './drift.js';
 import { beginOperation, recoverPendingOperations, type OperationContext, type OperationReceipt } from './operations.js';
 import { removeManagedDirectory, safeWriteDirectory, safeWriteFile } from './writer.js';
@@ -43,6 +44,7 @@ export async function applyAll(opts: ApplyAllOptions = {}): Promise<ApplyReport>
 async function applyAllWithHome(opts: ApplyAllOptions, home: string): Promise<ApplyReport> {
   const config = await loadConfig(home);
   const master = await loadMasterDir(home);
+  const revisions = await deriveMasterRevisions(master, config);
   const selectedProviders = opts.providers === undefined ? allAdapters() : opts.providers.map((id) => getAdapter(id));
   const selectedContents = opts.contents ?? allContents;
   const dryRun = opts.dryRun ?? false;
@@ -66,6 +68,8 @@ async function applyAllWithHome(opts: ApplyAllOptions, home: string): Promise<Ap
         providers: opts.providers,
         contents: opts.contents,
         structuredPreviewDigest: opts.structuredPreviewDigest,
+        masterRevision: revisions.masterRevision,
+        compositionRevisions: appliedCompositionRevisions(config, revisions, selectedProviders, selectedContents),
       });
 
   try {
@@ -83,7 +87,7 @@ async function applyAllWithHome(opts: ApplyAllOptions, home: string): Promise<Ap
       if (selectedContents.includes('rules')) {
         results.push(
           providerConfig.rules
-            ? await applyRules(adapter, master, home, dryRun, operation, opts)
+            ? await applyRules(adapter, master, home, dryRun, operation, opts, revisions.masterRevision, revisions.compositionRevisions[adapter.id].rules)
             : skipped(adapter, 'rules', `${adapter.id}:rules unenrolled`),
         );
       }
@@ -91,7 +95,7 @@ async function applyAllWithHome(opts: ApplyAllOptions, home: string): Promise<Ap
       if (selectedContents.includes('skills')) {
         results.push(
           ...(providerConfig.skills
-            ? await applySkills(adapter, master, home, dryRun, operation, opts)
+            ? await applySkills(adapter, master, home, dryRun, operation, opts, revisions.masterRevision, revisions.compositionRevisions[adapter.id].skills)
             : [skipped(adapter, 'skills', `${adapter.id}:skills unenrolled`)]),
         );
       }
@@ -102,7 +106,13 @@ async function applyAllWithHome(opts: ApplyAllOptions, home: string): Promise<Ap
           continue;
         }
 
-        const mcpResult = adapter.applyMcp(resolveMcpServersEnv(master.mcpServers), { dryRun, home, operation });
+        const mcpResult = adapter.applyMcp(resolveMcpServersEnv(master.mcpServers), {
+          dryRun,
+          home,
+          operation,
+          masterRevision: revisions.masterRevision,
+          compositionRevision: revisions.compositionRevisions[adapter.id].mcp,
+        });
         results.push(
           mcpResult === null
             ? skipped(adapter, 'mcp', `${adapter.id}:mcp not implemented`)
@@ -118,6 +128,30 @@ async function applyAllWithHome(opts: ApplyAllOptions, home: string): Promise<Ap
     }
     throw error;
   }
+}
+
+function appliedCompositionRevisions(
+  config: Awaited<ReturnType<typeof loadConfig>>,
+  revisions: MasterRevisionSet,
+  providers: readonly ProviderAdapter[],
+  contents: readonly ApplyContent[],
+): Record<string, string> {
+  const applied: Record<string, string> = {};
+  for (const adapter of providers) {
+    const providerConfig = config.providers[adapter.id];
+    if (!providerConfig.enabled) continue;
+    for (const content of contents) {
+      const destination = content === 'rules'
+        ? adapter.rulesPath()
+        : content === 'skills'
+          ? adapter.skillsDir()
+          : adapter.mcpPath();
+      if (providerConfig[content] && destination !== null) {
+        applied[compositionRevisionKey(adapter.id, content)] = revisions.compositionRevisions[adapter.id][content];
+      }
+    }
+  }
+  return applied;
 }
 
 async function assertValidMcp(home: string): Promise<void> {
@@ -150,6 +184,8 @@ async function applyRules(
   dryRun: boolean,
   operation: OperationContext | undefined,
   opts: ApplyAllOptions,
+  masterRevision: string,
+  compositionRevision: string,
 ): Promise<ApplyResult> {
   const outputPath = adapter.rulesPath();
   if (outputPath === null) {
@@ -165,6 +201,8 @@ async function applyRules(
     dryRun,
     home,
     operation,
+    masterRevision,
+    compositionRevision,
   });
 
   return { provider: adapter.id, content: 'rules', outputPath, status: writeResult.status };
@@ -182,6 +220,8 @@ async function applySkills(
   dryRun: boolean,
   operation: OperationContext | undefined,
   opts: ApplyAllOptions,
+  masterRevision: string,
+  compositionRevision: string,
 ): Promise<ApplyResult[]> {
   const skillsDir = adapter.skillsDir();
   if (skillsDir === null) {
@@ -202,6 +242,8 @@ async function applySkills(
       dryRun,
       home,
       operation,
+      masterRevision,
+      compositionRevision,
     });
     results.push({ provider: adapter.id, content: 'skills', outputPath, status: writeResult.status });
   }

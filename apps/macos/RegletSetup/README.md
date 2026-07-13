@@ -18,6 +18,8 @@ reglet operations restore <receipt-id>
 reglet state legacy-network-status --json
 ```
 
+The retained Swift decoder intentionally uses the default version 1 snapshot. New Manager surfaces use `reglet manager snapshot --json --contract-version 2`; unsupported contract versions are rejected.
+
 All app-originated provider writes use the structured preview/apply pair. Master edits and onboarding import are staged locally first; the app then displays the fresh redacted review before it can write a provider output.
 
 ## Local development

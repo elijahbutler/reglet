@@ -13,6 +13,7 @@ import { sha256String } from '../fsutil.js';
 import { applyAll, type ApplyContent } from './apply.js';
 import { detectDrift, type DriftStatus } from './drift.js';
 import type { OperationReceipt } from './operations.js';
+import { deriveMasterRevisions } from '../revisions.js';
 
 export interface StructuredApplyPreviewOptions {
   providers?: ProviderId[];
@@ -23,6 +24,7 @@ export interface StructuredApplyPreviewOptions {
 export interface StructuredApplyPreview {
   version: 1;
   digest: string;
+  masterRevision: string;
   validationIssues: string[];
   entries: StructuredApplyPreviewEntry[];
 }
@@ -44,6 +46,7 @@ export interface StructuredApplyPreviewEntry {
   expectedTargetHash: string | null;
   /** SHA-256 of the exact rendered target state, never its raw content. */
   resultingTargetHash: string | null;
+  compositionRevision: string | null;
   driftStatus: DriftStatus | 'unmanaged' | 'not-applicable';
   snapshot: {
     behavior: 'snapshot-before-write' | 'record-absence' | 'none';
@@ -94,6 +97,7 @@ async function previewApplyStructuredBody(
 ): Promise<Omit<StructuredApplyPreview, 'digest'>> {
   const config = await loadConfig(home);
   const master = await loadMasterDir(home);
+  const revisions = await deriveMasterRevisions(master, config);
   const providers = options.providers === undefined ? allAdapters() : options.providers.map((id) => getAdapter(id));
   const contents = options.contents ?? ['rules', 'skills', 'mcp'];
   const validationIssues = await collectValidationIssues(home);
@@ -110,14 +114,14 @@ async function previewApplyStructuredBody(
         continue;
       }
       if (content === 'rules') {
-        entries.push(await previewRules(adapter, [...master.rules, ...master.providerRules[adapter.id]], home, driftByPath));
+        entries.push(await previewRules(adapter, [...master.rules, ...master.providerRules[adapter.id]], home, driftByPath, revisions.compositionRevisions[adapter.id].rules));
       }
-      if (content === 'skills') entries.push(...(await previewSkills(adapter, master, home, driftByPath)));
-      if (content === 'mcp') entries.push(await previewMcp(adapter, master.mcpServers, home, driftByPath, validationIssues));
+      if (content === 'skills') entries.push(...(await previewSkills(adapter, master, home, driftByPath, revisions.compositionRevisions[adapter.id].skills)));
+      if (content === 'mcp') entries.push(await previewMcp(adapter, master.mcpServers, home, driftByPath, validationIssues, revisions.compositionRevisions[adapter.id].mcp));
     }
   }
 
-  return { version: 1, validationIssues, entries };
+  return { version: 1, masterRevision: revisions.masterRevision, validationIssues, entries };
 }
 
 async function collectValidationIssues(home: string): Promise<string[]> {
@@ -144,12 +148,13 @@ async function previewRules(
   rules: { relPath: string; content: string }[],
   home: string,
   driftByPath: ReadonlyMap<string, DriftStatus>,
+  compositionRevision: string,
 ): Promise<StructuredApplyPreviewEntry> {
   const outputPath = adapter.rulesPath();
   if (outputPath === null) return skipEntry(adapter.id, 'rules', `${adapter.id}:rules unsupported`);
   const before = await readOptionalFile(outputPath);
   const after = renderRulesFile(adapter.id, rules);
-  return makeEntry(adapter.id, 'rules', 'write', outputPath, before, after, home, driftByPath.get(outputPath) ?? 'unmanaged');
+  return makeEntry(adapter.id, 'rules', 'write', outputPath, before, after, home, driftByPath.get(outputPath) ?? 'unmanaged', compositionRevision);
 }
 
 async function previewSkills(
@@ -157,6 +162,7 @@ async function previewSkills(
   master: Awaited<ReturnType<typeof loadMasterDir>>,
   home: string,
   driftByPath: ReadonlyMap<string, DriftStatus>,
+  compositionRevision: string,
 ): Promise<StructuredApplyPreviewEntry[]> {
   const skillsDir = adapter.skillsDir();
   if (skillsDir === null) return [skipEntry(adapter.id, 'skills', `${adapter.id}:skills unsupported`)];
@@ -176,6 +182,7 @@ async function previewSkills(
         await readDirectorySnapshot(sourceDir),
         home,
         driftByPath.get(outputPath) ?? 'unmanaged',
+        compositionRevision,
       ),
     );
   }
@@ -193,6 +200,7 @@ async function previewSkills(
           null,
           home,
           driftByPath.get(outputPath) ?? 'unmanaged',
+          compositionRevision,
         ),
       );
     }
@@ -206,6 +214,7 @@ async function previewMcp(
   home: string,
   driftByPath: ReadonlyMap<string, DriftStatus>,
   validationIssues: readonly string[],
+  compositionRevision: string,
 ): Promise<StructuredApplyPreviewEntry> {
   const outputPath = adapter.mcpPath();
   if (outputPath === null) {
@@ -236,6 +245,7 @@ async function previewMcp(
     after,
     home,
     driftByPath.get(outputPath) ?? 'unmanaged',
+    compositionRevision,
     rawBefore,
     rawAfter,
   );
@@ -341,6 +351,7 @@ async function makeEntry(
   after: unknown,
   home: string,
   driftStatus: DriftStatus | 'unmanaged',
+  compositionRevision: string,
   rawBefore: unknown = before,
   rawAfter: unknown = after,
 ): Promise<StructuredApplyPreviewEntry> {
@@ -355,6 +366,7 @@ async function makeEntry(
     diff: unifiedDiff(formatPreviewValue(before), formatPreviewValue(after), outputPath),
     expectedTargetHash: fingerprintTarget(rawBefore),
     resultingTargetHash: fingerprintTarget(rawAfter),
+    compositionRevision,
     driftStatus,
     snapshot: before === null
       ? { behavior: 'record-absence', location: null }
@@ -381,6 +393,7 @@ function skipEntry(provider: ProviderId, content: ApplyContent, message: string)
     diff: '',
     expectedTargetHash: null,
     resultingTargetHash: null,
+    compositionRevision: null,
     driftStatus: 'not-applicable',
     snapshot: { behavior: 'none', location: null },
     backup: { behavior: 'none', location: null },

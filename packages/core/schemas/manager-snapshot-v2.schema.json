@@ -1,0 +1,346 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://reglet.dev/schemas/manager-snapshot-v2.schema.json",
+  "title": "Reglet Manager snapshot v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "contract", "regletHome", "safety", "providerDiscovery", "sourceInventory", "enrollmentMatrix", "master", "state", "effectiveProviders", "structuredPlan", "driftInbox", "receipts", "legacyNetworkState"],
+  "properties": {
+    "version": { "const": 2 },
+    "contract": { "const": "manager-snapshot" },
+    "regletHome": { "type": "string" },
+    "safety": { "$ref": "#/definitions/safety" },
+    "providerDiscovery": { "type": "array", "items": { "$ref": "#/definitions/providerDiscovery" } },
+    "sourceInventory": { "type": "array", "items": { "$ref": "#/definitions/sourceInventory" } },
+    "enrollmentMatrix": { "type": "array", "items": { "$ref": "#/definitions/enrollmentProvider" } },
+    "master": { "$ref": "#/definitions/masterSummary" },
+    "masterRevision": { "type": "string" },
+    "state": { "$ref": "#/definitions/derivedState" },
+    "effectiveProviders": { "type": "array", "items": { "$ref": "#/definitions/effectiveProvider" } },
+    "structuredPlan": { "$ref": "#/definitions/structuredPlan" },
+    "driftInbox": { "type": "array", "items": { "$ref": "#/definitions/driftItem" } },
+    "receipts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["list", "details"],
+      "properties": {
+        "list": { "type": "array", "items": { "$ref": "#/definitions/receiptListItem" } },
+        "details": { "type": "array", "items": { "$ref": "#/definitions/receiptDetail" } }
+      }
+    },
+    "legacyNetworkState": { "$ref": "#/definitions/legacyState" }
+  },
+  "definitions": {
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["localOnly", "networkSync", "daemon", "notifications", "requiresExplicitReview"],
+      "properties": {
+        "localOnly": { "const": true },
+        "networkSync": { "const": false },
+        "daemon": { "const": false },
+        "notifications": { "const": false },
+        "requiresExplicitReview": { "const": true }
+      }
+    },
+    "providerId": { "enum": ["claude", "codex", "cursor", "gemini", "windsurf", "opencode"] },
+    "content": { "enum": ["rules", "skills", "mcp"] },
+    "capability": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state"],
+          "properties": { "state": { "const": "supported" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "reason"],
+          "properties": {
+            "state": { "enum": ["unsupported", "needs-attention"] },
+            "reason": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "contentCapabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rules", "skills", "mcp"],
+      "properties": {
+        "rules": { "$ref": "#/definitions/capability" },
+        "skills": { "$ref": "#/definitions/capability" },
+        "mcp": { "$ref": "#/definitions/capability" }
+      }
+    },
+    "providerDiscovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "displayName", "presence", "detected", "capabilities"],
+      "properties": {
+        "provider": { "$ref": "#/definitions/providerId" },
+        "displayName": { "type": "string" },
+        "presence": { "enum": ["installed", "not-found", "needs-attention"] },
+        "detected": { "type": "boolean" },
+        "capabilities": { "$ref": "#/definitions/contentCapabilities" }
+      }
+    },
+    "sourceInventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "content", "path", "readable", "exists", "items"],
+      "properties": {
+        "provider": { "$ref": "#/definitions/providerId" },
+        "content": { "$ref": "#/definitions/content" },
+        "path": { "type": ["string", "null"] },
+        "readable": { "type": "boolean" },
+        "exists": { "type": "boolean" },
+        "items": { "type": "array", "items": { "type": "string" } },
+        "issue": { "type": "string" }
+      }
+    },
+    "enrollmentCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "content", "enrolled", "capability", "destinationPath"],
+      "properties": {
+        "provider": { "$ref": "#/definitions/providerId" },
+        "content": { "$ref": "#/definitions/content" },
+        "enrolled": { "type": "boolean" },
+        "capability": { "$ref": "#/definitions/capability" },
+        "destinationPath": { "type": ["string", "null"] }
+      }
+    },
+    "enrollmentCells": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rules", "skills", "mcp"],
+      "properties": {
+        "rules": { "$ref": "#/definitions/enrollmentCell" },
+        "skills": { "$ref": "#/definitions/enrollmentCell" },
+        "mcp": { "$ref": "#/definitions/enrollmentCell" }
+      }
+    },
+    "enrollmentProvider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "displayName", "enabled", "cells"],
+      "properties": {
+        "provider": { "$ref": "#/definitions/providerId" },
+        "displayName": { "type": "string" },
+        "enabled": { "type": "boolean" },
+        "cells": { "$ref": "#/definitions/enrollmentCells" }
+      }
+    },
+    "providerCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claude", "codex", "cursor", "gemini", "windsurf", "opencode"],
+      "properties": {
+        "claude": { "type": "integer", "minimum": 0 },
+        "codex": { "type": "integer", "minimum": 0 },
+        "cursor": { "type": "integer", "minimum": 0 },
+        "gemini": { "type": "integer", "minimum": 0 },
+        "windsurf": { "type": "integer", "minimum": 0 },
+        "opencode": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "mcpServerSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "transport", "envKeys", "issues"],
+      "properties": {
+        "name": { "type": "string" },
+        "transport": { "enum": ["command", "url", "invalid"] },
+        "envKeys": { "type": "array", "items": { "type": "string" } },
+        "issues": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "masterSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rules", "skills", "mcp"],
+      "properties": {
+        "rules": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sharedDocuments", "providerOverlays"],
+          "properties": {
+            "sharedDocuments": { "type": "integer", "minimum": 0 },
+            "providerOverlays": { "$ref": "#/definitions/providerCounts" }
+          }
+        },
+        "skills": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sharedSkills", "providerScopedSkills"],
+          "properties": {
+            "sharedSkills": { "type": "integer", "minimum": 0 },
+            "providerScopedSkills": { "$ref": "#/definitions/providerCounts" }
+          }
+        },
+        "mcp": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sharedServers"],
+          "properties": {
+            "sharedServers": { "type": "array", "items": { "$ref": "#/definitions/mcpServerSummary" } }
+          }
+        }
+      }
+    },
+    "effectiveContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enrolled", "destinationPath", "masterItems", "capability"],
+      "properties": {
+        "enrolled": { "const": true },
+        "destinationPath": { "type": "string" },
+        "masterItems": { "type": "integer", "minimum": 0 },
+        "capability": { "$ref": "#/definitions/capability" },
+        "compositionRevision": { "type": "string" },
+        "lastAppliedCompositionRevision": { "type": "string" }
+      }
+    },
+    "derivedState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reasons"],
+      "properties": {
+        "state": { "enum": ["draftOnly", "changesReady", "upToDate", "driftDetected", "blocked"] },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "noDestinationsEnrolled",
+              "contentNeedsAttention",
+              "contentUnsupported",
+              "requiredMcpEnvironmentMissing",
+              "managedOutputMissing",
+              "managedOutputModified",
+              "noAppliedRevision",
+              "compositionRevisionChanged",
+              "compositionRevisionCurrent"
+            ]
+          }
+        }
+      }
+    },
+    "effectiveProvider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "displayName", "contents"],
+      "properties": {
+        "provider": { "$ref": "#/definitions/providerId" },
+        "displayName": { "type": "string" },
+        "contents": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "rules": { "$ref": "#/definitions/effectiveContent" },
+            "skills": { "$ref": "#/definitions/effectiveContent" },
+            "mcp": { "$ref": "#/definitions/effectiveContent" }
+          }
+        }
+      }
+    },
+    "structuredPlanEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "content", "destinationPath", "state"],
+      "properties": {
+        "provider": { "$ref": "#/definitions/providerId" },
+        "content": { "$ref": "#/definitions/content" },
+        "destinationPath": { "type": ["string", "null"] },
+        "state": { "enum": ["eligible", "unenrolled", "unsupported", "needs-attention"] },
+        "reason": { "type": "string" }
+      }
+    },
+    "structuredPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["available", "reason", "entries"],
+      "properties": {
+        "available": { "const": false },
+        "reason": { "const": "snapshot-read-only" },
+        "entries": { "type": "array", "items": { "$ref": "#/definitions/structuredPlanEntry" } }
+      }
+    },
+    "driftItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "content", "outputPath", "status"],
+      "properties": {
+        "provider": { "type": "string" },
+        "content": { "$ref": "#/definitions/content" },
+        "outputPath": { "type": "string" },
+        "status": { "enum": ["clean", "modified", "missing", "unknown"] },
+        "issue": { "type": "string" }
+      }
+    },
+    "lifecycle": { "enum": ["pending", "completed", "rolled-back", "restored"] },
+    "receiptTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "snapshot", "snapshotKind", "manifestOutputBefore"],
+      "properties": {
+        "path": { "type": "string" },
+        "snapshot": { "type": ["string", "null"] },
+        "snapshotKind": { "enum": ["file", "directory", "missing"] },
+        "manifestOutputBefore": { "type": ["object", "null"] }
+      }
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempted", "recovered"],
+      "properties": {
+        "attempted": { "type": "boolean" },
+        "recovered": { "type": "boolean" },
+        "message": { "type": "string" }
+      }
+    },
+    "receiptListItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "lifecycle", "startedAt", "completedAt", "targetCount"],
+      "properties": {
+        "id": { "type": "string" },
+        "lifecycle": { "$ref": "#/definitions/lifecycle" },
+        "startedAt": { "type": "string" },
+        "completedAt": { "type": ["string", "null"] },
+        "targetCount": { "type": "integer", "minimum": 0 },
+        "masterRevision": { "type": "string" }
+      }
+    },
+    "receiptDetail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "lifecycle", "startedAt", "completedAt", "targets", "recovery"],
+      "properties": {
+        "id": { "type": "string" },
+        "lifecycle": { "$ref": "#/definitions/lifecycle" },
+        "startedAt": { "type": "string" },
+        "completedAt": { "type": ["string", "null"] },
+        "structuredPreviewDigest": { "type": "string" },
+        "masterRevision": { "type": "string" },
+        "compositionRevisions": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "targets": { "type": "array", "items": { "$ref": "#/definitions/receiptTarget" } },
+        "recovery": { "$ref": "#/definitions/recovery" }
+      }
+    },
+    "legacyState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["present", "paths"],
+      "properties": {
+        "present": { "type": "boolean" },
+        "paths": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

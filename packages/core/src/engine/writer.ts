@@ -18,6 +18,8 @@ export interface SafeWriteFileOptions {
   managedContent: ManagedContent;
   dryRun: boolean;
   managedKeys?: string[];
+  masterRevision?: string;
+  compositionRevision?: string;
   home?: string;
   operation?: OperationContext;
 }
@@ -27,6 +29,8 @@ export interface SafeWriteDirectoryOptions {
   outputPath: string;
   provider: ProviderId;
   dryRun: boolean;
+  masterRevision?: string;
+  compositionRevision?: string;
   home?: string;
   operation?: OperationContext;
 }
@@ -42,7 +46,7 @@ export async function safeWriteFile(options: SafeWriteFileOptions): Promise<Safe
   const home = options.home ?? regletHome();
   const previous = await getOutput(options.outputPath, home);
 
-  if (previous?.hash === hash && await fileMatchesHash(options.outputPath, hash)) {
+  if (previous?.hash === hash && previous.compositionRevision === options.compositionRevision && await fileMatchesHash(options.outputPath, hash)) {
     return { status: 'unchanged', backedUpTo: previous.backedUpTo, hash };
   }
 
@@ -60,6 +64,8 @@ export async function safeWriteFile(options: SafeWriteFileOptions): Promise<Safe
       appliedAt: new Date().toISOString(),
       backedUpTo: previous?.backedUpTo ?? snapshot.snapshot,
       managedKeys: options.managedKeys,
+      masterRevision: options.masterRevision,
+      compositionRevision: options.compositionRevision,
     }, home);
     return { status: 'written', backedUpTo: previous?.backedUpTo ?? snapshot.snapshot, hash };
   }
@@ -73,6 +79,8 @@ export async function safeWriteFile(options: SafeWriteFileOptions): Promise<Safe
     appliedAt: new Date().toISOString(),
     backedUpTo,
     managedKeys: options.managedKeys,
+    masterRevision: options.masterRevision,
+    compositionRevision: options.compositionRevision,
   }, home);
 
   return { status: 'written', backedUpTo, hash };
@@ -83,7 +91,7 @@ export async function safeWriteDirectory(options: SafeWriteDirectoryOptions): Pr
   const home = options.home ?? regletHome();
   const previous = await getOutput(options.outputPath, home);
 
-  if (previous?.hash === hash && await directoryMatchesHash(options.outputPath, hash)) {
+  if (previous?.hash === hash && previous.compositionRevision === options.compositionRevision && await directoryMatchesHash(options.outputPath, hash)) {
     return { status: 'unchanged', backedUpTo: previous.backedUpTo, hash };
   }
 
@@ -100,6 +108,8 @@ export async function safeWriteDirectory(options: SafeWriteDirectoryOptions): Pr
       hash,
       appliedAt: new Date().toISOString(),
       backedUpTo: previous?.backedUpTo ?? snapshot.snapshot,
+      masterRevision: options.masterRevision,
+      compositionRevision: options.compositionRevision,
     }, home);
     return { status: 'written', backedUpTo: previous?.backedUpTo ?? snapshot.snapshot, hash };
   }
@@ -112,6 +122,8 @@ export async function safeWriteDirectory(options: SafeWriteDirectoryOptions): Pr
     hash,
     appliedAt: new Date().toISOString(),
     backedUpTo,
+    masterRevision: options.masterRevision,
+    compositionRevision: options.compositionRevision,
   }, home);
 
   return { status: 'written', backedUpTo, hash };

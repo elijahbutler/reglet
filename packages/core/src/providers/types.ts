@@ -19,6 +19,8 @@ export interface ApplyContext {
   dryRun: boolean;
   home?: string;
   operation?: OperationContext;
+  masterRevision?: string;
+  compositionRevision?: string;
 }
 
 export interface ProviderInventory {
