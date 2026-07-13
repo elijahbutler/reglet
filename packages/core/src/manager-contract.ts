@@ -14,9 +14,6 @@ export type CapabilityState =
 
 export interface ManagerSafetyCapabilitiesV2 {
   localOnly: true;
-  networkSync: false;
-  daemon: false;
-  notifications: false;
   requiresExplicitReview: true;
 }
 
@@ -114,6 +111,35 @@ export interface ManagerDerivedStateV2 {
   reasons: ManagerDerivedStateReasonV2[];
 }
 
+export type ManagerIssueCodeV2 =
+  | 'INVALID_CONTENT'
+  | 'STALE_PLAN'
+  | 'MISSING_MCP_ENVIRONMENT'
+  | 'UNREADABLE_SOURCE'
+  | 'OPERATION_FAILED'
+  | 'PARTIAL_SNAPSHOT'
+  | 'INTERRUPTED_OPERATION_RECOVERED';
+
+export type ManagerIssueSeverityV2 = 'info' | 'warning' | 'error';
+
+export interface ManagerIssueV2 {
+  code: ManagerIssueCodeV2;
+  severity: ManagerIssueSeverityV2;
+  message: string;
+  recoverable: boolean;
+  provider?: ProviderId;
+  content?: ApplyContent;
+  path?: string;
+  operationId?: string;
+  command?: string;
+}
+
+export interface ManagerErrorResponseV2 {
+  version: 2;
+  contract: 'manager-error';
+  error: ManagerIssueV2;
+}
+
 export interface ManagerStructuredPlanSummaryV2 {
   available: false;
   reason: 'snapshot-read-only';
@@ -173,6 +199,7 @@ export interface ManagerSnapshotV2 {
   master: ManagerMasterSummaryV2;
   masterRevision?: string;
   state: ManagerDerivedStateV2;
+  problems: ManagerIssueV2[];
   effectiveProviders: ManagerEffectiveProviderCompositionV2[];
   structuredPlan: ManagerStructuredPlanSummaryV2;
   driftInbox: ManagerDriftInboxItemV2[];
@@ -205,6 +232,52 @@ export const managerContractSchemas = {
   receiptDetail: { version: 2, validate: isReceiptDetailV2 },
   managerSnapshot: managerSnapshotV2Schema,
 } as const;
+
+export function managerIssueMessage(code: ManagerIssueCodeV2): string {
+  switch (code) {
+  case 'INVALID_CONTENT': return 'Reglet found content that must be corrected before this action can continue.';
+  case 'STALE_PLAN': return 'This reviewed plan is no longer current. Review the latest changes and try again.';
+  case 'MISSING_MCP_ENVIRONMENT': return 'A required local environment variable for an MCP server is missing.';
+  case 'UNREADABLE_SOURCE': return 'Reglet could not read one local source needed for the Manager snapshot.';
+  case 'OPERATION_FAILED': return 'The operation failed and Reglet preserved recoverable state where possible.';
+  case 'PARTIAL_SNAPSHOT': return 'The Manager snapshot is partial because one local read failed.';
+  case 'INTERRUPTED_OPERATION_RECOVERED': return 'Reglet recovered an interrupted operation before reporting Manager state.';
+  }
+}
+
+export function managerIssue(
+  code: ManagerIssueCodeV2,
+  options: Omit<ManagerIssueV2, 'code' | 'message' | 'severity' | 'recoverable'> & {
+    message?: string;
+    severity?: ManagerIssueSeverityV2;
+    recoverable?: boolean;
+  } = {},
+): ManagerIssueV2 {
+  return {
+    code,
+    severity: options.severity ?? managerIssueSeverity(code),
+    message: options.message ?? managerIssueMessage(code),
+    recoverable: options.recoverable ?? code !== 'STALE_PLAN',
+    ...(options.provider === undefined ? {} : { provider: options.provider }),
+    ...(options.content === undefined ? {} : { content: options.content }),
+    ...(options.path === undefined ? {} : { path: options.path }),
+    ...(options.operationId === undefined ? {} : { operationId: options.operationId }),
+    ...(options.command === undefined ? {} : { command: options.command }),
+  };
+}
+
+export function managerErrorFromUnknown(error: unknown, command: string): ManagerErrorResponseV2 {
+  const code = classifyManagerIssue(error instanceof Error ? error.message : String(error));
+  return {
+    version: 2,
+    contract: 'manager-error',
+    error: managerIssue(code, { command }),
+  };
+}
+
+export function redactManagerValue<T>(value: T, env: NodeJS.ProcessEnv = process.env): T {
+  return redactUnknown(value, secretValues(env)) as T;
+}
 
 export function validateManagerSnapshotV2(value: unknown): ManagerSnapshotV2 {
   if (!isManagerSnapshotV2(value)) {
@@ -329,6 +402,7 @@ function isManagerSnapshotV2(value: unknown): value is ManagerSnapshotV2 {
     isMasterSummaryV2(value.master) &&
     optionalString(value.masterRevision) &&
     isDerivedStateV2(value.state) &&
+    isArrayOf(value.problems, isManagerIssueV2) &&
     isArrayOf(value.effectiveProviders, isEffectiveProviderCompositionV2) &&
     isStructuredPlanSummaryV2(value.structuredPlan) &&
     isArrayOf(value.driftInbox, isDriftInboxItemV2) &&
@@ -337,6 +411,29 @@ function isManagerSnapshotV2(value: unknown): value is ManagerSnapshotV2 {
     isArrayOf(value.receipts.details, isReceiptDetailV2) &&
     isLegacyState(value.legacyNetworkState)
   );
+}
+
+function isManagerIssueV2(value: unknown): value is ManagerIssueV2 {
+  return isRecord(value) &&
+    isManagerIssueCodeV2(value.code) &&
+    (value.severity === 'info' || value.severity === 'warning' || value.severity === 'error') &&
+    typeof value.message === 'string' &&
+    typeof value.recoverable === 'boolean' &&
+    optionalProviderId(value.provider) &&
+    optionalContent(value.content) &&
+    optionalString(value.path) &&
+    optionalString(value.operationId) &&
+    optionalString(value.command);
+}
+
+function isManagerIssueCodeV2(value: unknown): value is ManagerIssueCodeV2 {
+  return value === 'INVALID_CONTENT' ||
+    value === 'STALE_PLAN' ||
+    value === 'MISSING_MCP_ENVIRONMENT' ||
+    value === 'UNREADABLE_SOURCE' ||
+    value === 'OPERATION_FAILED' ||
+    value === 'PARTIAL_SNAPSHOT' ||
+    value === 'INTERRUPTED_OPERATION_RECOVERED';
 }
 
 function isProviderDiscoveryV2(value: unknown): value is ManagerProviderDiscoveryV2 {
@@ -501,9 +598,6 @@ function isReceiptTarget(value: unknown): value is OperationReceipt['targets'][n
 function isSafety(value: unknown): value is ManagerSafetyCapabilitiesV2 {
   return isRecord(value) &&
     value.localOnly === true &&
-    value.networkSync === false &&
-    value.daemon === false &&
-    value.notifications === false &&
     value.requiresExplicitReview === true;
 }
 
@@ -551,6 +645,14 @@ function optionalString(value: unknown): boolean {
   return value === undefined || typeof value === 'string';
 }
 
+function optionalProviderId(value: unknown): boolean {
+  return value === undefined || isProviderId(value);
+}
+
+function optionalContent(value: unknown): boolean {
+  return value === undefined || isContent(value);
+}
+
 function optionalStringRecord(value: unknown): boolean {
   return value === undefined || (isRecord(value) && Object.values(value).every((item) => typeof item === 'string'));
 }
@@ -576,6 +678,49 @@ function isMcpConflictStatus(value: unknown): value is McpConflictStatus {
 
 function isLifecycle(value: unknown): value is OperationReceipt['lifecycle'] {
   return value === 'pending' || value === 'completed' || value === 'rolled-back' || value === 'restored';
+}
+
+function classifyManagerIssue(message: string): ManagerIssueCodeV2 {
+  if (message.includes('stale')) return 'STALE_PLAN';
+  if (message.includes('Missing process environment')) return 'MISSING_MCP_ENVIRONMENT';
+  if (message.includes('Invalid') || message.includes('Unsupported') || message.includes('validation issues') || message.includes('raw env')) return 'INVALID_CONTENT';
+  if (message.includes('EACCES') || message.includes('EPERM') || message.includes('permission')) return 'UNREADABLE_SOURCE';
+  return 'OPERATION_FAILED';
+}
+
+function managerIssueSeverity(code: ManagerIssueCodeV2): ManagerIssueSeverityV2 {
+  if (code === 'INTERRUPTED_OPERATION_RECOVERED') return 'warning';
+  if (code === 'PARTIAL_SNAPSHOT') return 'warning';
+  return 'error';
+}
+
+function redactUnknown(value: unknown, secrets: readonly string[]): unknown {
+  if (typeof value === 'string') return redactString(value, secrets);
+  if (Array.isArray(value)) return value.map((item) => redactUnknown(item, secrets));
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, redactUnknown(item, secrets)]),
+  );
+}
+
+function redactString(value: string, secrets: readonly string[]): string {
+  let redacted = value;
+  for (const secret of secrets) {
+    redacted = redacted.split(secret).join('<redacted:secret>');
+  }
+  return redacted;
+}
+
+function secretValues(env: NodeJS.ProcessEnv): string[] {
+  return Array.from(new Set(
+    Object.entries(env)
+      .filter(([key, value]) =>
+        value !== undefined &&
+        value.length >= 8 &&
+        /SECRET|TOKEN|PASSWORD|PRIVATE|CREDENTIAL|API[_-]?KEY/i.test(key))
+      .map(([, value]) => value)
+      .filter((value): value is string => value !== undefined),
+  ));
 }
 
 const providerIds = ['claude', 'codex', 'cursor', 'gemini', 'windsurf', 'opencode'] as const;

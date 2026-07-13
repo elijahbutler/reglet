@@ -286,10 +286,10 @@ Goal: make the CLI the complete, stable boundary required by the Manager.
 - [x] Define versioned JSON schemas for capability scan, source inventory, enrollment matrix, Master draft summary, effective composition, structured plan, drift item, and receipt detail.
 - [x] Add provider-scoped System Instructions with deterministic shared-base-plus-overlay composition.
 - [x] Add provider-scoped MCP definitions with deterministic override rules.
-- [ ] Represent source selection independently from enrollment.
+- [x] Represent source selection independently from enrollment.
 - [x] Represent saved Master revision and last-applied composition so "changes ready" is exact rather than inferred from timestamps.
 - [x] Remove daemon language from newly generated ownership headers while retaining cleanup compatibility for existing headers.
-- [ ] Guarantee all snapshot payloads and errors are redacted and local-only.
+- [x] Guarantee all snapshot payloads and errors are redacted and local-only.
 
 Exit criteria:
 

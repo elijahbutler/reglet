@@ -4,9 +4,6 @@
   "regletHome": "/tmp/reglet-all",
   "safety": {
     "localOnly": true,
-    "networkSync": false,
-    "daemon": false,
-    "notifications": false,
     "requiresExplicitReview": true
   },
   "providerDiscovery": [
@@ -314,6 +311,7 @@
       "noAppliedRevision"
     ]
   },
+  "problems": [],
   "effectiveProviders": [
     {
       "provider": "claude",

@@ -38,12 +38,16 @@ import {
   regletHome,
   isCanonicalMcpServerDef,
   inventoryItems,
+  managerErrorFromUnknown,
+  managerIssue,
+  managerIssueMessage,
   mcpServerSummary,
   needsAttentionCapability,
   publicReleaseCapabilities,
   providerMcpScope,
   receiptDetail,
   receiptListItem,
+  redactManagerValue,
   deriveMasterRevisions,
   sha256String,
   supportedCapability,
@@ -75,6 +79,8 @@ import {
   type ManagerDerivedStateV2,
   type ManagerEffectiveProviderCompositionV2,
   type ManagerEnrollmentProviderV2,
+  type ManagerIssueCodeV2,
+  type ManagerIssueV2,
   type ManagerMasterSummaryV2,
   type ManagerProviderDiscoveryV2,
   type ManagerSnapshotV2,
@@ -797,7 +803,11 @@ daemon
 try {
   await program.parseAsync();
 } catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
+  if (isManagerVisibleCommand(process.argv)) {
+    writeJsonToStderr(redactManagerValue(managerErrorFromUnknown(error, managerCommandName(process.argv))));
+  } else {
+    console.error(redactManagerValue(error instanceof Error ? error.message : String(error)));
+  }
   process.exitCode = 1;
 }
 
@@ -1154,7 +1164,13 @@ async function buildManagerSnapshotV2(): Promise<ManagerSnapshotV2> {
       detected: state.detected,
       capabilities,
     });
-    sourceInventory.push(...inventoryItems(adapter.id, state.inventory, state.contentIssues));
+    sourceInventory.push(...inventoryItems(
+      adapter.id,
+      state.inventory,
+      Object.fromEntries(
+        Object.entries(state.contentIssues).map(([content, issue]) => [content, issue.message]),
+      ) as Partial<Record<ApplyContent, string>>,
+    ));
 
     const cells = Object.fromEntries(
       contentIds.map((content): [ContentId, ManagerEnrollmentProviderV2['cells'][ContentId]] => {
@@ -1178,15 +1194,13 @@ async function buildManagerSnapshotV2(): Promise<ManagerSnapshotV2> {
     });
   }
 
+  const state = await deriveManagerState(enrollmentMatrix, manifest, receipts, revisions.compositionRevisions);
   const snapshot: ManagerSnapshotV2 = {
     version: 2,
     contract: 'manager-snapshot',
     regletHome: regletHome(),
     safety: {
       localOnly: true,
-      networkSync: false,
-      daemon: false,
-      notifications: false,
       requiresExplicitReview: true,
     },
     providerDiscovery: discovery,
@@ -1194,7 +1208,8 @@ async function buildManagerSnapshotV2(): Promise<ManagerSnapshotV2> {
     enrollmentMatrix,
     master: masterSummary(master, mcpServers.servers, providerMcpServers),
     masterRevision: revisions.masterRevision,
-    state: await deriveManagerState(enrollmentMatrix, manifest, receipts, revisions.compositionRevisions),
+    state,
+    problems: managerSnapshotIssues(discovery, state, receipts),
     effectiveProviders: await effectiveProviders(enrollmentMatrix, master, manifest, receipts, revisions.compositionRevisions),
     structuredPlan: {
       available: false,
@@ -1208,13 +1223,53 @@ async function buildManagerSnapshotV2(): Promise<ManagerSnapshotV2> {
     },
     legacyNetworkState,
   };
-  return validateManagerSnapshotV2(snapshot);
+  return validateManagerSnapshotV2(redactManagerValue(snapshot));
+}
+
+function managerSnapshotIssues(
+  discovery: ManagerProviderDiscoveryV2[],
+  state: ManagerDerivedStateV2,
+  receipts: Awaited<ReturnType<typeof listOperationReceipts>>,
+): ManagerIssueV2[] {
+  const issues: ManagerIssueV2[] = [];
+  for (const provider of discovery) {
+    for (const content of contentIds) {
+      const capability = provider.capabilities[content];
+      if (capability.state !== 'needs-attention') continue;
+      if (!issues.some((issue) => issue.code === 'PARTIAL_SNAPSHOT')) {
+        issues.push(managerIssue('PARTIAL_SNAPSHOT'));
+      }
+      issues.push(managerIssue(capability.reason === managerIssueMessage('INVALID_CONTENT') ? 'INVALID_CONTENT' : 'UNREADABLE_SOURCE', {
+        provider: provider.provider,
+        content,
+      }));
+    }
+  }
+  if (state.reasons.includes('requiredMcpEnvironmentMissing')) {
+    issues.push(managerIssue('MISSING_MCP_ENVIRONMENT'));
+  }
+  if (state.reasons.includes('compositionRevisionChanged')) {
+    issues.push(managerIssue('STALE_PLAN'));
+  }
+  for (const receipt of receipts) {
+    if (receipt.lifecycle === 'pending') {
+      issues.push(managerIssue('INTERRUPTED_OPERATION_RECOVERED', { operationId: receipt.id }));
+    }
+    if (receipt.lifecycle === 'rolled-back') {
+      issues.push(managerIssue('OPERATION_FAILED', { operationId: receipt.id }));
+    }
+  }
+  return issues;
+}
+
+function isInvalidContentError(error: unknown): boolean {
+  return error instanceof Error && /invalid|parse|json/i.test(error.message);
 }
 
 async function readProviderState(provider: ProviderId): Promise<{
   detected: boolean;
   inventory: ProviderInventory;
-  contentIssues: Partial<Record<ContentId, string>>;
+  contentIssues: Partial<Record<ContentId, ManagerIssueV2>>;
 }> {
   const adapter = getAdapter(provider);
   let detected = false;
@@ -1222,7 +1277,8 @@ async function readProviderState(provider: ProviderId): Promise<{
     detected = await adapter.detect();
     return { detected, inventory: await adapter.inventory(), contentIssues: {} };
   } catch (error) {
-    const issue = error instanceof Error ? error.message : String(error);
+    const code: ManagerIssueCodeV2 = isInvalidContentError(error) ? 'INVALID_CONTENT' : 'UNREADABLE_SOURCE';
+    const issue = managerIssue(code, { provider, content: 'mcp', path: adapter.mcpPath() ?? undefined });
     const rulesPath = adapter.rulesPath();
     const skillsDir = adapter.skillsDir();
     return {
@@ -1240,17 +1296,17 @@ async function readProviderState(provider: ProviderId): Promise<{
   }
 }
 
-function contentCapabilities(state: { inventory: ProviderInventory; contentIssues: Partial<Record<ContentId, string>> }): Record<ContentId, CapabilityState> {
+function contentCapabilities(state: { inventory: ProviderInventory; contentIssues: Partial<Record<ContentId, ManagerIssueV2>> }): Record<ContentId, CapabilityState> {
   return {
     rules: state.contentIssues.rules === undefined
       ? state.inventory.rulesPath === null ? unsupportedCapability('provider has no system-instructions path') : supportedCapability()
-      : needsAttentionCapability(state.contentIssues.rules),
+      : needsAttentionCapability(state.contentIssues.rules.message),
     skills: state.contentIssues.skills === undefined
       ? state.inventory.skillsDir === null ? unsupportedCapability('provider has no skills directory') : supportedCapability()
-      : needsAttentionCapability(state.contentIssues.skills),
+      : needsAttentionCapability(state.contentIssues.skills.message),
     mcp: state.contentIssues.mcp === undefined
       ? state.inventory.mcpPath === null ? unsupportedCapability('provider has no MCP configuration path') : supportedCapability()
-      : needsAttentionCapability(state.contentIssues.mcp),
+      : needsAttentionCapability(state.contentIssues.mcp.message),
   };
 }
 
@@ -1469,7 +1525,7 @@ async function driftStatusWithoutSecrets(outputPath: string, expectedHash: strin
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
       return { status: 'missing' };
     }
-    return { status: 'unknown', issue: error instanceof Error ? error.message : String(error) };
+    return { status: 'unknown', issue: 'Unable to inspect this managed output.' };
   }
 }
 
@@ -1918,6 +1974,22 @@ function printOnboardingPlan(plan: OnboardingPlanJson): void {
 
 function printJson(value: unknown): void {
   console.log(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function writeJsonToStderr(value: unknown): void {
+  process.stderr.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function isManagerVisibleCommand(argv: readonly string[]): boolean {
+  return argv.includes('manager') || argv.includes('apply-structured');
+}
+
+function managerCommandName(argv: readonly string[]): string {
+  const args = argv.slice(2);
+  if (args[0] === 'manager' && args[1] === 'snapshot') return 'manager.snapshot';
+  if (args[0] === 'apply-structured' && args[1] === 'preview') return 'apply-structured.preview';
+  if (args[0] === 'apply-structured' && args[1] === 'apply') return 'apply-structured.apply';
+  return args.slice(0, 2).join('.') || 'manager';
 }
 
 async function detectedProviderIds(): Promise<ProviderId[]> {

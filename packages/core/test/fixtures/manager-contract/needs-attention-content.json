@@ -4,9 +4,6 @@
   "regletHome": "/tmp/reglet-attention",
   "safety": {
     "localOnly": true,
-    "networkSync": false,
-    "daemon": false,
-    "notifications": false,
     "requiresExplicitReview": true
   },
   "providerDiscovery": [
@@ -118,6 +115,22 @@
       "noAppliedRevision"
     ]
   },
+  "problems": [
+    {
+      "code": "PARTIAL_SNAPSHOT",
+      "severity": "warning",
+      "message": "The Manager snapshot is partial because one local read failed.",
+      "recoverable": true
+    },
+    {
+      "code": "INVALID_CONTENT",
+      "severity": "error",
+      "message": "Reglet found content that must be corrected before this action can continue.",
+      "recoverable": true,
+      "provider": "claude",
+      "content": "mcp"
+    }
+  ],
   "effectiveProviders": [
     {
       "provider": "claude",

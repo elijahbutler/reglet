@@ -77,4 +77,12 @@ The manifest records the generated hash and managed MCP keys for each provider o
 
 ## Manager contract
 
-The retained macOS manager requests `reglet manager snapshot --json`, which remains the version 1 compatibility response. New Manager work requests `reglet manager snapshot --json --contract-version 2` and validates the response against `packages/core/schemas/manager-snapshot-v2.schema.json`. Version 2 separates discovered sources from persisted destination enrollment and is read-only; unknown versions fail closed. Apply actions use structured previews, scoped provider/content selection, and receipt results. Automatic update checks are off by default; a manual check is a separate user action.
+The retained macOS manager requests `reglet manager snapshot --json`, which remains the version 1 compatibility response. New Manager work requests `reglet manager snapshot --json --contract-version 2` and validates the response against `packages/core/schemas/manager-snapshot-v2.schema.json`. Version 2 separates discovered sources from persisted destination enrollment and is read-only; unknown versions fail closed. Apply actions use structured previews, scoped provider/content selection, and receipt results.
+
+### Contract evolution and fixtures
+
+Manager contract changes are additive within a contract version. A meaning-changing field requires a new version; clients must reject an unknown mutation version rather than guessing. Snapshot `problems` always use a stable `code` for control flow and a redacted `message` for display. A `manager-error` response has the same problem shape when a complete snapshot cannot be constructed.
+
+Every fixture in `packages/core/test/fixtures/manager-contract/` is a public compatibility example: update it only with the schema and runtime guard in the same change, keep paths and messages synthetic, and add a fixture for every new partial or recovery state. Fixture tests validate both the JSON Schema and the TypeScript guard. Secret canaries belong in CLI tests and must cover successful snapshots as well as error responses.
+
+The detailed rules live in [Manager Contract](manager-contract.md).

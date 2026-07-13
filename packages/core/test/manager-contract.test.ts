@@ -4,7 +4,9 @@ import { describe, expect, test } from 'bun:test';
 import Ajv from 'ajv';
 import {
   managerContractSchemas,
+  managerErrorFromUnknown,
   managerSnapshotV2Schema,
+  redactManagerValue,
   type ManagerSnapshotV2,
 } from '../src/manager-contract.js';
 
@@ -20,8 +22,10 @@ describe('manager contract v2 schemas', () => {
     expect(files).toEqual([
       'all-six-providers.json',
       'empty-state.json',
+      'interrupted-operation-recovery.json',
       'legacy-state.json',
       'needs-attention-content.json',
+      'partial-failure.json',
     ]);
 
     for (const file of files) {
@@ -85,6 +89,32 @@ describe('manager contract v2 schemas', () => {
       .toEqual({ state: 'unsupported', reason: 'provider has no skills directory' });
     expect(attention.providerDiscovery[0]?.capabilities.mcp).toEqual({ state: 'needs-attention', reason: 'invalid JSON' });
     expect(attention.enrollmentMatrix[0]?.cells.mcp.enrolled).toBe(false);
+    expect(attention.problems).toContainEqual(expect.objectContaining({ code: 'PARTIAL_SNAPSHOT' }));
+    expect(attention.problems).toContainEqual(expect.objectContaining({ code: 'INVALID_CONTENT', content: 'mcp' }));
+  });
+
+  test('partial failures and interrupted operations are typed without relying on prose', async () => {
+    const partial = JSON.parse(
+      await readFile(path.join(fixturesDir, 'partial-failure.json'), 'utf8'),
+    ) as ManagerSnapshotV2;
+    const interrupted = JSON.parse(
+      await readFile(path.join(fixturesDir, 'interrupted-operation-recovery.json'), 'utf8'),
+    ) as ManagerSnapshotV2;
+
+    expect(partial.problems).toContainEqual(expect.objectContaining({ code: 'PARTIAL_SNAPSHOT' }));
+    expect(partial.problems).toContainEqual(expect.objectContaining({ code: 'UNREADABLE_SOURCE', provider: 'claude', content: 'mcp' }));
+    expect(interrupted.problems[0]).toMatchObject({ code: 'INTERRUPTED_OPERATION_RECOVERED', operationId: 'operation-1' });
+  });
+
+  test('snapshot values and structured manager errors redact environment secret canaries', () => {
+    const canary = 'manager-secret-canary-value';
+    const env: NodeJS.ProcessEnv = { REGLET_TEST_SECRET: canary };
+    const snapshotValue = redactManagerValue({ problem: `read failed: ${canary}` }, env);
+    const errorValue = redactManagerValue(managerErrorFromUnknown(new Error(`stale plan: ${canary}`), 'apply-structured.apply'), env);
+
+    expect(JSON.stringify(snapshotValue)).not.toContain(canary);
+    expect(JSON.stringify(errorValue)).not.toContain(canary);
+    expect(errorValue.error.code).toBe('STALE_PLAN');
   });
 });
 
