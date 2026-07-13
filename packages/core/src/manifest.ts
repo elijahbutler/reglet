@@ -12,6 +12,8 @@ export interface ManifestOutput {
   appliedAt: string;
   backedUpTo: string | null;
   managedKeys?: string[];
+  masterRevision?: string;
+  compositionRevision?: string;
 }
 
 export interface Manifest {
@@ -93,6 +95,8 @@ function isManifestOutput(value: unknown): value is ManifestOutput {
     typeof value.hash === 'string' &&
     typeof value.appliedAt === 'string' &&
     (typeof value.backedUpTo === 'string' || value.backedUpTo === null) &&
+    (value.masterRevision === undefined || typeof value.masterRevision === 'string') &&
+    (value.compositionRevision === undefined || typeof value.compositionRevision === 'string') &&
     (managedKeys === undefined || (Array.isArray(managedKeys) && managedKeys.every((key) => typeof key === 'string')))
   );
 }

@@ -7,6 +7,7 @@ import { applyAll } from '../src/engine/apply.js';
 import { GENERATED_HEADER } from '../src/header.js';
 import { loadManifest } from '../src/manifest.js';
 import { getAdapter } from '../src/providers/registry.js';
+import { PROVIDER_RULES_MARKER } from '../src/master.js';
 import { parse as parseToml } from 'smol-toml';
 
 let currentHome: string | undefined;
@@ -102,6 +103,32 @@ describe('applyAll', () => {
         message: 'gemini disabled',
       },
     ]);
+  });
+
+  test('appends only the matching provider rules after shared rules', async () => {
+    const { home } = await useTempHomes();
+    await writeMasterRule(home);
+    await mkdir(path.join(home, 'rules', 'claude'), { recursive: true });
+    await mkdir(path.join(home, 'rules', 'codex'), { recursive: true });
+    await writeFile(path.join(home, 'rules', 'claude', PROVIDER_RULES_MARKER), 'v1\n');
+    await writeFile(path.join(home, 'rules', 'codex', PROVIDER_RULES_MARKER), 'v1\n');
+    await writeFile(path.join(home, 'rules', 'claude', '10-overlay.md'), 'Claude only.\n');
+    await writeFile(path.join(home, 'rules', 'codex', '10-overlay.md'), 'Codex only.\n');
+    await enableProviders(home, ['claude', 'codex']);
+
+    await applyAll({ providers: ['claude', 'codex'], contents: ['rules'] });
+
+    const claudePath = getAdapter('claude').rulesPath();
+    const codexPath = getAdapter('codex').rulesPath();
+    expect(claudePath).not.toBeNull();
+    expect(codexPath).not.toBeNull();
+    const claude = await readFile(claudePath ?? '', 'utf8');
+    const codex = await readFile(codexPath ?? '', 'utf8');
+    expect(claude).toContain('<!-- source: rules/00-general.md -->');
+    expect(claude).toContain('<!-- source: rules/claude/10-overlay.md -->');
+    expect(claude).not.toContain('Codex only.');
+    expect(codex).toContain('<!-- source: rules/codex/10-overlay.md -->');
+    expect(codex).not.toContain('Claude only.');
   });
 
   test('backs up an existing output exactly once and no-ops unchanged applies', async () => {

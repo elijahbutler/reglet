@@ -54,6 +54,8 @@ export async function applyCodexMcp(
     managedKeys,
     home: ctx.home,
     operation: ctx.operation,
+    masterRevision: ctx.masterRevision,
+    compositionRevision: ctx.compositionRevision,
   });
 
   return {

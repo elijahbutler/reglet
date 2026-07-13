@@ -28,6 +28,8 @@ export interface OperationReceipt {
     contents?: ApplyContent[];
   };
   structuredPreviewDigest?: string;
+  masterRevision?: string;
+  compositionRevisions?: Record<string, string>;
   targets: OperationTargetReceipt[];
   createdDirectories: string[];
   recovery: {
@@ -53,6 +55,8 @@ interface OperationJournal {
   startedAt: string;
   scope: OperationReceipt['scope'];
   structuredPreviewDigest?: string;
+  masterRevision?: string;
+  compositionRevisions?: Record<string, string>;
   targets: OperationTargetReceipt[];
   createdDirectories: string[];
   manifestSnapshot: Manifest;
@@ -71,6 +75,8 @@ export interface BeginOperationOptions {
   providers?: ProviderId[];
   contents?: ApplyContent[];
   structuredPreviewDigest?: string;
+  masterRevision?: string;
+  compositionRevisions?: Record<string, string>;
 }
 
 export async function beginOperation(options: BeginOperationOptions): Promise<OperationContext> {
@@ -89,6 +95,8 @@ export async function beginOperation(options: BeginOperationOptions): Promise<Op
       ...(options.contents === undefined ? {} : { contents: options.contents }),
     },
     ...(options.structuredPreviewDigest === undefined ? {} : { structuredPreviewDigest: options.structuredPreviewDigest }),
+    ...(options.masterRevision === undefined ? {} : { masterRevision: options.masterRevision }),
+    ...(options.compositionRevisions === undefined ? {} : { compositionRevisions: options.compositionRevisions }),
     targets: [],
     createdDirectories: [],
     manifestSnapshot: await loadManifest(home),
@@ -172,7 +180,6 @@ export async function recoverPendingOperations(home = regletHome()): Promise<Rec
 }
 
 export async function listOperationReceipts(home = regletHome()): Promise<OperationReceipt[]> {
-  await ensureOperationRoots(home);
   const receipts: OperationReceipt[] = [];
   for (const fileName of await safeReadDir(receiptsDir(home))) {
     if (fileName.endsWith('.json')) {
@@ -183,7 +190,6 @@ export async function listOperationReceipts(home = regletHome()): Promise<Operat
 }
 
 export async function getOperationReceipt(id: string, home = regletHome()): Promise<OperationReceipt> {
-  await ensureOperationRoots(home);
   const targetPath = receiptPath(home, id);
   await assertPrivateFile(targetPath);
   const parsed = JSON.parse(await readFile(targetPath, 'utf8')) as unknown;
@@ -495,6 +501,8 @@ function receiptFromJournal(
     completedAt: new Date().toISOString(),
     scope: journal.scope,
     ...(journal.structuredPreviewDigest === undefined ? {} : { structuredPreviewDigest: journal.structuredPreviewDigest }),
+    ...(journal.masterRevision === undefined ? {} : { masterRevision: journal.masterRevision }),
+    ...(journal.compositionRevisions === undefined ? {} : { compositionRevisions: journal.compositionRevisions }),
     targets: journal.targets,
     createdDirectories: journal.createdDirectories,
     recovery,
@@ -545,11 +553,11 @@ function receiptPath(home: string, id: string): string {
 }
 
 function isOperationReceipt(value: unknown): value is OperationReceipt {
-  return isRecord(value) && value.version === 1 && typeof value.id === 'string' && isLifecycle(value.lifecycle) && typeof value.startedAt === 'string' && (typeof value.completedAt === 'string' || value.completedAt === null) && isRecord(value.scope) && Array.isArray(value.targets) && value.targets.every(isTarget) && Array.isArray(value.createdDirectories) && value.createdDirectories.every((directory) => typeof directory === 'string') && isRecord(value.recovery);
+  return isRecord(value) && value.version === 1 && typeof value.id === 'string' && isLifecycle(value.lifecycle) && typeof value.startedAt === 'string' && (typeof value.completedAt === 'string' || value.completedAt === null) && isRecord(value.scope) && optionalString(value.masterRevision) && optionalStringRecord(value.compositionRevisions) && Array.isArray(value.targets) && value.targets.every(isTarget) && Array.isArray(value.createdDirectories) && value.createdDirectories.every((directory) => typeof directory === 'string') && isRecord(value.recovery);
 }
 
 function isOperationJournal(value: unknown): value is OperationJournal {
-  return isRecord(value) && value.version === 1 && typeof value.id === 'string' && (value.lifecycle === 'pending' || value.lifecycle === 'completed') && typeof value.startedAt === 'string' && isRecord(value.scope) && Array.isArray(value.targets) && value.targets.every(isTarget) && Array.isArray(value.createdDirectories) && value.createdDirectories.every((directory) => typeof directory === 'string') && isRecord(value.manifestSnapshot);
+  return isRecord(value) && value.version === 1 && typeof value.id === 'string' && (value.lifecycle === 'pending' || value.lifecycle === 'completed') && typeof value.startedAt === 'string' && isRecord(value.scope) && optionalString(value.masterRevision) && optionalStringRecord(value.compositionRevisions) && Array.isArray(value.targets) && value.targets.every(isTarget) && Array.isArray(value.createdDirectories) && value.createdDirectories.every((directory) => typeof directory === 'string') && isRecord(value.manifestSnapshot);
 }
 
 function isTarget(value: unknown): value is OperationTargetReceipt {
@@ -563,7 +571,17 @@ function isManifestOutput(value: unknown): value is ManifestOutput {
     typeof value.hash === 'string' &&
     typeof value.appliedAt === 'string' &&
     (typeof value.backedUpTo === 'string' || value.backedUpTo === null) &&
+    optionalString(value.masterRevision) &&
+    optionalString(value.compositionRevision) &&
     (value.managedKeys === undefined || (Array.isArray(value.managedKeys) && value.managedKeys.every((key) => typeof key === 'string')));
+}
+
+function optionalString(value: unknown): boolean {
+  return value === undefined || typeof value === 'string';
+}
+
+function optionalStringRecord(value: unknown): boolean {
+  return value === undefined || (isRecord(value) && Object.values(value).every((item) => typeof item === 'string'));
 }
 
 function isLifecycle(value: unknown): value is OperationLifecycle {

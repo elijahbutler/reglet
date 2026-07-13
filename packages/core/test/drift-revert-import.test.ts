@@ -5,9 +5,9 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { defaultConfig, saveConfig, type ProviderName } from '../src/config.js';
 import { applyAll } from '../src/engine/apply.js';
 import { appendDriftEvent, clearDriftEvents, detectDrift, listDriftEvents } from '../src/engine/drift.js';
-import { importDriftedMcp, importDriftedRules, importDriftedSkills } from '../src/engine/import.js';
+import { importDriftedMcp, importDriftedRules, importDriftedSkills, stripGeneratedHeader } from '../src/engine/import.js';
 import { revert, restore } from '../src/engine/revert.js';
-import { GENERATED_HEADER } from '../src/header.js';
+import { GENERATED_HEADER, LEGACY_GENERATED_HEADER } from '../src/header.js';
 import { loadManifest } from '../src/manifest.js';
 
 let currentHome: string | undefined;
@@ -48,6 +48,12 @@ async function writeMasterRule(home: string): Promise<void> {
 }
 
 describe('drift, import, and revert', () => {
+  test('strips current and legacy generated headers', () => {
+    const body = '# Keep this rule\n';
+    expect(stripGeneratedHeader(`${GENERATED_HEADER.replace('<provider>', 'claude')}\n\n${body}`, 'claude')).toBe(body);
+    expect(stripGeneratedHeader(`${LEGACY_GENERATED_HEADER.replace('<provider>', 'claude')}\n\n${body}`, 'claude')).toBe(body);
+  });
+
   test('detectDrift reports clean, modified, and missing managed outputs', async () => {
     const { home, providerHome } = await useTempHomes();
     await writeMasterRule(home);

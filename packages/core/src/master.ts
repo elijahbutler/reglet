@@ -19,6 +19,8 @@ export interface McpProcessEnvReference {
 
 export type McpEnvironmentValue = McpProcessEnvReference;
 
+export const PROVIDER_RULES_MARKER = '.reglet-provider-overlay';
+
 export interface ResolvedMcpServerDef {
   command?: string;
   args?: string[];
@@ -43,6 +45,7 @@ export interface MasterSkill {
 
 export interface MasterDir {
   rules: MasterRule[];
+  providerRules: Record<ProviderName, MasterRule[]>;
   skills: MasterSkill[];
   providerSkills: Record<ProviderName, MasterSkill[]>;
   mcpServers: Record<string, McpServerDef>;
@@ -69,27 +72,49 @@ export async function initMasterDir(home = regletHome()): Promise<void> {
 }
 
 export async function loadMasterDir(home = regletHome()): Promise<MasterDir> {
+  const loadedRules = await loadRules(path.join(home, 'rules'));
   const loadedSkills = await loadSkills(path.join(home, 'skills'));
   return {
-    rules: await loadRules(path.join(home, 'rules')),
+    rules: loadedRules.shared,
+    providerRules: loadedRules.providers,
     skills: loadedSkills.shared,
     providerSkills: loadedSkills.providers,
     mcpServers: await loadMcpServers(path.join(home, 'mcp', 'servers.json')),
   };
 }
 
-async function loadRules(rulesDir: string): Promise<MasterRule[]> {
+interface LoadedRules {
+  shared: MasterRule[];
+  providers: Record<ProviderName, MasterRule[]>;
+}
+
+async function loadRules(rulesDir: string): Promise<LoadedRules> {
   const files = await collectFiles(rulesDir);
-  const rules: MasterRule[] = [];
+  const shared: MasterRule[] = [];
+  const providers = emptyProviderRecords<MasterRule>();
+  const overlayProviders = new Set(
+    providerNames.filter((provider) =>
+      files.some((file) => file.relPath === `${provider}/${PROVIDER_RULES_MARKER}`),
+    ),
+  );
 
   for (const file of files) {
-    rules.push({
+    if (file.relPath.endsWith(`/${PROVIDER_RULES_MARKER}`)) {
+      continue;
+    }
+    const rule = {
       relPath: file.relPath,
       content: await readFile(file.absPath, 'utf8'),
-    });
+    };
+    const [scope] = file.relPath.split('/');
+    if (scope !== undefined && isProviderName(scope) && overlayProviders.has(scope)) {
+      providers[scope].push(rule);
+    } else {
+      shared.push(rule);
+    }
   }
 
-  return rules;
+  return { shared, providers };
 }
 
 interface LoadedSkills {
@@ -112,7 +137,7 @@ async function loadSkills(skillsDir: string): Promise<LoadedSkills> {
   }
 
   const shared: MasterSkill[] = [];
-  const providers = emptyProviderSkills();
+  const providers = emptyProviderRecords<MasterSkill>();
   for (const name of entries) {
     if (isProviderName(name)) {
       providers[name] = await loadSkillDirectories(path.join(skillsDir, name));
@@ -155,11 +180,11 @@ async function loadSkillDirectory(parentDir: string, name: string): Promise<Mast
 function emptyLoadedSkills(): LoadedSkills {
   return {
     shared: [],
-    providers: emptyProviderSkills(),
+    providers: emptyProviderRecords<MasterSkill>(),
   };
 }
 
-function emptyProviderSkills(): Record<ProviderName, MasterSkill[]> {
+function emptyProviderRecords<T>(): Record<ProviderName, T[]> {
   return {
     claude: [],
     codex: [],

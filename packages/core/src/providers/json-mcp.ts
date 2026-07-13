@@ -42,6 +42,8 @@ export async function applyJsonMcp(
     managedKeys,
     home: ctx.home,
     operation: ctx.operation,
+    masterRevision: ctx.masterRevision,
+    compositionRevision: ctx.compositionRevision,
   });
 
   return {

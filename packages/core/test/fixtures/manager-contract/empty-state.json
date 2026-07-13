@@ -1,0 +1,36 @@
+{
+  "version": 2,
+  "contract": "manager-snapshot",
+  "regletHome": "/tmp/reglet-empty",
+  "safety": {
+    "localOnly": true,
+    "networkSync": false,
+    "daemon": false,
+    "notifications": false,
+    "requiresExplicitReview": true
+  },
+  "providerDiscovery": [],
+  "sourceInventory": [],
+  "enrollmentMatrix": [],
+  "master": {
+    "rules": {
+      "sharedDocuments": 0,
+      "providerOverlays": { "claude": 0, "codex": 0, "cursor": 0, "gemini": 0, "windsurf": 0, "opencode": 0 }
+    },
+    "skills": {
+      "sharedSkills": 0,
+      "providerScopedSkills": { "claude": 0, "codex": 0, "cursor": 0, "gemini": 0, "windsurf": 0, "opencode": 0 }
+    },
+    "mcp": { "sharedServers": [] }
+  },
+  "state": { "state": "draftOnly", "reasons": ["noDestinationsEnrolled"] },
+  "effectiveProviders": [],
+  "structuredPlan": {
+    "available": false,
+    "reason": "snapshot-read-only",
+    "entries": []
+  },
+  "driftInbox": [],
+  "receipts": { "list": [], "details": [] },
+  "legacyNetworkState": { "present": false, "paths": [] }
+}

@@ -131,7 +131,13 @@ struct RulesListResponse: Decodable {
 
   struct Document: Decodable, Identifiable {
     let path: String
+    let scope: Scope?
     var id: String { path }
+  }
+
+  struct Scope: Decodable {
+    let kind: String
+    let provider: String?
   }
 }
 

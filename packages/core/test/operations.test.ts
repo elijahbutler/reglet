@@ -230,7 +230,34 @@ describe('operation receipts and recovery', () => {
     const preview = await previewApplyStructured({ providers: ['claude'], contents: ['rules'], home });
     const result = await applyStructuredPreview(preview.digest, { providers: ['claude'], contents: ['rules'], home });
     expect(result.receipt.structuredPreviewDigest).toBe(preview.digest);
+    expect(result.receipt.masterRevision).toBe(preview.masterRevision);
+    expect(result.receipt.compositionRevisions?.['claude:rules']).toBe(preview.entries[0]?.compositionRevision);
     expect(await readFile(outputPath, 'utf8')).toContain('# Reviewed');
+    expect((await loadManifest(home)).outputs[outputPath]?.compositionRevision).toBe(preview.entries[0]?.compositionRevision);
+  });
+
+  test('loads v1 receipts without revision metadata without rewriting them', async () => {
+    await setup(['claude']);
+    const receiptsDir = path.join(home, '.state', 'operations', 'receipts');
+    await mkdir(receiptsDir, { recursive: true, mode: 0o700 });
+    const receiptPath = path.join(receiptsDir, 'legacy.json');
+    const legacyReceipt = `${JSON.stringify({
+      version: 1,
+      id: 'legacy',
+      lifecycle: 'completed',
+      startedAt: '2026-07-13T00:00:00.000Z',
+      completedAt: '2026-07-13T00:00:01.000Z',
+      scope: {},
+      targets: [],
+      createdDirectories: [],
+      recovery: { attempted: false, recovered: false },
+    }, null, 2)}\n`;
+    await writeFile(receiptPath, legacyReceipt, { mode: 0o600 });
+
+    const loaded = await getOperationReceipt('legacy', home);
+    expect(loaded.id).toBe('legacy');
+    expect(loaded.masterRevision).toBeUndefined();
+    expect(await readFile(receiptPath, 'utf8')).toBe(legacyReceipt);
   });
 
   test('detaches ownership without deleting provider content and strips generated rules headers', async () => {

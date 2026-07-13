@@ -61,6 +61,8 @@ export async function applyOpenCodeMcp(
     managedKeys,
     home: ctx.home,
     operation: ctx.operation,
+    masterRevision: ctx.masterRevision,
+    compositionRevision: ctx.compositionRevision,
   });
 
   return {

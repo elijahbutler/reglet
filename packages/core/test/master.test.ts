@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { loadConfig } from '../src/config.js';
-import { initMasterDir, loadMasterDir } from '../src/master.js';
+import { initMasterDir, loadMasterDir, PROVIDER_RULES_MARKER } from '../src/master.js';
 import { clearLegacySyncState, inspectLegacySyncState, publicReleaseCapabilities } from '../src/release.js';
 
 let currentHome: string | undefined;
@@ -43,6 +43,9 @@ describe('master dir', () => {
     await mkdir(path.join(home, 'mcp'), { recursive: true });
     await writeFile(path.join(home, 'rules', '02-second.md'), 'second');
     await writeFile(path.join(home, 'rules', '01-first.md'), 'first');
+    await mkdir(path.join(home, 'rules', 'codex'), { recursive: true });
+    await writeFile(path.join(home, 'rules', 'codex', PROVIDER_RULES_MARKER), 'v1\n');
+    await writeFile(path.join(home, 'rules', 'codex', '10-codex.md'), 'codex only');
     await writeFile(path.join(home, 'skills', 'alpha', 'SKILL.md'), 'skill');
     await writeFile(path.join(home, 'skills', 'alpha', 'assets', 'note.txt'), 'note');
     await writeFile(
@@ -54,6 +57,10 @@ describe('master dir', () => {
 
     expect(master.rules.map((rule) => rule.relPath)).toEqual(['01-first.md', '02-second.md']);
     expect(master.rules.map((rule) => rule.content)).toEqual(['first', 'second']);
+    expect(master.providerRules.codex).toEqual([
+      { relPath: 'codex/10-codex.md', content: 'codex only' },
+    ]);
+    expect(master.providerRules.claude).toEqual([]);
     expect(master.skills).toEqual([
       {
         name: 'alpha',
@@ -96,6 +103,17 @@ describe('master dir', () => {
     ]);
     expect(master.providerSkills.claude.map((skill) => skill.name)).toEqual(['claude-only']);
     expect(master.providerSkills.gemini).toEqual([]);
+  });
+
+  test('keeps unmarked provider-named rule directories shared for compatibility', async () => {
+    const home = await useTempHome();
+    await mkdir(path.join(home, 'rules', 'codex'), { recursive: true });
+    await writeFile(path.join(home, 'rules', 'codex', 'legacy-shared.md'), 'still shared');
+
+    const master = await loadMasterDir(home);
+
+    expect(master.rules).toEqual([{ relPath: 'codex/legacy-shared.md', content: 'still shared' }]);
+    expect(master.providerRules.codex).toEqual([]);
   });
 
   test('initMasterDir creates skeleton and is idempotent', async () => {
