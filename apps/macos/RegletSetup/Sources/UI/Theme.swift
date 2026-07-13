@@ -86,7 +86,7 @@ enum Theme {
     }
 
     private static func registerFont(named name: String) -> Bool {
-      guard let url = Bundle.module.url(forResource: name, withExtension: "ttf", subdirectory: "Resources/Fonts") else {
+      guard let url = Bundle.module.url(forResource: name, withExtension: "ttf", subdirectory: "Fonts") else {
         print("RegletSetup: missing font resource \(name).ttf")
         return false
       }
