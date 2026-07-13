@@ -2,9 +2,9 @@
 
 ![Reglet engineering control plane banner](docs/assets/reglet-banner.svg)
 
-Reglet is a local-only macOS manager and CLI for global AI-agent rules, skills, and MCP configurations. It keeps one versionable master directory, renders it to the six supported providers, makes every provider write reviewable, and retains recovery data indefinitely.
+Reglet is a local-only CLI, with retained macOS manager source, for global AI-agent rules, skills, and MCP configurations. It keeps one versionable master directory, renders it to the six supported providers, makes every provider write reviewable, and retains recovery data indefinitely.
 
-Public V1 has no account, device-linking, remote configuration, background network transfer, or network management commands. Its configuration path stays on the Mac. A manual software-update check is separately disclosed and off by default.
+Public V1 has no account, device-linking, remote configuration, background network transfer, or network management commands. Its configuration path stays on the current machine. The macOS manager source includes a manual software-update check that is separately disclosed and off by default, but the app is not distributed as a public release artifact.
 
 ```text
 ~/.reglet/                 provider outputs
@@ -18,26 +18,31 @@ Public V1 has no account, device-linking, remote configuration, background netwo
 ## What V1 provides
 
 - Rules, shared skills, provider-scoped skills, and managed MCP entries for Claude Code, Codex CLI, Cursor, Gemini CLI, Windsurf, and OpenCode.
-- A native macOS manager with Providers, Rules, Skills, MCP, Activity & Drift, and Recovery screens.
+- Retained native macOS manager source with Providers, Rules, Skills, MCP, Activity & Drift, and Recovery screens.
 - Digest-backed Review & Apply plans with exact redacted diffs, drift checks, durable operation receipts, and explicit receipt restore.
 - Typed local MCP environment references. Raw credential strings are invalid and are never copied into previews, logs, diagnostics, journals, or receipts.
 - Owner-only Reglet state, journal, and snapshot permissions (`0700` directories and `0600` files).
 
 ## Install
 
-Install only a signed and notarized V1 release:
+Install the public CLI release with Homebrew on macOS:
 
 ```bash
 brew tap elijahbutler/reglet
-brew install --cask elijahbutler/reglet/reglet
+brew install elijahbutler/reglet/reglet
 ```
 
-The cask preserves macOS quarantine and Gatekeeper verification. It installs `Reglet.app` and exposes the bundled `reglet` CLI; it does not write provider files or start background services.
+If you installed 0.1.6 as `brew install --cask reglet`, it is a legacy app cask and cannot upgrade itself into the formula. Follow the [cask migration steps](docs/installation.md#migrate-from-the-016-app-cask) after the first CLI-only release is published.
 
-CLI-only installs use the matching formula:
+Or download the matching binary from the GitHub Release. Use `reglet-darwin-arm64` on Apple silicon, `reglet-darwin-x64` on Intel Macs, or `reglet-windows-x64.exe` on Windows x64.
 
 ```bash
-brew install --formula elijahbutler/reglet/reglet
+# macOS: choose the matching architecture
+chmod +x reglet-darwin-arm64
+./reglet-darwin-arm64 --version
+
+# Windows PowerShell
+.\reglet-windows-x64.exe --version
 ```
 
 See [installation](docs/installation.md) for release verification and source setup.

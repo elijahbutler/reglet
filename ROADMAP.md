@@ -2,7 +2,7 @@
 
 ## V1 boundary
 
-Public V1 is a local-only macOS manager for the existing six provider adapters. It manages rules, skills, and MCP configuration on one Mac. It does not ship accounts, device lifecycle, remote configuration, hosted services, self-hosted services, or network-management commands.
+Public V1 is a local-only CLI release for the existing six provider adapters. It manages rules, skills, and MCP configuration on the current machine. It does not ship accounts, device lifecycle, remote configuration, hosted services, self-hosted services, network-management commands, or a public macOS app artifact.
 
 The V1 promise is simple:
 
@@ -19,23 +19,23 @@ Remote and team capabilities remain unsupported internal source for a later secu
 - [x] Digest-backed transaction plans, atomic sibling staging, durable journals, cross-provider rollback, automatic interruption recovery, and indefinitely retained receipts/snapshots.
 - [x] Receipt list/show/restore interfaces and compatibility `restore`/`revert` commands.
 - [x] Scoped Stop Managing that preserves provider content and removes the generated rules header when applicable.
-- [x] Native review/apply, Activity, recovery, scoped lifecycle, search, unsaved-edit confirmation, and one redacted manager snapshot response.
+- [x] Native macOS manager source for review/apply, Activity, recovery, scoped lifecycle, search, unsaved-edit confirmation, and one redacted manager snapshot response.
 - [x] Manual update checks with automatic checks disabled by default.
 
 ## Release gates
 
-The code and release automation enforce the following gates. The physical credentials and real-machine evidence are release-operator work and must be recorded for every public release candidate.
+The code and release automation enforce the following public CLI gates. Source-level macOS manager checks remain in CI, but the app is not a public release artifact.
 
 - [x] Bun, lint, typecheck, and macOS-native Swift tests run in CI.
-- [x] Release packaging fails without Developer ID signing, notarization, stapling, verification, checksums, and build provenance.
-- [x] Public binaries and installers are macOS-only; no quarantine bypass or unsigned/ad-hoc fallback exists.
+- [x] Release packaging produces CLI binaries for macOS arm64, macOS x64, and Windows x64 with checksums, provenance, and GitHub attestation.
+- [x] Public release publishing is blocked unless `HOMEBREW_TAP_TOKEN` updates `Formula/reglet.rb` in `elijahbutler/homebrew-reglet`.
 - [x] Privacy, recovery, security-reporting, release-integrity, and V1-limitations documentation is published with the source.
-- [ ] Validate a signed artifact on a fresh Mac: install → onboarding → review/apply → drift → receipt recovery → detach → uninstall.
-- [ ] Record keyboard-only, VoiceOver, contrast, motion, transparency, and text-size certification against that signed artifact.
+- [ ] Validate the CLI release on macOS and Windows: install/download → scan → preview → apply → drift → receipt recovery → detach.
+- [ ] Record source-level keyboard-only, VoiceOver, contrast, motion, transparency, and text-size evidence before any future public app decision.
 
 ## Public V1 limitations
 
-- macOS only.
+- Public artifacts are CLI-only for macOS arm64, macOS x64, and Windows x64.
 - Global provider configuration only; project-scoped configuration is not yet managed.
 - Rules are not supported for Cursor and skills are not supported for Windsurf.
 - Provider rendering can preserve only the structures each provider format supports; see [Providers](docs/providers.md).

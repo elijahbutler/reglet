@@ -36,6 +36,4 @@ bun run build:binaries
 REGLET_BINARY=../../../dist/reglet-darwin-arm64 swift run RegletSetup
 ```
 
-Installer packaging is intentionally separate. The installer must not install, load, or start the Reglet daemon.
-
-Release app archives bundle the matching `reglet` CLI under `Reglet.app/Contents/Resources`. The Homebrew cask installs the app and links that bundled executable into Homebrew's binary prefix.
+The macOS manager is retained source, not a public release artifact. Public releases currently ship CLI-only binaries and a Homebrew formula; they do not publish `Reglet.app`, installer packages, or a Homebrew cask.

@@ -2,42 +2,42 @@
 
 ## Artifact requirements
 
-Public releases are macOS-only. Release automation fails unless it can:
+Public releases are CLI-only. Release automation fails unless it can:
 
-1. import a Developer ID certificate;
-2. sign the CLI binaries, app bundle, and installer package with hardened runtime and timestamps;
-3. submit the app archive and installer package for notarization;
-4. staple and validate the resulting tickets;
-5. verify signatures with `codesign`, `pkgutil`, and `spctl`;
-6. publish SHA-256 checksums and GitHub build provenance.
+1. run Bun checks and tests;
+2. run the source-level Swift tests for the retained macOS manager;
+3. build `reglet-darwin-arm64`, `reglet-darwin-x64`, and `reglet-windows-x64.exe`;
+4. publish SHA-256 checksums and GitHub build provenance for those CLI binaries;
+5. generate the Homebrew formula;
+6. update `Formula/reglet.rb` in `elijahbutler/homebrew-reglet` using `HOMEBREW_TAP_TOKEN`;
+7. publish the GitHub Release only after the tap update succeeds.
 
-There is no unsigned, ad-hoc, or quarantine-bypass fallback.
+`HOMEBREW_TAP_TOKEN` is a repository secret backed by a fine-grained token with **Contents: Read and write** access to `elijahbutler/homebrew-reglet`. If the secret is absent, cloning fails, committing fails, or pushing fails, the workflow fails and leaves the GitHub Release as a draft.
+
+The legacy 0.1.6 app cask remains an uninstall path only; the workflow does not update it. Existing cask users must uninstall it and install the formula after a CLI-only release publishes.
 
 ## Release contents
 
 Each tag release includes:
 
 - arm64 and Intel macOS CLI binaries;
-- arm64 and Intel notarized `Reglet.app` archives;
-- arm64 and Intel notarized installer packages;
+- Windows x64 CLI binary;
 - `SHA256SUMS.txt`;
 - `provenance.txt` and GitHub artifact attestation.
 
 ## Required certification record
 
-Before publishing a release candidate, record the date, macOS version, artifact checksum, and result for each item:
+Before publishing a release candidate, record the date, platform, artifact checksum, and result for each item:
 
 | Check | Required result |
 |---|---|
-| Fresh-machine install | Signed package/app installs without bypassing Gatekeeper. |
+| macOS Homebrew install | Formula installs the matching CLI from `elijahbutler/homebrew-reglet`. |
+| Direct binary launch | Downloaded macOS and Windows binaries report the expected version. |
 | Onboarding | Detects existing supported providers and writes nothing until review/apply. |
 | Review/apply | Redacted diff, current digest, receipt, and snapshots are shown. |
 | Drift | Plain apply refuses replacement; reviewed replacement succeeds only after fresh preview. |
 | Recovery | Receipt restore returns every affected file/directory to its captured state. |
 | Detach | Stop Managing preserves content and removes only Reglet ownership/header. |
-| Uninstall | Leaves no daemon, login item, or configuration-network process behind. |
-| Keyboard | All manager flows, dialogs, and destructive confirmations are operable without a pointer. |
-| VoiceOver | Labels, selected scope, validation, drift, receipt status, and destructive effects are announced. |
-| Appearance | Contrast, reduced motion, reduced transparency, and larger text remain legible and usable. |
+| Homebrew tap gate | Public release is still draft until the formula update succeeds. |
 
-Do not call a build public V1 until every required result is recorded against the exact signed artifact.
+Source-level macOS manager keyboard, VoiceOver, and appearance checks should remain tracked separately. They are not public CLI release blockers unless a future decision makes the app a release artifact.
