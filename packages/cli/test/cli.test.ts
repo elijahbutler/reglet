@@ -403,6 +403,139 @@ describe('reglet CLI', () => {
     expect(merged.draft).toBe('Merged from fake codex.\n');
   });
 
+  test('rules merge-runners discovers installed tools without invoking them', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const fakeHome = await mkdtemp(path.join(tmpdir(), 'reglet-cli-runner-home-'));
+    currentExtraHomes.push(fakeHome);
+    const marker = path.join(fakeHome, 'invoked');
+    const fakeCodex = path.join(fakeHome, '.local', 'bin', 'codex');
+    await mkdir(path.dirname(fakeCodex), { recursive: true });
+    await writeFile(fakeCodex, `#!/bin/sh\ntouch '${marker}'\n`);
+    await chmod(fakeCodex, 0o755);
+
+    const result = await runCli(['rules', 'merge-runners', '--json'], home, providerHome, {
+      HOME: fakeHome,
+      USERPROFILE: fakeHome,
+      PATH: [path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter),
+    });
+    const payload = JSON.parse(result.stdout) as {
+      version: number;
+      runners: { id: string; displayName: string; executablePath: string }[];
+    };
+
+    expect(payload).toEqual({
+      version: 1,
+      runners: [{ id: 'codex', displayName: 'Codex CLI', executablePath: fakeCodex }],
+    });
+    expect(await Bun.file(marker).exists()).toBe(false);
+  });
+
+  test('rules merge-draft honors an explicitly selected runner', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const claudeRules = path.join(providerHome, '.claude', 'CLAUDE.md');
+    const codexRules = path.join(providerHome, '.codex', 'AGENTS.md');
+    await mkdir(path.dirname(claudeRules), { recursive: true });
+    await mkdir(path.dirname(codexRules), { recursive: true });
+    await writeFile(claudeRules, 'Prefer concise answers.\n');
+    await writeFile(codexRules, 'Never use npm.\n');
+
+    const fakeHome = await mkdtemp(path.join(tmpdir(), 'reglet-cli-runner-home-'));
+    currentExtraHomes.push(fakeHome);
+    const bin = path.join(fakeHome, '.local', 'bin');
+    await mkdir(bin, { recursive: true });
+    await writeFile(path.join(bin, 'codex'), '#!/bin/sh\necho "Used codex."\n');
+    await writeFile(path.join(bin, 'claude'), '#!/bin/sh\necho "Used claude."\n');
+    await chmod(path.join(bin, 'codex'), 0o755);
+    await chmod(path.join(bin, 'claude'), 0o755);
+
+    const result = await runCli(
+      ['rules', 'merge-draft', '--provider', 'claude,codex', '--runner', 'claude', '--json'],
+      home,
+      providerHome,
+      {
+        HOME: fakeHome,
+        USERPROFILE: fakeHome,
+        PATH: [path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter),
+      },
+    );
+    const merged = JSON.parse(result.stdout) as { provider: string; draft: string };
+
+    expect(merged).toMatchObject({ provider: 'claude', draft: 'Used claude.\n' });
+  });
+
+  test('rules merge-draft runs Codex ephemerally outside Git and sends the prompt through stdin', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const claudeRules = path.join(providerHome, '.claude', 'CLAUDE.md');
+    const codexRules = path.join(providerHome, '.codex', 'AGENTS.md');
+    await mkdir(path.dirname(claudeRules), { recursive: true });
+    await mkdir(path.dirname(codexRules), { recursive: true });
+    await writeFile(claudeRules, 'Prefer concise answers.\n');
+    await writeFile(codexRules, 'Never use npm.\n');
+
+    const fakeHome = await mkdtemp(path.join(tmpdir(), 'reglet-cli-runner-home-'));
+    currentExtraHomes.push(fakeHome);
+    const argsLog = path.join(fakeHome, 'args');
+    const stdinLog = path.join(fakeHome, 'stdin');
+    const cwdLog = path.join(fakeHome, 'cwd');
+    const fakeCodex = path.join(fakeHome, '.local', 'bin', 'codex');
+    await mkdir(path.dirname(fakeCodex), { recursive: true });
+    await writeFile(fakeCodex, [
+      '#!/bin/sh',
+      `printf '%s\\n' "$@" > '${argsLog}'`,
+      `pwd > '${cwdLog}'`,
+      `cat > '${stdinLog}'`,
+      'echo "Merged securely."',
+      '',
+    ].join('\n'));
+    await chmod(fakeCodex, 0o755);
+
+    await runCli(
+      ['rules', 'merge-draft', '--provider', 'claude,codex', '--runner', 'codex', '--json'],
+      home,
+      providerHome,
+      {
+        HOME: fakeHome,
+        USERPROFILE: fakeHome,
+        PATH: [path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter),
+      },
+    );
+
+    const args = await readFile(argsLog, 'utf8');
+    const prompt = await readFile(stdinLog, 'utf8');
+    const workingDirectory = (await readFile(cwdLog, 'utf8')).trim();
+    expect(args).toContain('--skip-git-repo-check');
+    expect(args).toContain('--ephemeral');
+    expect(args).toContain('read-only');
+    expect(args).not.toContain('Prefer concise answers.');
+    expect(prompt).toContain('Prefer concise answers.');
+    expect(prompt).toContain('Never use npm.');
+    expect(path.basename(workingDirectory)).toStartWith('reglet-ai-merge-');
+    await expect(stat(workingDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  test('rules merge-draft reports a missing explicitly selected runner', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const claudeRules = path.join(providerHome, '.claude', 'CLAUDE.md');
+    const codexRules = path.join(providerHome, '.codex', 'AGENTS.md');
+    await mkdir(path.dirname(claudeRules), { recursive: true });
+    await mkdir(path.dirname(codexRules), { recursive: true });
+    await writeFile(claudeRules, 'Prefer concise answers.\n');
+    await writeFile(codexRules, 'Never use npm.\n');
+    const fakeHome = await mkdtemp(path.join(tmpdir(), 'reglet-cli-runner-home-'));
+    currentExtraHomes.push(fakeHome);
+
+    await expect(runCli(
+      ['rules', 'merge-draft', '--provider', 'claude,codex', '--runner', 'gemini', '--json'],
+      home,
+      providerHome,
+      {
+        HOME: fakeHome,
+        USERPROFILE: fakeHome,
+        PATH: [path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter),
+      },
+    )).rejects.toThrow('Gemini CLI was not found');
+  });
+
   test('rules merge-draft requires at least two non-empty provider rule files', async () => {
     const { home, providerHome } = await useTempHomes();
     const claudeRules = path.join(providerHome, '.claude', 'CLAUDE.md');

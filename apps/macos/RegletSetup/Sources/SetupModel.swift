@@ -41,6 +41,8 @@ final class SetupModel: ObservableObject {
   @Published var ruleMergeDraft: RuleMergeDraftResponse?
   @Published var editableRuleMergeDraft = ""
   @Published var ruleMergeError: String?
+  @Published var ruleMergeRunners: [RuleMergeRunner] = []
+  @Published var selectedRuleMergeRunnerID: String?
 
   private let command: RegletCommand
   private let updateChecker = UpdateChecker()
@@ -68,6 +70,10 @@ final class SetupModel: ObservableObject {
     (plan?.reconciliation.rules ?? [])
       .filter { selectedProviders.contains($0.provider) && !$0.preview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
       .sorted { $0.provider < $1.provider }
+  }
+
+  var selectedRuleMergeRunner: RuleMergeRunner? {
+    ruleMergeRunners.first { $0.id == selectedRuleMergeRunnerID }
   }
 
   func providerDisplayName(_ id: String) -> String {
@@ -180,6 +186,16 @@ final class SetupModel: ObservableObject {
       if self.selectedRuleMergeProviders.isEmpty {
         self.selectedRuleMergeProviders = available
       }
+      do {
+        self.ruleMergeRunners = try await self.command.ruleMergeRunners().runners
+        if !self.ruleMergeRunners.contains(where: { $0.id == self.selectedRuleMergeRunnerID }) {
+          self.selectedRuleMergeRunnerID = self.ruleMergeRunners.first?.id
+        }
+      } catch {
+        self.ruleMergeRunners = []
+        self.selectedRuleMergeRunnerID = nil
+        self.ruleMergeError = error.localizedDescription
+      }
     }
   }
 
@@ -223,7 +239,7 @@ final class SetupModel: ObservableObject {
     return review
   }
 
-  func generateRuleMergeDraft() async {
+  func generateRuleMergeDraft(runner: RuleMergeRunner) async {
     isWorking = true
     ruleMergeError = nil
     errorMessage = nil
@@ -235,11 +251,14 @@ final class SetupModel: ObservableObject {
     }
 
     do {
-      let draft = try await command.mergeRuleDraft(providers: Array(selectedRuleMergeProviders).sorted())
+      let draft = try await command.mergeRuleDraft(
+        providers: Array(selectedRuleMergeProviders).sorted(),
+        runner: runner.id
+      )
       ruleMergeDraft = draft
       editableRuleMergeDraft = draft.draft
     } catch {
-      ruleMergeError = error.localizedDescription
+      ruleMergeError = "\(error.localizedDescription)\n\nMake sure \(runner.displayName) is signed in, then retry. Sign-in command: \(runner.signInCommand)"
     }
   }
 

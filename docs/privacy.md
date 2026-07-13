@@ -8,7 +8,11 @@ MCP process-environment references are resolved only in memory while a provider 
 
 ## Network requests
 
-The configuration engine and retained manager refresh path make no network requests. The only optional request in manager source is the macOS manager's manual **Check for Updates** action. Automatic update checks are disabled by default and can be enabled explicitly in the app menu preference, but the manager is not distributed as a public release artifact.
+The configuration engine and retained manager refresh path make no network requests. Network-capable exceptions are separate user actions: update checks and optional AI rules drafting.
+
+Before each AI draft, the macOS manager shows the selected external CLI and exact source paths and requires consent. Reglet passes those files' contents to the installed tool, whose provider privacy terms apply, and receives an editable proposal without saving or applying it. Declining consent runs nothing. CLI users invoke the equivalent transfer explicitly with `reglet rules merge-draft`.
+
+Automatic update checks are disabled by default and can be enabled explicitly in the app menu preference. The manager is not distributed as a public release artifact.
 
 Provider outputs may cause their respective provider to make requests when that provider runs. Reglet does not control those providers' independent network behavior.
 
