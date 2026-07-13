@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
-import { execFile, spawn } from 'node:child_process';
-import { access, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { constants as fsConstants } from 'node:fs';
+import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
 import { confirm, isCancel, multiselect, outro } from '@clack/prompts';
 import { Command, InvalidArgumentError } from 'commander';
 import {
@@ -107,7 +108,6 @@ import {
 const providerIds = ['claude', 'codex', 'cursor', 'gemini', 'windsurf', 'opencode'] as const;
 const contentIds = ['rules', 'skills', 'mcp'] as const;
 const rulesPreviewLimit = 800;
-const execFileAsync = promisify(execFile);
 
 type ContentId = (typeof contentIds)[number];
 
@@ -450,12 +450,28 @@ rules
   });
 
 rules
+  .command('merge-runners')
+  .description('List installed local AI tools available for rules drafting')
+  .option('--json', 'print machine-readable JSON for setup apps')
+  .action(async (options: { json?: boolean }) => {
+    const runners = await listInstalledMergeRunners();
+    if (options.json === true) {
+      printJson({ version: 1, runners });
+      return;
+    }
+    for (const runner of runners) {
+      console.log(`${runner.id}\t${runner.displayName}\t${runner.executablePath}`);
+    }
+  });
+
+rules
   .command('merge-draft')
   .description('Generate a reviewable unified rules draft from selected provider rules without writing files')
   .requiredOption('-p, --provider <provider...>', 'provider rule sources to merge', parseProviderList)
+  .option('--runner <runner>', 'local AI tool to use: codex, claude, or gemini', parseAiMergeRunnerId)
   .option('--json', 'print machine-readable JSON for setup apps')
-  .action(async (options: { provider: ProviderId[]; json?: boolean }) => {
-    const result = await generateRulesMergeDraft(options.provider);
+  .action(async (options: { provider: ProviderId[]; runner?: AiMergeRunnerId; json?: boolean }) => {
+    const result = await generateRulesMergeDraft(options.provider, options.runner);
     if (options.json === true) {
       printJson({ version: 1, ...result });
       return;
@@ -896,11 +912,19 @@ interface RuleMergeDraftJson {
   sources: RuleMergeSourceJson[];
 }
 
+type AiMergeRunnerId = 'codex' | 'claude' | 'gemini';
+
 interface AiMergeRunner {
   provider: string;
   command: string;
   args: string[];
   promptAsArgument: boolean;
+}
+
+interface InstalledAiMergeRunnerJson {
+  id: AiMergeRunnerId;
+  displayName: string;
+  executablePath: string;
 }
 
 interface PlannedProviderJson {
@@ -1007,6 +1031,11 @@ function parseProvider(value: string): ProviderId {
     return value as ProviderId;
   }
   throw new InvalidArgumentError(`Unknown provider: ${value}`);
+}
+
+function parseAiMergeRunnerId(value: string): AiMergeRunnerId {
+  if (value === 'codex' || value === 'claude' || value === 'gemini') return value;
+  throw new InvalidArgumentError(`Unknown AI merge runner: ${value}`);
 }
 
 function parseContent(value: string): ApplyContent {
@@ -1671,7 +1700,10 @@ async function buildRuleComparison(provider: ProviderId, inventory: ProviderInve
   };
 }
 
-async function generateRulesMergeDraft(providers: ProviderId[]): Promise<RuleMergeDraftJson> {
+async function generateRulesMergeDraft(
+  providers: ProviderId[],
+  selectedRunner?: AiMergeRunnerId,
+): Promise<RuleMergeDraftJson> {
   const uniqueProviders = Array.from(new Set(providers));
   const sources: (RuleMergeSourceJson & { content: string })[] = [];
 
@@ -1696,9 +1728,13 @@ async function generateRulesMergeDraft(providers: ProviderId[]): Promise<RuleMer
     throw new Error('Select at least two providers with non-empty rule files before generating a unified draft.');
   }
 
-  const runner = mergeRunnerFromEnvironment() ?? (await detectMergeRunner());
+  const runner = selectedRunner === undefined
+    ? mergeRunnerFromEnvironment() ?? (await detectMergeRunner())
+    : await resolveMergeRunner(selectedRunner);
   if (runner === null) {
-    throw new Error('No supported local AI CLI was found. Install Codex, Claude, or Gemini CLI, then retry.');
+    throw new Error(selectedRunner === undefined
+      ? 'No supported local AI CLI was found. Install Codex, Claude, or Gemini CLI, then retry.'
+      : `${runnerDisplayName(selectedRunner)} was not found. Install it or choose another AI tool.`);
   }
 
   const prompt = buildRulesMergePrompt(sources);
@@ -1735,19 +1771,55 @@ function buildRulesMergePrompt(sources: (RuleMergeSourceJson & { content: string
 }
 
 async function detectMergeRunner(): Promise<AiMergeRunner | null> {
-  const candidates: AiMergeRunner[] = [
-    { provider: 'codex', command: 'codex', args: ['exec', '-s', 'read-only'], promptAsArgument: true },
-    { provider: 'claude', command: 'claude', args: ['-p'], promptAsArgument: true },
-    { provider: 'gemini', command: 'gemini', args: ['-p'], promptAsArgument: true },
-  ];
-
-  for (const candidate of candidates) {
-    const command = await resolveCommand(candidate.command);
-    if (command !== null) {
-      return { ...candidate, command };
+  for (const id of aiMergeRunnerIds()) {
+    const runner = await resolveMergeRunner(id);
+    if (runner !== null) {
+      return runner;
     }
   }
   return null;
+}
+
+function aiMergeRunnerIds(): AiMergeRunnerId[] {
+  return ['codex', 'claude', 'gemini'];
+}
+
+function runnerDisplayName(id: AiMergeRunnerId): string {
+  switch (id) {
+    case 'codex': return 'Codex CLI';
+    case 'claude': return 'Claude Code';
+    case 'gemini': return 'Gemini CLI';
+  }
+}
+
+async function listInstalledMergeRunners(): Promise<InstalledAiMergeRunnerJson[]> {
+  const runners = await Promise.all(aiMergeRunnerIds().map(async (id) => {
+    const executablePath = await resolveCommand(id);
+    return executablePath === null ? null : {
+      id,
+      displayName: runnerDisplayName(id),
+      executablePath,
+    };
+  }));
+  return runners.filter((runner): runner is InstalledAiMergeRunnerJson => runner !== null);
+}
+
+async function resolveMergeRunner(id: AiMergeRunnerId): Promise<AiMergeRunner | null> {
+  const command = await resolveCommand(id);
+  if (command === null) return null;
+  switch (id) {
+    case 'codex':
+      return {
+        provider: id,
+        command,
+        args: ['exec', '-s', 'read-only', '--skip-git-repo-check', '--ephemeral', '-'],
+        promptAsArgument: false,
+      };
+    case 'claude':
+      return { provider: id, command, args: ['-p'], promptAsArgument: true };
+    case 'gemini':
+      return { provider: id, command, args: ['-p'], promptAsArgument: true };
+  }
 }
 
 function mergeRunnerFromEnvironment(): AiMergeRunner | null {
@@ -1775,52 +1847,54 @@ function mergeRunnerFromEnvironment(): AiMergeRunner | null {
 }
 
 async function runAiMerge(runner: AiMergeRunner, prompt: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(runner.command, runner.promptAsArgument ? [...runner.args, prompt] : runner.args, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    const timeout = setTimeout(() => {
-      child.kill('SIGTERM');
-      reject(new Error(`${runner.provider} merge timed out after 120 seconds.`));
-    }, 120_000);
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
+  const workingDirectory = await mkdtemp(path.join(tmpdir(), 'reglet-ai-merge-'));
+  try {
+    return await new Promise((resolve, reject) => {
+      const child = spawn(runner.command, runner.promptAsArgument ? [...runner.args, prompt] : runner.args, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        cwd: workingDirectory,
+      });
+      const timeout = setTimeout(() => {
+        child.kill('SIGTERM');
+        reject(new Error(`${runner.provider} merge timed out after 120 seconds.`));
+      }, 120_000);
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
 
-    child.stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
-    child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
-    child.on('error', (error) => {
-      clearTimeout(timeout);
-      if (isNodeError(error) && error.code === 'ENOENT') {
-        reject(new Error(`${runner.provider} CLI was not found. Install it or choose provider-specific prompts.`));
-        return;
-      }
-      reject(error);
-    });
-    child.on('close', (code) => {
-      clearTimeout(timeout);
-      const stdout = Buffer.concat(stdoutChunks).toString('utf8');
-      const stderr = Buffer.concat(stderrChunks).toString('utf8');
-      if (code !== 0) {
-        reject(new Error(`${runner.provider} merge failed: ${stderr.trim() || `exit ${code ?? 'unknown'}`}`));
-        return;
-      }
-      resolve(stdout);
-    });
+      child.stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
+      child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+      child.on('error', (error) => {
+        clearTimeout(timeout);
+        if (isNodeError(error) && error.code === 'ENOENT') {
+          reject(new Error(`${runner.provider} CLI was not found. Install it or choose provider-specific prompts.`));
+          return;
+        }
+        reject(error);
+      });
+      child.on('close', (code) => {
+        clearTimeout(timeout);
+        const stdout = Buffer.concat(stdoutChunks).toString('utf8');
+        const stderr = Buffer.concat(stderrChunks).toString('utf8');
+        if (code !== 0) {
+          reject(new Error(`${runner.provider} merge failed: ${stderr.trim() || `exit ${code ?? 'unknown'}`}`));
+          return;
+        }
+        resolve(stdout);
+      });
 
-    if (!runner.promptAsArgument) {
-      child.stdin.write(prompt);
-    }
-    child.stdin.end();
-  });
+      if (!runner.promptAsArgument) {
+        child.stdin.write(prompt);
+      }
+      child.stdin.end();
+    });
+  } finally {
+    await rm(workingDirectory, { recursive: true, force: true });
+  }
 }
 
 async function resolveCommand(command: string): Promise<string | null> {
-  if (await commandExists(command)) {
-    return command;
-  }
-
   for (const candidatePath of fallbackCommandPaths(command)) {
-    if (await executableExists(candidatePath) && await commandExists(candidatePath)) {
+    if (await executableExists(candidatePath)) {
       return candidatePath;
     }
   }
@@ -1857,23 +1931,7 @@ function commandPathCandidates(dir: string, command: string): string[] {
 
 async function executableExists(filePath: string): Promise<boolean> {
   try {
-    await access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function commandExists(command: string): Promise<boolean> {
-  try {
-    const useShellCommand = path.isAbsolute(command) || process.platform === 'win32';
-    const executable = useShellCommand ? command : '/usr/bin/env';
-    const args = useShellCommand ? ['--version'] : [command, '--version'];
-    await execFileAsync(executable, args, {
-      timeout: 5_000,
-      maxBuffer: 64 * 1024,
-      shell: process.platform === 'win32',
-    });
+    await access(filePath, fsConstants.X_OK);
     return true;
   } catch {
     return false;

@@ -33,6 +33,17 @@ reglet skills adopt claude my-skill --scope provider
 
 Adoption copies a provider-local skill into the master directory without deleting the source. Review the resulting structured apply before distributing it.
 
+## Optional AI rules draft
+
+List installed local AI tools without running them, then explicitly choose one to generate a reviewable draft:
+
+```bash
+reglet rules merge-runners --json
+reglet rules merge-draft --provider claude,codex --runner codex --json
+```
+
+The merge command sends the selected rule-file contents to the chosen external CLI under that tool provider's privacy terms. It prints a proposal but does not write master or provider files. The macOS onboarding flow shows the executable and exact source paths and requires consent for every invocation.
+
 ## MCP environment references
 
 MCP definitions are shared by default:

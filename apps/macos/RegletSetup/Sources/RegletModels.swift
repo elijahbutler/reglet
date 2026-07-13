@@ -156,6 +156,26 @@ struct RuleMergeDraftResponse: Decodable {
   }
 }
 
+struct RuleMergeRunnersResponse: Decodable {
+  let version: Int
+  let runners: [RuleMergeRunner]
+}
+
+struct RuleMergeRunner: Decodable, Identifiable, Hashable {
+  let id: String
+  let displayName: String
+  let executablePath: String
+
+  var signInCommand: String {
+    switch id {
+    case "codex": "codex login"
+    case "claude": "claude auth login"
+    case "gemini": "gemini"
+    default: executablePath
+    }
+  }
+}
+
 enum ContentKind: String, CaseIterable, Identifiable {
   case rules
   case skills

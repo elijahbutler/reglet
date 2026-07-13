@@ -122,12 +122,20 @@ struct RegletCommand {
     _ = try await run(["rules", "write", path], stdin: content)
   }
 
-  func mergeRuleDraft(providers: [String]) async throws -> RuleMergeDraftResponse {
+  func ruleMergeRunners() async throws -> RuleMergeRunnersResponse {
+    let arguments = ["rules", "merge-runners", "--json"]
+    let result = try await run(arguments)
+    return try decode(RuleMergeRunnersResponse.self, from: result.stdout, command: "reglet \(arguments.joined(separator: " "))")
+  }
+
+  func mergeRuleDraft(providers: [String], runner: String) async throws -> RuleMergeDraftResponse {
     var arguments = ["rules", "merge-draft"]
     if !providers.isEmpty {
       arguments.append("--provider")
       arguments.append(providers.joined(separator: ","))
     }
+    arguments.append("--runner")
+    arguments.append(runner)
     arguments.append("--json")
     let result = try await run(arguments)
     return try decode(RuleMergeDraftResponse.self, from: result.stdout, command: "reglet \(arguments.joined(separator: " "))")

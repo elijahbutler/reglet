@@ -231,7 +231,7 @@ struct SafetyView: View {
 
       VStack(alignment: .leading, spacing: 12) {
         SafetyRow(symbol: "checkmark.shield", title: "No daemon starts during setup")
-        SafetyRow(symbol: "network.slash", title: "Local-only: no account, service, or network connection")
+        SafetyRow(symbol: "network.slash", title: "Local by default; optional AI drafting runs only with per-use consent")
         SafetyRow(symbol: "doc.badge.gearshape", title: "Provider writes are previewed before backup and apply")
         SafetyRow(symbol: "clock.arrow.circlepath", title: "Restore and revert remain available after onboarding")
       }
@@ -354,6 +354,7 @@ struct SelectionView: View {
 
 struct PromptHandlingStepView: View {
   @EnvironmentObject private var model: SetupModel
+  @State private var consentRunner: RuleMergeRunner?
   let back: () -> Void
   let continueAction: () -> Void
 
@@ -362,7 +363,10 @@ struct PromptHandlingStepView: View {
   }
 
   private var canGenerate: Bool {
-    model.rulePromptMode == .unified && model.selectedRuleMergeProviders.count >= 2 && !model.isWorking
+    model.rulePromptMode == .unified
+      && model.selectedRuleMergeProviders.count >= 2
+      && model.selectedRuleMergeRunner != nil
+      && !model.isWorking
   }
 
   private var canContinue: Bool {
@@ -418,6 +422,27 @@ struct PromptHandlingStepView: View {
           }
 
           Section("Unified draft") {
+            if model.ruleMergeRunners.isEmpty {
+              Label("No supported local AI tool was found. You can still enter a unified draft manually.", systemImage: "wand.and.stars")
+                .foregroundStyle(Theme.Colors.ash)
+            } else {
+              Picker("AI tool", selection: $model.selectedRuleMergeRunnerID) {
+                ForEach(model.ruleMergeRunners) { runner in
+                  Text(runner.displayName).tag(Optional(runner.id))
+                }
+              }
+              .accessibilityHint("Chooses the local command-line AI tool used to generate the draft")
+
+              if let runner = model.selectedRuleMergeRunner {
+                LabeledContent("Executable") {
+                  Text(runner.executablePath)
+                    .font(Theme.Fonts.mono(size: 11))
+                    .foregroundStyle(Theme.Colors.ash)
+                    .textSelection(.enabled)
+                }
+              }
+            }
+
             if let draft = model.ruleMergeDraft {
               LabeledContent("Generated with", value: draft.provider)
               Text("\(draft.sources.count) source prompts merged.")
@@ -441,7 +466,7 @@ struct PromptHandlingStepView: View {
             HStack {
               Spacer()
               Button {
-                Task { await model.generateRuleMergeDraft() }
+                consentRunner = model.selectedRuleMergeRunner
               } label: {
                 HStack(spacing: 8) {
                   StatusBadge(text: "AI", kind: .brand)
@@ -476,6 +501,17 @@ struct PromptHandlingStepView: View {
       }
     }
     .background(Theme.Colors.voidBlack)
+    .sheet(item: $consentRunner) { runner in
+      AiDraftConsentView(
+        runner: runner,
+        sources: availableSources.filter { model.selectedRuleMergeProviders.contains($0.provider) },
+        cancel: { consentRunner = nil },
+        generate: {
+          consentRunner = nil
+          Task { await model.generateRuleMergeDraft(runner: runner) }
+        }
+      )
+    }
   }
 
   private func mergeSourceBinding(_ provider: String) -> Binding<Bool> {
@@ -489,6 +525,87 @@ struct PromptHandlingStepView: View {
         }
       }
     )
+  }
+}
+
+private struct AiDraftConsentView: View {
+  let runner: RuleMergeRunner
+  let sources: [RuleComparison]
+  let cancel: () -> Void
+  let generate: () -> Void
+
+  @FocusState private var focusesGenerate: Bool
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+      VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+        HStack(spacing: Theme.Spacing.xs) {
+          StatusBadge(text: "External AI", kind: .brand)
+          Text("Generate with \(runner.displayName)?")
+            .font(Theme.Fonts.headingSm)
+            .foregroundStyle(Theme.Colors.mist)
+        }
+        Text("Reglet will run this installed command once to propose a unified system prompt.")
+          .font(Theme.Fonts.bodyLg)
+          .foregroundStyle(Theme.Colors.ash)
+      }
+
+      VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+        Text("Executable")
+          .font(Theme.Fonts.eyebrow)
+          .foregroundStyle(Theme.Colors.ash)
+        Text(runner.executablePath)
+          .font(Theme.Fonts.mono())
+          .foregroundStyle(Theme.Colors.mist)
+          .textSelection(.enabled)
+      }
+
+      VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+        Text("Files sent to the tool")
+          .font(Theme.Fonts.eyebrow)
+          .foregroundStyle(Theme.Colors.ash)
+        ScrollView {
+          VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            ForEach(sources) { source in
+              HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.xs) {
+                Image(systemName: "doc.text")
+                  .foregroundStyle(Theme.Colors.info)
+                  .accessibilityHidden(true)
+                Text(source.sourcePath)
+                  .font(Theme.Fonts.mono(size: 11))
+                  .foregroundStyle(Theme.Colors.mist)
+                  .textSelection(.enabled)
+                  .frame(maxWidth: .infinity, alignment: .leading)
+              }
+            }
+          }
+        }
+        .frame(maxHeight: 150)
+      }
+
+      Label {
+        Text("The contents of these files are sent to \(runner.displayName) under its provider's privacy terms. The returned draft stays editable and is not saved or applied until you complete final Apply.")
+      } icon: {
+        Image(systemName: "lock.shield")
+      }
+      .font(Theme.Fonts.body)
+      .foregroundStyle(Theme.Colors.ash)
+
+      HStack {
+        Spacer()
+        Button("Cancel", action: cancel)
+          .buttonStyle(.regletGhost)
+          .keyboardShortcut(.cancelAction)
+        Button("Generate with \(runner.displayName)", action: generate)
+          .buttonStyle(.regletPrimary)
+          .keyboardShortcut(.defaultAction)
+          .focused($focusesGenerate)
+      }
+    }
+    .padding(Theme.Spacing.lg)
+    .frame(width: 620, height: 470)
+    .background(Theme.Colors.voidBlack)
+    .onAppear { focusesGenerate = true }
   }
 }
 

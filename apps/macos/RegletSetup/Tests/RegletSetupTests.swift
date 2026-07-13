@@ -70,6 +70,67 @@ final class RegletSetupTests: XCTestCase {
     }
   }
 
+  func testRuleMergeRunnerDiscoveryAndExplicitSelectionUseCommandBoundary() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+    let log = directory.appendingPathComponent("commands.log").path
+    let runners = #"{"version":1,"runners":[{"id":"codex","displayName":"Codex CLI","executablePath":"/Users/test/.local/bin/codex"},{"id":"claude","displayName":"Claude Code","executablePath":"/Users/test/.local/bin/claude"}]}"#
+    let draft = #"{"version":1,"provider":"claude","draft":"Merged draft\n","sources":[{"provider":"claude","sourcePath":"/Users/test/.claude/CLAUDE.md","bytes":10},{"provider":"codex","sourcePath":"/Users/test/.codex/AGENTS.md","bytes":9}]}"#
+    let script = """
+    #!/bin/sh
+    printf '%s\n' "$*" >> '\(log)'
+    if [ "$2" = "merge-runners" ]; then
+      printf '%s' '\(runners)'
+    elif [ "$2" = "merge-draft" ]; then
+      printf '%s' '\(draft)'
+    fi
+    """
+    let executable = try makeExecutable(script, directory: directory)
+    let command = RegletCommand(executable: executable)
+
+    let discovered = try await command.ruleMergeRunners()
+    let merged = try await command.mergeRuleDraft(providers: ["claude", "codex"], runner: "claude")
+
+    XCTAssertEqual(discovered.runners.map(\.id), ["codex", "claude"])
+    XCTAssertEqual(discovered.runners.first?.executablePath, "/Users/test/.local/bin/codex")
+    XCTAssertEqual(merged.provider, "claude")
+    let commands = try String(contentsOfFile: log, encoding: .utf8)
+    XCTAssertTrue(commands.contains("rules merge-runners --json"))
+    XCTAssertTrue(commands.contains("rules merge-draft --provider claude,codex --runner claude --json"))
+  }
+
+  @MainActor
+  func testRuleMergeSuccessPopulatesEditableDraft() async throws {
+    let draft = #"{"version":1,"provider":"claude","draft":"Merged draft\n","sources":[{"provider":"claude","sourcePath":"/tmp/CLAUDE.md","bytes":10},{"provider":"codex","sourcePath":"/tmp/AGENTS.md","bytes":9}]}"#
+    let executable = try makeExecutable("#!/bin/sh\nprintf '%s' '\(draft)'\n")
+    let model = SetupModel(command: RegletCommand(executable: executable))
+    model.selectedRuleMergeProviders = ["claude", "codex"]
+    let runner = RuleMergeRunner(id: "claude", displayName: "Claude Code", executablePath: "/tmp/claude")
+
+    await model.generateRuleMergeDraft(runner: runner)
+
+    XCTAssertEqual(model.ruleMergeDraft?.provider, "claude")
+    XCTAssertEqual(model.editableRuleMergeDraft, "Merged draft\n")
+    XCTAssertNil(model.ruleMergeError)
+  }
+
+  @MainActor
+  func testRuleMergeFailurePreservesManualDraftAndShowsSignInRecovery() async throws {
+    let executable = try makeExecutable("#!/bin/sh\necho 'authentication required' >&2\nexit 1\n")
+    let model = SetupModel(command: RegletCommand(executable: executable))
+    model.selectedRuleMergeProviders = ["claude", "codex"]
+    model.editableRuleMergeDraft = "Keep this manual draft"
+    let runner = RuleMergeRunner(id: "codex", displayName: "Codex CLI", executablePath: "/tmp/codex")
+
+    await model.generateRuleMergeDraft(runner: runner)
+
+    XCTAssertEqual(model.editableRuleMergeDraft, "Keep this manual draft")
+    XCTAssertNil(model.ruleMergeDraft)
+    XCTAssertTrue(model.ruleMergeError?.contains("authentication required") == true)
+    XCTAssertTrue(model.ruleMergeError?.contains("codex login") == true)
+  }
+
   @MainActor
   func testLocalOnlyDriftAndRecoveryUseCommandBoundary() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
