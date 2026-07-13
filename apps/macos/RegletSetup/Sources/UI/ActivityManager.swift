@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ActivityDriftManagerView: View {
   @EnvironmentObject private var model: SetupModel
+  @Environment(\.colorSchemeContrast) private var contrast
   @State private var reviewedReplacement: ApplyReviewScope?
 
   private var drift: [DriftRecord] { model.status?.drift ?? [] }
@@ -21,11 +22,12 @@ struct ActivityDriftManagerView: View {
       Section("Manager status") {
         if managedProviders.isEmpty {
           Text("No provider scopes are managed yet.")
-            .foregroundStyle(.secondary)
+            .foregroundStyle(secondaryText)
         } else {
           ForEach(managedProviders) { provider in
             Text("\(model.providerDisplayName(provider.id)): \([provider.contents.rules ? "Rules" : nil, provider.contents.skills ? "Skills" : nil, provider.contents.mcp ? "MCP" : nil].compactMap { $0 }.joined(separator: ", "))")
-              .font(.caption)
+              .font(Theme.Fonts.body)
+              .foregroundStyle(Theme.Colors.mist)
           }
         }
       }
@@ -33,22 +35,24 @@ struct ActivityDriftManagerView: View {
       Section("Latest operation") {
         if let receipt = latestReceipt {
           Text(receipt.id)
-            .font(.system(.caption, design: .monospaced))
+            .font(Theme.Fonts.mono())
+            .foregroundStyle(Theme.Colors.mist)
             .textSelection(.enabled)
           Text("\(receipt.lifecycle.capitalized) · \(receipt.targets.count) target\(receipt.targets.count == 1 ? "" : "s")")
+            .foregroundStyle(Theme.Colors.mist)
           if let message = receipt.recovery.message {
             Text(message)
-              .font(.caption)
-              .foregroundStyle(.secondary)
+              .font(Theme.Fonts.body)
+              .foregroundStyle(secondaryText)
           }
           if receipt.lifecycle == "rolled-back" {
             Text("Resolve the reported issue, then create a fresh review before retrying.")
-              .font(.caption)
-              .foregroundStyle(.secondary)
+              .font(Theme.Fonts.body)
+              .foregroundStyle(secondaryText)
           }
         } else {
           Text("No operation receipt yet. Review & Apply creates one for every provider mutation.")
-            .foregroundStyle(.secondary)
+            .foregroundStyle(secondaryText)
         }
       }
 
@@ -63,17 +67,18 @@ struct ActivityDriftManagerView: View {
       Section("Managed and clean") {
         if clean.isEmpty {
           Text("No managed files yet. Run setup to enroll providers.")
-            .foregroundStyle(.secondary)
+            .foregroundStyle(secondaryText)
         } else {
           ForEach(clean) { record in
             VStack(alignment: .leading, spacing: 3) {
               HStack(spacing: 8) {
                 Text(model.providerDisplayName(record.provider))
-                SkillBadge(text: record.content, tint: .secondary)
+                  .foregroundStyle(Theme.Colors.mist)
+                StatusBadge(text: record.content, kind: .success)
               }
               Text(record.outputPath)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .font(Theme.Fonts.mono())
+                .foregroundStyle(secondaryText)
                 .textSelection(.enabled)
             }
             .padding(.vertical, 2)
@@ -83,13 +88,16 @@ struct ActivityDriftManagerView: View {
 
       Section("Copyable diagnostics") {
         Text(diagnostics)
-          .font(.system(.caption, design: .monospaced))
+          .font(Theme.Fonts.mono())
+          .foregroundStyle(Theme.Colors.mist)
           .textSelection(.enabled)
         Text("Include this local summary when reporting a retry or recovery problem. It contains no resolved environment values.")
-          .font(.caption)
-          .foregroundStyle(.secondary)
+          .font(Theme.Fonts.body)
+          .foregroundStyle(secondaryText)
       }
     }
+    .scrollContentBackground(.hidden)
+    .background(Theme.Colors.voidBlack)
     .overlay {
       if model.status == nil && !model.isWorking {
         ContentUnavailableView("Drift status unavailable", systemImage: "waveform.path.ecg", description: Text("Refresh to check managed files."))
@@ -99,17 +107,17 @@ struct ActivityDriftManagerView: View {
     }
     .safeAreaInset(edge: .bottom) {
       if let status = model.status, !drift.isEmpty {
-        HStack {
+        StatusStrip {
+          HStack {
           Image(systemName: status.driftedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-            .foregroundStyle(status.driftedCount == 0 ? Color.green : Color.orange)
+            .foregroundStyle(status.driftedCount == 0 ? Theme.Colors.success : Theme.Colors.warning)
           Text(status.driftedCount == 0
             ? "All \(drift.count) managed files match the master."
             : "\(status.driftedCount) of \(drift.count) managed files changed outside Reglet.")
+            .foregroundStyle(Theme.Colors.mist)
           Spacer()
+          }
         }
-        .font(.callout)
-        .padding()
-        .background(.regularMaterial)
       }
     }
     .sheet(item: $reviewedReplacement) { scope in
@@ -117,10 +125,15 @@ struct ActivityDriftManagerView: View {
       .environmentObject(model)
     }
   }
+
+  private var secondaryText: Color {
+    contrast == .increased ? Theme.Colors.mist : Theme.Colors.ash
+  }
 }
 
 struct DriftRow: View {
   @EnvironmentObject private var model: SetupModel
+  @Environment(\.colorSchemeContrast) private var contrast
   let record: DriftRecord
   @Binding var reviewedReplacement: ApplyReviewScope?
 
@@ -131,18 +144,19 @@ struct DriftRow: View {
       VStack(alignment: .leading, spacing: 3) {
         HStack(spacing: 8) {
           Text(model.providerDisplayName(record.provider))
-          SkillBadge(text: record.content, tint: .secondary)
-          SkillBadge(text: isMissing ? "deleted" : "edited", tint: .orange)
+            .foregroundStyle(Theme.Colors.mist)
+          StatusBadge(text: record.content, kind: .success)
+          StatusBadge(text: isMissing ? "deleted" : "edited", kind: .warning)
         }
         Text(record.outputPath)
-          .font(.system(.caption, design: .monospaced))
-          .foregroundStyle(.secondary)
+          .font(Theme.Fonts.mono())
+          .foregroundStyle(secondaryText)
           .textSelection(.enabled)
         Text(isMissing
           ? "The managed file was removed. Review the replacement before recreating it from the master."
           : "Import keeps the edits in the master; review the exact replacement before overwriting it.")
-          .font(.caption)
-          .foregroundStyle(.tertiary)
+          .font(Theme.Fonts.body)
+          .foregroundStyle(secondaryText)
       }
       Spacer()
       Button {
@@ -150,6 +164,7 @@ struct DriftRow: View {
       } label: {
         Label("Import to Master", systemImage: "square.and.arrow.down")
       }
+      .buttonStyle(.regletSecondary)
       .disabled(isMissing || model.isWorking)
       .help("Copy the provider's edits back into the master directory")
       Button {
@@ -167,9 +182,14 @@ struct DriftRow: View {
       } label: {
         Label("Review Replace", systemImage: "doc.text.magnifyingglass")
       }
+      .buttonStyle(.regletPrimary)
       .disabled(model.isWorking)
       .help("Review the exact replacement before overwriting the provider file")
     }
     .padding(.vertical, 4)
+  }
+
+  private var secondaryText: Color {
+    contrast == .increased ? Theme.Colors.mist : Theme.Colors.ash
   }
 }

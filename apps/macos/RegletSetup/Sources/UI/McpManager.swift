@@ -30,67 +30,124 @@ struct McpManagerView: View {
     HSplitView {
       VStack(spacing: 0) {
         TextField("Filter servers", text: $searchText)
-          .textFieldStyle(.roundedBorder)
-          .padding(8)
+          .textFieldStyle(RegletTextFieldStyle())
+          .padding(Theme.Spacing.xs)
         List(filteredServers, selection: $selectedName) { entry in
-          VStack(alignment: .leading) { Text(entry.name); if !entry.issues.isEmpty { Text(entry.issues.joined(separator: ", ")).font(.caption).foregroundStyle(.red) } }.tag(entry.name)
-        }
-        Divider()
-        Button("New Server") { selectedName = nil }.padding()
-      }.frame(minWidth: 220)
-      Form {
-        TextField("Server name", text: $name)
-        Picker("Transport", selection: $transport) { Text("Local command").tag(0); Text("Remote URL").tag(1) }.pickerStyle(.segmented)
-        if transport == 0 {
-          TextField("Command", text: $command)
-          TextField("Arguments (one per line)", text: $args, axis: .vertical).lineLimit(3...8)
-          TextField("Environment (OUTPUT_KEY=LOCAL_VARIABLE, one per line)", text: $env, axis: .vertical).lineLimit(3...8)
-          Text("Reglet stores only local process-environment variable names. Values are resolved in memory during apply and never shown here.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        } else {
-          TextField("https://server.example/mcp", text: $url)
-        }
-        HStack {
-          if selectedName != nil {
-            Button("Delete", role: .destructive) { confirmsDelete = true }
-          }
-          Spacer()
-          Text(definition == saved ? "Saved to master — not applied" : "Unsaved changes").font(.caption).foregroundStyle(definition == saved ? Color.secondary : Color.orange)
-          Button("Save") {
-            if selectedName == nil && !model.mcpServers.contains(where: { $0.name == name }) {
-              Task { if await model.saveMcp(name: name, definition: definition) { saved = definition; selectedName = name } }
-            } else {
-              confirmsOverwrite = true
+          VStack(alignment: .leading, spacing: 4) {
+            Text(entry.name)
+              .font(Theme.Fonts.bodyLg)
+              .foregroundStyle(Theme.Colors.mist)
+            if !entry.issues.isEmpty {
+              Label(entry.issues.joined(separator: ", "), systemImage: "exclamationmark.triangle.fill")
+                .font(Theme.Fonts.body)
+                .foregroundStyle(Theme.Colors.errorText)
             }
           }
-            .buttonStyle(.borderedProminent)
+          .padding(.vertical, 6)
+          .tag(entry.name)
+          .listRowBackground(Theme.Colors.voidBlack)
+          .listRowSeparatorTint(Theme.Colors.white.opacity(0.10))
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .background(Theme.Colors.voidBlack)
+        Rectangle()
+          .fill(Theme.Colors.white.opacity(0.10))
+          .frame(height: 1)
+        Button("New Server") { selectedName = nil }
+          .buttonStyle(.regletSecondary)
+          .padding(Theme.Spacing.sm)
+      }
+      .background(Theme.Colors.voidBlack)
+      .frame(minWidth: 220)
+      ScrollView {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+          SectionHeader(title: "Server Definition")
+          VStack(alignment: .leading, spacing: 12) {
+            FieldLabel("Server name")
+            TextField("Server name", text: $name)
+              .textFieldStyle(RegletTextFieldStyle())
+
+            FieldLabel("Transport")
+            Picker("Transport", selection: $transport) {
+              Text("Local command").tag(0)
+              Text("Remote URL").tag(1)
+            }
+            .pickerStyle(.segmented)
+
+            if transport == 0 {
+              FieldLabel("Command")
+              TextField("Command", text: $command)
+                .textFieldStyle(RegletTextFieldStyle())
+              FieldLabel("Arguments (one per line)")
+              TextField("Arguments (one per line)", text: $args, axis: .vertical)
+                .lineLimit(3...8)
+                .textFieldStyle(RegletTextFieldStyle())
+              FieldLabel("Environment (OUTPUT_KEY=LOCAL_VARIABLE, one per line)")
+              TextField("Environment (OUTPUT_KEY=LOCAL_VARIABLE, one per line)", text: $env, axis: .vertical)
+                .lineLimit(3...8)
+                .textFieldStyle(RegletTextFieldStyle())
+              Text("Reglet stores only local process-environment variable names. Values are resolved in memory during apply and never shown here.")
+                .font(Theme.Fonts.body)
+                .foregroundStyle(Theme.Colors.ash)
+            } else {
+              FieldLabel("Remote URL")
+              TextField("https://server.example/mcp", text: $url)
+                .textFieldStyle(RegletTextFieldStyle())
+            }
+          }
+          .padding(Theme.Spacing.sm)
+          .cardSurface()
+
+          HStack {
+            if selectedName != nil {
+              Button("Delete", role: .destructive) { confirmsDelete = true }
+                .buttonStyle(.regletDestructive)
+            }
+            Spacer()
+            Label(definition == saved ? "Saved to master — not applied" : "Unsaved changes", systemImage: definition == saved ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+              .font(Theme.Fonts.body)
+              .foregroundStyle(definition == saved ? Theme.Colors.ash : Theme.Colors.warning)
+            Button("Save") {
+              if selectedName == nil && !model.mcpServers.contains(where: { $0.name == name }) {
+                Task { if await model.saveMcp(name: name, definition: definition) { saved = definition; selectedName = name } }
+              } else {
+                confirmsOverwrite = true
+              }
+            }
+            .buttonStyle(.regletPrimary)
             .keyboardShortcut("s", modifiers: .command)
             .disabled(!valid || definition == saved)
-        }
-      }.formStyle(.grouped).frame(minWidth: 500)
-    }
-    .safeAreaInset(edge: .bottom) {
-      HStack {
-        Spacer()
-        Button("Preview Apply…") {
-          Task {
-            if let preview = await model.previewApply(content: .mcp) {
-              applyPreview = ApplyReviewScope(
-                preview: preview,
-                contents: [.mcp],
-                providers: [],
-                title: "Review MCP Apply"
-              )
-            }
           }
         }
-        .buttonStyle(.borderedProminent)
-        .keyboardShortcut(.defaultAction)
-        .disabled(model.isWorking)
+        .padding(Theme.Spacing.md)
       }
-      .padding()
-      .background(.regularMaterial)
+      .scrollContentBackground(.hidden)
+      .background(Theme.Colors.voidBlack)
+      .frame(minWidth: 500)
+    }
+    .background(Theme.Colors.voidBlack)
+    .safeAreaInset(edge: .bottom) {
+      StatusStrip {
+        HStack {
+          Spacer()
+          Button("Preview Apply…") {
+            Task {
+              if let preview = await model.previewApply(content: .mcp) {
+                applyPreview = ApplyReviewScope(
+                  preview: preview,
+                  contents: [.mcp],
+                  providers: [],
+                  title: "Review MCP Apply"
+                )
+              }
+            }
+          }
+          .buttonStyle(.regletPrimary)
+          .keyboardShortcut(.defaultAction)
+          .disabled(model.isWorking)
+        }
+      }
     }
     .onChange(of: selectedName) { oldValue, value in
       if definition != saved && oldValue != nil {
@@ -154,5 +211,20 @@ struct McpManagerView: View {
       guard !key.isEmpty, !name.isEmpty else { return nil }
       return (key, McpProcessEnvironmentReference(name: name))
     })
+  }
+}
+
+private struct FieldLabel: View {
+  let title: String
+
+  init(_ title: String) {
+    self.title = title
+  }
+
+  var body: some View {
+    Text(title)
+      .font(Theme.Fonts.eyebrow)
+      .tracking(Theme.Fonts.eyebrowTracking)
+      .foregroundStyle(Theme.Colors.ash)
   }
 }

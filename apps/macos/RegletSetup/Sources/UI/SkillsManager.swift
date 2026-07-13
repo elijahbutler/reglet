@@ -7,6 +7,7 @@ struct SkillsManagerView: View {
   @State private var showsNewSkill = false
   @State private var searchText = ""
   @State private var confirmsAdoptionOverwrite = false
+  @Environment(\.colorSchemeContrast) private var contrast
 
   private var overview: SkillsOverviewResponse? { model.skillsOverview }
   private var sharedSkills: [SharedSkillSummary] {
@@ -24,21 +25,22 @@ struct SkillsManagerView: View {
       List {
         Section("Unified (shared)") {
           if sharedSkills.isEmpty {
-            Text("No shared skills yet.").foregroundStyle(.secondary)
+            Text("No shared skills yet.").foregroundStyle(secondaryText)
           } else {
             ForEach(sharedSkills) { skill in
               VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
                   Text(skill.name)
                   ForEach(skill.shadowedBy, id: \.self) { provider in
-                    SkillBadge(text: "shadowed by \(model.providerDisplayName(provider))", tint: .orange)
+                    StatusBadge(text: "shadowed by \(model.providerDisplayName(provider))", kind: .warning)
                   }
                 }
                 Text(skill.path)
-                  .font(.system(.caption, design: .monospaced))
-                  .foregroundStyle(.secondary)
+                  .font(Theme.Fonts.mono())
+                  .foregroundStyle(secondaryText)
                   .textSelection(.enabled)
                 Button("Edit Files…") { editingSkill = SkillEditorTarget(name: skill.name, provider: nil) }
+                  .buttonStyle(.regletSecondary)
               }
               .padding(.vertical, 2)
             }
@@ -47,23 +49,25 @@ struct SkillsManagerView: View {
 
         Section("Provider-scoped") {
           if providerScopedSkills.isEmpty {
-            Text("No provider-scoped skills.").foregroundStyle(.secondary)
+            Text("No provider-scoped skills.").foregroundStyle(secondaryText)
           } else {
             ForEach(providerScopedSkills) { skill in
               VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
                   Text(skill.name)
                   Text(model.providerDisplayName(skill.provider))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(Theme.Fonts.eyebrow)
+                    .foregroundStyle(secondaryText)
                   if skill.shadowsShared {
-                    SkillBadge(text: "shadows shared", tint: .orange)
+                    StatusBadge(text: "shadows shared", kind: .warning)
                   }
                 }
                 Text(skill.path)
-                  .font(.system(.caption, design: .monospaced))
-                  .foregroundStyle(.secondary)
+                  .font(Theme.Fonts.mono())
+                  .foregroundStyle(secondaryText)
                   .textSelection(.enabled)
                 Button("Edit Files…") { editingSkill = SkillEditorTarget(name: skill.name, provider: skill.provider) }
+                  .buttonStyle(.regletSecondary)
               }
               .padding(.vertical, 2)
             }
@@ -73,13 +77,15 @@ struct SkillsManagerView: View {
         Section("Provider-local (unmanaged)") {
           if unmanagedSkills.isEmpty {
             Text("No local skills to review. Provider-local skills stay untouched until adopted.")
-              .foregroundStyle(.secondary)
+              .foregroundStyle(secondaryText)
           } else {
             UnmanagedSkillsGroups(skills: unmanagedSkills)
           }
         }
       }
       .searchable(text: $searchText, placement: .toolbar, prompt: "Filter skills")
+      .scrollContentBackground(.hidden)
+      .background(Theme.Colors.voidBlack)
       .overlay {
         if overview == nil && !model.isWorking {
           ContentUnavailableView("Skills unavailable", systemImage: "hammer", description: Text("Refresh to scan this Mac."))
@@ -87,11 +93,14 @@ struct SkillsManagerView: View {
       }
 
       Divider()
-      HStack {
+      StatusStrip {
+        HStack {
         Text("Adoption saves skills to the master. Review & Apply distributes them.")
-          .font(.caption).foregroundStyle(.secondary)
+          .font(Theme.Fonts.body)
+          .foregroundStyle(secondaryText)
         Spacer()
         Button("New Skill…") { showsNewSkill = true }
+          .buttonStyle(.regletSecondary)
         Button("Preview Apply…") {
           Task {
             if let preview = await model.previewApply(content: .skills) {
@@ -105,7 +114,8 @@ struct SkillsManagerView: View {
           }
         }
         .keyboardShortcut(.defaultAction)
-          .disabled(model.isWorking)
+        .buttonStyle(.regletSecondary)
+        .disabled(model.isWorking)
         Button {
           if model.hasPendingSkillOverwrite() {
             confirmsAdoptionOverwrite = true
@@ -115,12 +125,12 @@ struct SkillsManagerView: View {
         } label: {
           Label("Adopt Selected to Master", systemImage: "square.and.arrow.down")
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.regletPrimary)
         .disabled(model.checkedSkills.isEmpty || model.isWorking)
+        }
       }
-      .padding(16)
-      .background(.regularMaterial)
     }
+    .background(Theme.Colors.voidBlack)
     .sheet(item: $editingSkill) { target in
       SkillEditorView(target: target).environmentObject(model)
     }
@@ -139,6 +149,10 @@ struct SkillsManagerView: View {
     } message: {
       Text("This replaces existing skill files in the master directory. Provider copies will not change until you review and apply Skills.")
     }
+  }
+
+  private var secondaryText: Color {
+    contrast == .increased ? Theme.Colors.mist : Theme.Colors.ash
   }
 
   private func matches(_ values: String...) -> Bool {
@@ -170,56 +184,72 @@ struct SkillEditorView: View {
   @State private var showsRenameFile = false
   @State private var pendingPath: String?
   @State private var resolvesUnsavedSelection = false
+  @Environment(\.colorSchemeContrast) private var contrast
 
   var body: some View {
     VStack(spacing: 0) {
       HStack {
         VStack(alignment: .leading) {
           HStack {
-            TextField("Skill name", text: $draftName).font(.title2.weight(.semibold)).frame(width: 260)
+            TextField("Skill name", text: $draftName)
+              .font(Theme.Fonts.subheading)
+              .textFieldStyle(RegletTextFieldStyle())
+              .frame(width: 260)
             Button("Rename") { Task { if await model.renameSkill(name: target.name, newName: draftName, provider: target.provider) { dismiss() } } }
+              .buttonStyle(.regletSecondary)
               .disabled(draftName.isEmpty || draftName == target.name || content != savedContent)
           }
-          Text(target.provider.map { "Provider-scoped: \($0)" } ?? "Shared skill").foregroundStyle(.secondary)
+          Text(target.provider.map { "Provider-scoped: \($0)" } ?? "Shared skill")
+            .font(Theme.Fonts.body)
+            .foregroundStyle(secondaryText)
         }
         Spacer()
-        if tree?.shadowsShared == true { SkillBadge(text: "shadows shared", tint: .orange) }
+        if tree?.shadowsShared == true { StatusBadge(text: "shadows shared", kind: .warning) }
         Button("Delete Skill", role: .destructive) { confirmsDelete = true }
-      }.padding()
+          .buttonStyle(.regletDestructive)
+      }
+      .padding(Theme.Spacing.sm)
       Divider()
       HSplitView {
         VStack(spacing: 0) {
           List(tree?.files ?? [], selection: $selectedPath) { file in
             Label(file.path, systemImage: "doc").tag(file.path)
           }
+          .scrollContentBackground(.hidden)
+          .background(Theme.Colors.ink)
           Divider()
           HStack {
             Button { newFilePath = ""; showsNewFile = true } label: { Image(systemName: "plus") }
+              .buttonStyle(.regletGhost)
             Button(role: .destructive) { confirmsDeleteFile = true } label: { Image(systemName: "minus") }
+              .buttonStyle(.regletGhost)
               .disabled(selectedPath == nil || selectedPath == "SKILL.md")
             Button { renamedFilePath = selectedPath ?? ""; showsRenameFile = true } label: { Image(systemName: "pencil") }
+              .buttonStyle(.regletGhost)
               .disabled(selectedPath == nil || selectedPath == "SKILL.md")
             Spacer()
-          }.padding(8)
-        }.frame(minWidth: 210)
+          }.padding(Theme.Spacing.xs)
+        }
+        .frame(minWidth: 210)
         VStack(spacing: 0) {
           if selectedPath != nil {
-            TextEditor(text: $content).font(.system(.body, design: .monospaced)).padding(10)
+            TextEditor(text: $content)
+              .font(Theme.Fonts.mono())
+              .foregroundStyle(Theme.Colors.mist)
+              .scrollContentBackground(.hidden)
+              .background(Theme.Colors.ink)
+              .padding(10)
             Divider()
-            HStack {
-              Text(content == savedContent ? "Saved to master — not applied" : "Unsaved changes")
-                .font(.caption).foregroundStyle(content == savedContent ? Color.secondary : Color.orange)
-              Spacer()
-              Button("Save") { save() }.buttonStyle(.borderedProminent)
-                .keyboardShortcut("s", modifiers: .command)
-                .disabled(content == savedContent || model.isWorking)
-            }.padding()
+            saveStrip
           } else {
             ContentUnavailableView("Select a skill file", systemImage: "doc")
           }
         }.frame(minWidth: 500)
       }
     }
+    .padding(Theme.Spacing.sm)
+    .background(Theme.Colors.voidBlack)
+    .cardSurface()
     .frame(minWidth: 760, minHeight: 520)
     .task { draftName = target.name; tree = await model.loadSkillTree(name: target.name, provider: target.provider); selectedPath = tree?.files.first?.path }
     .onChange(of: selectedPath) { oldPath, newPath in
@@ -283,6 +313,23 @@ struct SkillEditorView: View {
     .interactiveDismissDisabled(content != savedContent)
   }
 
+  private var saveStrip: some View {
+    StatusStrip {
+      HStack {
+        StatusBadge(text: content == savedContent ? "Saved to master — not applied" : "Unsaved changes", kind: content == savedContent ? .neutral : .warning)
+        Spacer()
+        Button("Save") { save() }
+          .buttonStyle(.regletPrimary)
+          .keyboardShortcut("s", modifiers: .command)
+          .disabled(content == savedContent || model.isWorking)
+      }
+    }
+  }
+
+  private var secondaryText: Color {
+    contrast == .increased ? Theme.Colors.mist : Theme.Colors.ash
+  }
+
   private func save() {
     guard let selectedPath else { return }
     Task { if await model.saveSkillFile(name: target.name, provider: target.provider, path: selectedPath, content: content) { savedContent = content; tree = await model.loadSkillTree(name: target.name, provider: target.provider) } }
@@ -296,38 +343,64 @@ struct NewSkillView: View {
   @State private var provider = ""
   @State private var content = "# New Skill\n"
   @State private var confirmsDiscard = false
+  @Environment(\.colorSchemeContrast) private var contrast
+
   private var hasUnsavedDraft: Bool {
     !name.isEmpty || !provider.isEmpty || content != "# New Skill\n"
   }
+
   var body: some View {
-    Form {
-      TextField("Skill name", text: $name)
-      TextField("Provider (blank for shared)", text: $provider)
-      TextEditor(text: $content).font(.system(.body, design: .monospaced)).frame(minHeight: 220)
-      HStack {
-        Spacer()
-        Button("Cancel") {
-          if hasUnsavedDraft {
-            confirmsDiscard = true
-          } else {
-            dismiss()
+    VStack(spacing: 0) {
+      Form {
+        TextField("Skill name", text: $name)
+          .textFieldStyle(RegletTextFieldStyle())
+        TextField("Provider (blank for shared)", text: $provider)
+          .textFieldStyle(RegletTextFieldStyle())
+        TextEditor(text: $content)
+          .font(Theme.Fonts.mono())
+          .foregroundStyle(Theme.Colors.mist)
+          .scrollContentBackground(.hidden)
+          .background(Theme.Colors.ink)
+          .frame(minHeight: 220)
+      }
+      .formStyle(.grouped)
+      .scrollContentBackground(.hidden)
+      .background(Theme.Colors.voidBlack)
+
+      StatusStrip {
+        HStack {
+          StatusBadge(text: hasUnsavedDraft ? "Draft not saved" : "Ready", kind: hasUnsavedDraft ? .warning : .neutral)
+          Spacer()
+          Button("Cancel") {
+            if hasUnsavedDraft {
+              confirmsDiscard = true
+            } else {
+              dismiss()
+            }
           }
+          .buttonStyle(.regletSecondary)
+          Button("Save to Master") {
+            Task { if await model.createSkill(name: name, provider: provider.isEmpty ? nil : provider, content: content) { dismiss() } }
+          }
+          .buttonStyle(.regletPrimary)
+          .keyboardShortcut("s", modifiers: .command)
+          .disabled(name.isEmpty)
         }
-        Button("Save to Master") {
-          Task { if await model.createSkill(name: name, provider: provider.isEmpty ? nil : provider, content: content) { dismiss() } }
-        }
-        .buttonStyle(.borderedProminent)
-        .keyboardShortcut("s", modifiers: .command)
-        .disabled(name.isEmpty)
       }
     }
-    .padding()
+    .padding(Theme.Spacing.sm)
+    .background(Theme.Colors.voidBlack)
+    .cardSurface()
     .frame(width: 560, height: 400)
     .interactiveDismissDisabled(hasUnsavedDraft)
     .confirmationDialog("Discard new skill draft?", isPresented: $confirmsDiscard) {
       Button("Discard", role: .destructive) { dismiss() }
       Button("Keep Editing", role: .cancel) {}
     }
+  }
+
+  private var secondaryText: Color {
+    contrast == .increased ? Theme.Colors.mist : Theme.Colors.ash
   }
 }
 
@@ -336,6 +409,7 @@ struct NewSkillView: View {
 /// Used by both the onboarding Skills step and the Skills manager.
 struct UnmanagedSkillsGroups: View {
   @EnvironmentObject private var model: SetupModel
+  @Environment(\.colorSchemeContrast) private var contrast
   let skills: [UnmanagedSkill]
 
   private var byProvider: [(provider: String, skills: [UnmanagedSkill])] {
@@ -348,12 +422,13 @@ struct UnmanagedSkillsGroups: View {
     ForEach(byProvider, id: \.provider) { group in
       HStack {
         Text(model.providerDisplayName(group.provider))
-          .font(.subheadline.weight(.semibold))
+          .font(Theme.Fonts.subheading)
+          .foregroundStyle(Theme.Colors.mist)
         Spacer()
         Button(allSelected(group.skills) ? "Deselect All" : "Select All") {
           toggleAll(group.skills)
         }
-        .buttonStyle(.link)
+        .buttonStyle(.regletGhost)
         .disabled(selectable(in: group.skills).isEmpty)
       }
       ForEach(group.skills) { skill in
@@ -383,6 +458,7 @@ struct UnmanagedSkillsGroups: View {
 
 struct SkillSelectionRow: View {
   @EnvironmentObject private var model: SetupModel
+  @Environment(\.colorSchemeContrast) private var contrast
   let skill: UnmanagedSkill
 
   private var scope: SkillAdoptionScope { model.skillScope(skill.id) }
@@ -397,9 +473,10 @@ struct SkillSelectionRow: View {
       Toggle(isOn: checkedBinding) {
         VStack(alignment: .leading, spacing: 2) {
           Text(skill.name)
+            .foregroundStyle(Theme.Colors.mist)
           Text(scope == .shared ? skill.sharedDestination : skill.providerDestination)
-            .font(.system(.caption, design: .monospaced))
-            .foregroundStyle(.secondary)
+            .font(Theme.Fonts.mono())
+            .foregroundStyle(secondaryText)
         }
       }
       .toggleStyle(.checkbox)
@@ -416,13 +493,17 @@ struct SkillSelectionRow: View {
 
       if conflicts {
         Image(systemName: "exclamationmark.triangle.fill")
-          .foregroundStyle(.orange)
+          .foregroundStyle(Theme.Colors.warning)
           .accessibilityLabel("Destination already exists")
         Toggle("Overwrite", isOn: overwriteBinding)
           .toggleStyle(.checkbox)
       }
     }
     .padding(.vertical, 2)
+  }
+
+  private var secondaryText: Color {
+    contrast == .increased ? Theme.Colors.mist : Theme.Colors.ash
   }
 
   private var checkedBinding: Binding<Bool> {

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RulesManagerView: View {
   @EnvironmentObject private var model: SetupModel
+  @Environment(\.colorSchemeContrast) private var contrast
   @State private var selectedPath: String?
   @State private var content = ""
   @State private var savedContent = ""
@@ -15,56 +16,67 @@ struct RulesManagerView: View {
     HSplitView {
       List(model.ruleDocuments, selection: $selectedPath) { document in
         Label(document.path, systemImage: "doc.text")
+          .font(Theme.Fonts.mono())
+          .foregroundStyle(Theme.Colors.mist)
           .tag(document.path)
+          .listRowBackground(Theme.Colors.voidBlack)
       }
+      .listStyle(.sidebar)
+      .scrollContentBackground(.hidden)
+      .background(Theme.Colors.voidBlack)
       .frame(minWidth: 190, idealWidth: 230)
 
       VStack(spacing: 0) {
         if let selectedPath {
           TextEditor(text: $content)
-            .font(.system(.body, design: .monospaced))
+            .font(Theme.Fonts.mono(size: 13))
+            .foregroundStyle(Theme.Colors.mist)
             .scrollContentBackground(.hidden)
+            .background(Theme.Colors.ink)
             .padding(12)
             .accessibilityLabel("Rule document editor")
-          Divider()
-          HStack {
-            Text(hasUnsavedChanges ? "Unsaved changes" : "Saved to master")
-              .font(.caption)
-              .foregroundStyle(hasUnsavedChanges ? Color.orange : Color.secondary)
-            Spacer()
-            Button("Save") {
-              Task {
-                if await model.saveRule(path: selectedPath, content: content) {
-                  savedContent = content
+          StatusStrip {
+            HStack {
+              Label(hasUnsavedChanges ? "Unsaved changes" : "Saved to master", systemImage: hasUnsavedChanges ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                .font(Theme.Fonts.body)
+                .foregroundStyle(hasUnsavedChanges ? Theme.Colors.warning : secondaryText)
+              Spacer()
+              Button("Save") {
+                Task {
+                  if await model.saveRule(path: selectedPath, content: content) {
+                    savedContent = content
+                  }
                 }
               }
-            }
-            .keyboardShortcut("s", modifiers: .command)
-            .disabled(!hasUnsavedChanges || model.isWorking)
-            Button("Preview Apply…") {
-              Task {
-                if let preview = await model.previewApply(content: .rules) {
-                  applyPreview = ApplyReviewScope(
-                    preview: preview,
-                    contents: [.rules],
-                    providers: [],
-                    title: "Review Rules Apply"
-                  )
+              .buttonStyle(.regletSecondary)
+              .keyboardShortcut("s", modifiers: .command)
+              .disabled(!hasUnsavedChanges || model.isWorking)
+              Button("Preview Apply…") {
+                Task {
+                  if let preview = await model.previewApply(content: .rules) {
+                    applyPreview = ApplyReviewScope(
+                      preview: preview,
+                      contents: [.rules],
+                      providers: [],
+                      title: "Review Rules Apply"
+                    )
+                  }
                 }
               }
+              .buttonStyle(.regletPrimary)
+              .keyboardShortcut(.defaultAction)
+              .disabled(hasUnsavedChanges || model.isWorking)
             }
-            .buttonStyle(.borderedProminent)
-            .keyboardShortcut(.defaultAction)
-            .disabled(hasUnsavedChanges || model.isWorking)
           }
-          .padding(12)
-          .background(.regularMaterial)
         } else {
           ContentUnavailableView("Select a rule document", systemImage: "doc.text", description: Text("Edits are saved to the master first, then applied explicitly."))
+            .background(Theme.Colors.voidBlack)
         }
       }
+      .background(Theme.Colors.voidBlack)
       .frame(minWidth: 440)
     }
+    .background(Theme.Colors.voidBlack)
     .onChange(of: selectedPath) { oldPath, newPath in
       if hasUnsavedChanges, oldPath != nil, newPath != oldPath {
         pendingPath = newPath
@@ -106,6 +118,10 @@ struct RulesManagerView: View {
       }
       Button("Cancel", role: .cancel) { pendingPath = nil }
     }
+  }
+
+  private var secondaryText: Color {
+    contrast == .increased ? Theme.Colors.mist : Theme.Colors.ash
   }
 
   private func load(_ path: String?) {

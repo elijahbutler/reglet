@@ -7,50 +7,59 @@ struct ProvidersManagerView: View {
 
   var body: some View {
     List {
-      Section("Installed Providers") {
+      Section {
         ForEach(model.scan?.providers ?? []) { provider in
           HStack(spacing: 12) {
             Image(systemName: provider.detected ? "checkmark.circle.fill" : "circle.dashed")
-              .foregroundStyle(provider.detected ? Color.green : Color.secondary)
+              .foregroundStyle(provider.detected ? Theme.Colors.success : Theme.Colors.smoke)
               .accessibilityLabel(provider.detected ? "Detected" : "Not detected")
             VStack(alignment: .leading, spacing: 3) {
               Text(provider.displayName)
+                .font(Theme.Fonts.bodyLg)
+                .foregroundStyle(Theme.Colors.mist)
               Text(provider.enabled ? "Managed" : (provider.detected ? "Available" : "Not installed"))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(Theme.Fonts.body)
+                .foregroundStyle(Theme.Colors.ash)
             }
             Spacer()
             if provider.enabled {
               Text([provider.contents.rules ? "Rules" : nil, provider.contents.skills ? "Skills" : nil, provider.contents.mcp ? "MCP" : nil].compactMap { $0 }.joined(separator: " · "))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(Theme.Fonts.body)
+                .foregroundStyle(Theme.Colors.ash)
               Button("Stop Managing…", role: .destructive) {
                 providerToStop = provider.id
               }
+              .buttonStyle(.regletDestructive)
               .disabled(model.isWorking)
             }
           }
-          .padding(.vertical, 4)
+          .padding(.vertical, 8)
+          .listRowBackground(Theme.Colors.voidBlack)
         }
+      } header: {
+        SectionHeader(title: "Installed Providers")
       }
     }
+    .listStyle(.inset)
+    .scrollContentBackground(.hidden)
+    .background(Theme.Colors.voidBlack)
     .overlay {
       if model.scan == nil && !model.isWorking {
         ContentUnavailableView("Provider status unavailable", systemImage: "macwindow", description: Text("Refresh to scan this Mac."))
       }
     }
     .safeAreaInset(edge: .bottom) {
-      HStack {
-        Spacer()
-        Button {
-          showsOnboarding = true
-        } label: {
-          Label("Configure Providers", systemImage: "slider.horizontal.3")
+      StatusStrip {
+        HStack {
+          Spacer()
+          Button {
+            showsOnboarding = true
+          } label: {
+            Label("Configure Providers", systemImage: "slider.horizontal.3")
+          }
+          .buttonStyle(.regletPrimary)
         }
-        .buttonStyle(.borderedProminent)
       }
-      .padding()
-      .background(.regularMaterial)
     }
     .confirmationDialog(
       "Stop managing this provider?",
@@ -80,12 +89,18 @@ struct InventoryManagerView: View {
     List(model.scan?.providers.filter { $0.enabled } ?? []) { provider in
       VStack(alignment: .leading, spacing: 4) {
         Text(provider.displayName)
+          .font(Theme.Fonts.bodyLg)
+          .foregroundStyle(Theme.Colors.mist)
         Text(kind == .rules ? (provider.inventory.rulesPath ?? "Unsupported") : (provider.inventory.mcpPath ?? "Unsupported"))
-          .font(.system(.caption, design: .monospaced))
-          .foregroundStyle(.secondary)
+          .font(Theme.Fonts.mono())
+          .foregroundStyle(Theme.Colors.ash)
           .textSelection(.enabled)
       }
-      .padding(.vertical, 4)
+      .padding(.vertical, 8)
+      .listRowBackground(Theme.Colors.voidBlack)
     }
+    .listStyle(.inset)
+    .scrollContentBackground(.hidden)
+    .background(Theme.Colors.voidBlack)
   }
 }
