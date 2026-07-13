@@ -1,5 +1,16 @@
 import Foundation
 
+struct ApplyReviewScope: Identifiable {
+  let preview: StructuredApplyPreview
+  let contents: [ContentKind]
+  let providers: [String]
+  let title: String
+
+  var id: String {
+    "\(providers.joined(separator: ",")):\(contents.map(\.rawValue).joined(separator: ",")):\(preview.digest)"
+  }
+}
+
 @MainActor
 final class SetupModel: ObservableObject {
   @Published var scan: ScanResponse?
@@ -11,13 +22,14 @@ final class SetupModel: ObservableObject {
   @Published var completionMessage: String?
   @Published var skillsOverview: SkillsOverviewResponse?
   @Published var status: StatusResponse?
-  @Published var lastSyncResult: SyncRunResponse?
-  @Published var lastSyncError: String?
+  @Published var operationReceipts: [OperationReceipt] = []
+  @Published var legacyNetworkState: LegacyNetworkState?
   @Published var ruleDocuments: [RulesListResponse.Document] = []
   @Published var mcpServers: [McpServersResponse.Entry] = []
   @Published var update: AppUpdate?
   @Published var updateMessage: String?
   @Published var isCheckingForUpdates = false
+  @Published var automaticUpdateChecks = UserDefaults.standard.bool(forKey: "automaticUpdateChecks")
   /// Keys are "provider:name"; presence = checked for adoption.
   @Published var checkedSkills: Set<String> = []
   /// Chosen scope per skill key; missing = .shared.
@@ -33,6 +45,7 @@ final class SetupModel: ObservableObject {
   private let command: RegletCommand
   private let updateChecker = UpdateChecker()
   private let dismissedUpdateVersionKey = "dismissedUpdateVersion"
+  private let automaticUpdateChecksKey = "automaticUpdateChecks"
 
   init(command: RegletCommand = RegletCommand()) {
     self.command = command
@@ -71,6 +84,14 @@ final class SetupModel: ObservableObject {
     return conflict != "destination-exists" || overwriteFlags.contains(skill.id)
   }
 
+  func hasPendingSkillOverwrite(limitedTo providers: Set<String>? = nil) -> Bool {
+    unmanagedSkills.contains { skill in
+      checkedSkills.contains(skill.id)
+        && overwriteFlags.contains(skill.id)
+        && (providers == nil || providers?.contains(skill.provider) == true)
+    }
+  }
+
   /// Drops selection state for skills of a provider (e.g. when it is deselected).
   func clearSkillSelections(provider: String) {
     let prefix = "\(provider):"
@@ -87,8 +108,15 @@ final class SetupModel: ObservableObject {
   func load() {
     Task {
       await refreshScan()
-      await checkForUpdates(silent: true)
+      if automaticUpdateChecks {
+        await checkForUpdates(silent: true)
+      }
     }
+  }
+
+  func setAutomaticUpdateChecks(_ enabled: Bool) {
+    automaticUpdateChecks = enabled
+    UserDefaults.standard.set(enabled, forKey: automaticUpdateChecksKey)
   }
 
   func checkForUpdates(silent: Bool = false) async {
@@ -133,14 +161,10 @@ final class SetupModel: ObservableObject {
 
   func refreshScan() async {
     await runWork {
-      let response = try await self.command.scan()
-      self.scan = response
-      self.skillsOverview = try await self.command.skillsList()
-      self.status = try await self.command.status()
-      self.ruleDocuments = try await self.command.rulesList().documents
-      self.mcpServers = try await self.command.mcpList().servers
+      let snapshot = try await self.command.managerSnapshot()
+      self.apply(snapshot)
       if self.selectedProviders.isEmpty {
-        self.selectedProviders = Set(response.providers.filter(\.detected).map(\.id))
+        self.selectedProviders = Set(snapshot.scan.providers.filter(\.detected).map(\.id))
       }
     }
   }
@@ -159,36 +183,44 @@ final class SetupModel: ObservableObject {
     }
   }
 
-  @discardableResult
-  func applySelection() async -> Bool {
+  func prepareOnboardingReview() async -> ApplyReviewScope? {
+    var review: ApplyReviewScope?
     await runWork {
+      let providers = Array(self.selectedProviders).sorted()
+      let contents = Array(self.selectedContents).sorted { $0.rawValue < $1.rawValue }
       if self.rulePromptMode == .unified && self.selectedContents.contains(.rules) {
         let draft = self.editableRuleMergeDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         if draft.isEmpty {
           throw SetupError.message("Generate or enter a unified prompt draft before applying.")
         }
-        let nonRuleContents = self.selectedContents.filter { $0 != .rules }
+        let nonRuleContents = contents.filter { $0 != .rules }
         _ = try await self.command.onboard(
-          providers: Array(self.selectedProviders).sorted(),
-          contents: Array(nonRuleContents).sorted { $0.rawValue < $1.rawValue },
+          providers: providers,
+          contents: nonRuleContents,
           includeEmptyContent: true
         )
         try await self.command.writeRule(path: "00-general.md", content: self.editableRuleMergeDraft)
-        for provider in self.selectedProviders.sorted() {
+        for provider in providers {
           _ = try await self.command.enroll("\(provider):rules")
         }
-        _ = try await self.command.applyRules()
-        self.completionMessage = "Onboarding complete. Unified prompt draft was saved and applied."
-        self.scan = try await self.command.scan()
-        return
+      } else {
+        _ = try await self.command.onboard(providers: providers, contents: contents)
       }
-      let result = try await self.command.onboard(
-        providers: Array(self.selectedProviders).sorted(),
-        contents: Array(self.selectedContents).sorted { $0.rawValue < $1.rawValue }
+
+      let adopted = try await self.stageSelectedSkills(limitedTo: self.selectedProviders)
+      let preview = try await self.command.previewApply(contents: contents, providers: providers)
+      self.apply(try await self.command.managerSnapshot())
+      self.completionMessage = adopted == 0
+        ? "Onboarding changes are staged locally. Review the exact provider writes before applying."
+        : "Onboarding changes and \(adopted) skill\(adopted == 1 ? "" : "s") are staged locally. Review the exact provider writes before applying."
+      review = ApplyReviewScope(
+        preview: preview,
+        contents: contents,
+        providers: providers,
+        title: "Review Onboarding Apply"
       )
-      self.completionMessage = result.stdout.isEmpty ? "Onboarding complete." : result.stdout
-      self.scan = try await self.command.scan()
     }
+    return review
   }
 
   func generateRuleMergeDraft() async {
@@ -213,15 +245,7 @@ final class SetupModel: ObservableObject {
 
   func refreshStatus() async {
     await runWork {
-      self.status = try await self.command.status()
-    }
-  }
-
-  /// Re-applies one managed output from the master, replacing provider drift.
-  func reapply(provider: String, content: String) async {
-    await runWork {
-      _ = try await self.command.applyContent(provider: provider, content: content)
-      self.status = try await self.command.status()
+      self.apply(try await self.command.managerSnapshot())
     }
   }
 
@@ -231,26 +255,16 @@ final class SetupModel: ObservableObject {
     await runWork {
       _ = try await self.command.importDrifted(provider: provider, content: content)
       self.completionMessage = "Imported \(provider) \(content) into the master directory."
-      self.status = try await self.command.status()
+      self.apply(try await self.command.managerSnapshot())
     }
   }
 
-  func configureSync(url: String, token: String, device: String) async -> Bool {
+  func stopManaging(provider: String, content: String? = nil) async {
     await runWork {
-      _ = try await self.command.login(url: url, token: token, device: device)
-      self.status = try await self.command.status()
-    }
-  }
-
-  func runSync() async {
-    isWorking = true
-    lastSyncError = nil
-    defer { isWorking = false }
-    do {
-      lastSyncResult = try await command.syncNow()
-      status = try await command.status()
-    } catch {
-      lastSyncError = error.localizedDescription
+      let target = content.map { "\(provider):\($0)" } ?? provider
+      _ = try await self.command.unenroll(target)
+      self.completionMessage = "Stopped managing \(target). Provider content was preserved."
+      self.apply(try await self.command.managerSnapshot())
     }
   }
 
@@ -265,24 +279,8 @@ final class SetupModel: ObservableObject {
   func saveRule(path: String, content: String) async -> Bool {
     await runWork {
       try await self.command.writeRule(path: path, content: content)
-      self.ruleDocuments = try await self.command.rulesList().documents
+      self.apply(try await self.command.managerSnapshot())
       self.completionMessage = "Saved \(path) to the master directory."
-    }
-  }
-
-  func previewRulesApply() async -> String? {
-    var preview: String?
-    await runWork {
-      preview = try await self.command.diffRules()
-    }
-    return preview
-  }
-
-  func applyRules() async -> Bool {
-    await runWork {
-      _ = try await self.command.applyRules()
-      self.status = try await self.command.status()
-      self.completionMessage = "Applied master rules to enrolled providers."
     }
   }
 
@@ -301,7 +299,7 @@ final class SetupModel: ObservableObject {
   func saveSkillFile(name: String, provider: String?, path: String, content: String) async -> Bool {
     await runWork {
       try await self.command.writeSkillFile(name: name, provider: provider, path: path, content: content)
-      self.skillsOverview = try await self.command.skillsList()
+      self.apply(try await self.command.managerSnapshot())
       self.completionMessage = "Saved \(path) to the master — not applied."
     }
   }
@@ -309,7 +307,7 @@ final class SetupModel: ObservableObject {
   func createSkill(name: String, provider: String?, content: String) async -> Bool {
     await runWork {
       try await self.command.createSkill(name: name, provider: provider, content: content)
-      self.skillsOverview = try await self.command.skillsList()
+      self.apply(try await self.command.managerSnapshot())
       self.completionMessage = "Created \(name) in the master — not applied."
     }
   }
@@ -317,7 +315,7 @@ final class SetupModel: ObservableObject {
   func deleteSkill(name: String, provider: String?) async -> Bool {
     await runWork {
       try await self.command.deleteSkill(name: name, provider: provider)
-      self.skillsOverview = try await self.command.skillsList()
+      self.apply(try await self.command.managerSnapshot())
       self.completionMessage = "Deleted \(name) from the master — not applied."
     }
   }
@@ -325,7 +323,7 @@ final class SetupModel: ObservableObject {
   func renameSkill(name: String, newName: String, provider: String?) async -> Bool {
     await runWork {
       try await self.command.renameSkill(name: name, newName: newName, provider: provider)
-      self.skillsOverview = try await self.command.skillsList()
+      self.apply(try await self.command.managerSnapshot())
       self.completionMessage = "Renamed \(name) to \(newName) in the master — not applied."
     }
   }
@@ -347,7 +345,7 @@ final class SetupModel: ObservableObject {
   func saveMcp(name: String, definition: McpServerDefinition) async -> Bool {
     await runWork {
       try await self.command.upsertMcp(name: name, definition: definition)
-      self.mcpServers = try await self.command.mcpList().servers
+      self.apply(try await self.command.managerSnapshot())
       self.completionMessage = "Saved \(name) to the master — not applied."
     }
   }
@@ -355,98 +353,103 @@ final class SetupModel: ObservableObject {
   func deleteMcp(name: String) async -> Bool {
     await runWork {
       try await self.command.deleteMcp(name: name)
-      self.mcpServers = try await self.command.mcpList().servers
+      self.apply(try await self.command.managerSnapshot())
       self.completionMessage = "Deleted \(name) from the master — not applied."
     }
   }
 
-  func previewApply(content: ContentKind) async -> StructuredApplyPreview? {
+  func previewApply(contents: [ContentKind], providers: [String] = []) async -> StructuredApplyPreview? {
     var preview: StructuredApplyPreview?
-    await runWork { preview = try await self.command.previewApply(content: content) }
+    await runWork { preview = try await self.command.previewApply(contents: contents, providers: providers) }
     return preview
   }
 
-  func applyPreview(_ preview: StructuredApplyPreview, content: ContentKind) async -> Bool {
+  func previewApply(content: ContentKind, provider: String? = nil) async -> StructuredApplyPreview? {
+    await previewApply(contents: [content], providers: provider.map { [$0] } ?? [])
+  }
+
+  func applyPreview(_ preview: StructuredApplyPreview, contents: [ContentKind], providers: [String] = []) async -> Bool {
     await runWork {
-      try await self.command.applyPreview(preview, content: content)
-      self.status = try await self.command.status()
-      self.scan = try await self.command.scan()
-      self.completionMessage = "Applied saved \(content.label.lowercased()) to providers."
+      try await self.command.applyPreview(preview, contents: contents, providers: providers)
+      let snapshot = try await self.command.managerSnapshot()
+      self.apply(snapshot)
+      let receipt = snapshot.operations.first(where: { $0.structuredPreviewDigest == preview.digest })
+      let contentLabel = contents.map(\.label).joined(separator: ", ")
+      self.completionMessage = receipt == nil
+        ? "Applied \(contentLabel) to providers."
+        : "Applied \(contentLabel) to providers. Receipt: \(receipt?.id ?? "")."
     }
   }
 
-  func restore(provider: String) async {
+  func applyPreview(_ preview: StructuredApplyPreview, content: ContentKind, provider: String? = nil) async -> Bool {
+    await applyPreview(preview, contents: [content], providers: provider.map { [$0] } ?? [])
+  }
+
+  func restoreOperation(_ id: String) async {
     await runWork {
-      let result = try await self.command.restore(provider: provider)
+      let result = try await self.command.restoreOperation(id)
       self.completionMessage = result.stdout.isEmpty ? "Restore complete." : result.stdout
-      self.scan = try await self.command.scan()
+      self.apply(try await self.command.managerSnapshot())
     }
   }
 
-  func revert(provider: String) async {
+  func clearLegacyNetworkState() async {
     await runWork {
-      let result = try await self.command.revert(provider: provider)
-      self.completionMessage = result.stdout.isEmpty ? "Revert complete." : result.stdout
-      self.scan = try await self.command.scan()
+      let result = try await self.command.clearLegacyNetworkState()
+      self.completionMessage = result.stdout.isEmpty ? "Legacy network state cleared." : result.stdout
+      self.apply(try await self.command.managerSnapshot())
     }
   }
 
-  /// Adopts every checked skill (optionally limited to the given providers).
-  /// Stops the loop at the first failure, but still applies + refreshes when at
-  /// least one adoption succeeded. Returns false if anything failed.
+  /// Adopts every checked skill into the master directory. Provider writes are
+  /// deliberately deferred until the caller opens a structured Review & Apply.
   @discardableResult
   func adoptSelectedSkills(limitedTo providers: Set<String>? = nil) async -> Bool {
     isWorking = true
     errorMessage = nil
     defer { isWorking = false }
 
+    do {
+      let adopted = try await stageSelectedSkills(limitedTo: providers)
+      if adopted > 0 {
+        apply(try await command.managerSnapshot())
+        completionMessage = "Adopted \(adopted) skill\(adopted == 1 ? "" : "s") into the master. Review & Apply Skills to distribute them."
+      }
+    } catch {
+      errorMessage = error.localizedDescription
+      return false
+    }
+    return true
+  }
+
+  private func stageSelectedSkills(limitedTo providers: Set<String>? = nil) async throws -> Int {
     let unmanaged = unmanagedSkills
     var adoptedKeys: [String] = []
-    var failure: Error?
 
     for key in checkedSkills.sorted() {
       guard let skill = unmanaged.first(where: { $0.id == key }) else { continue }
       if let providers, !providers.contains(skill.provider) { continue }
       guard canAdopt(skill) else { continue }
-      do {
-        _ = try await command.adoptSkill(skill, scope: skillScope(key), overwrite: overwriteFlags.contains(key))
-        adoptedKeys.append(key)
-      } catch {
-        failure = error
-        break
-      }
+      _ = try await command.adoptSkill(skill, scope: skillScope(key), overwrite: overwriteFlags.contains(key))
+      adoptedKeys.append(key)
     }
 
-    if !adoptedKeys.isEmpty {
-      var applyFailed = false
-      do {
-        _ = try await command.applySkills()
-      } catch {
-        applyFailed = true
-        if failure == nil { failure = error }
-      }
-      do {
-        skillsOverview = try await command.skillsList()
-        scan = try await command.scan()
-      } catch {
-        if failure == nil { failure = error }
-      }
-      for key in adoptedKeys {
-        checkedSkills.remove(key)
-        skillScopes.removeValue(forKey: key)
-        overwriteFlags.remove(key)
-      }
-      let summary = "\(adoptedKeys.count) skill\(adoptedKeys.count == 1 ? "" : "s")"
-      completionMessage = applyFailed
-        ? "Adopted \(summary), but applying to providers failed."
-        : "Adopted \(summary)."
+    for key in adoptedKeys {
+      checkedSkills.remove(key)
+      skillScopes.removeValue(forKey: key)
+      overwriteFlags.remove(key)
     }
+    return adoptedKeys.count
+  }
 
-    if let failure {
-      errorMessage = failure.localizedDescription
-      return false
-    }
-    return true
+  private func apply(_ snapshot: ManagerSnapshotResponse) {
+    scan = snapshot.scan
+    status = snapshot.status
+    skillsOverview = snapshot.skills
+    ruleDocuments = snapshot.rules.documents
+    mcpServers = snapshot.mcp.servers
+    operationReceipts = snapshot.operations
+    legacyNetworkState = snapshot.legacyNetworkState
   }
 
   @discardableResult

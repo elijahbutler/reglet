@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -23,6 +23,7 @@ afterEach(async () => {
   }
   delete process.env.REGLET_HOME;
   delete process.env.REGLET_PROVIDER_HOME;
+  delete process.env.REGLET_TEST_TOKEN;
 });
 
 async function useTempHomes(): Promise<{ home: string; providerHome: string }> {
@@ -115,13 +116,13 @@ describe('applyAll', () => {
     const second = await applyAll({ providers: ['claude'], contents: ['rules'] });
     const manifest = await loadManifest(home);
     const output = manifest.outputs[path.join(claudeDir, 'CLAUDE.md')];
-    const backupRoot = path.join(home, '.state', 'backups', 'claude');
 
     expect(first.results[0]?.status).toBe('written');
     expect(second.results[0]?.status).toBe('unchanged');
     expect(output?.backedUpTo).not.toBeNull();
     expect(await readFile(output?.backedUpTo ?? '', 'utf8')).toBe('original\n');
-    expect((await readdir(backupRoot)).length).toBe(1);
+    expect(first.receipt?.targets).toHaveLength(1);
+    expect(first.receipt?.targets[0]?.snapshot).toBe(output?.backedUpTo);
   });
 
   test('adds, updates, and removes only managed skills', async () => {
@@ -236,7 +237,7 @@ describe('applyAll', () => {
 
     await applyAll({ providers: ['claude', 'gemini'], contents: ['mcp'] });
     await writeFile(path.join(home, 'mcp', 'servers.json'), `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`);
-    await applyAll({ providers: ['claude', 'gemini'], contents: ['mcp'] });
+    await applyAll({ providers: ['claude', 'gemini'], contents: ['mcp'], reviewedReplacement: true });
 
     const claude = JSON.parse(await readFile(path.join(providerHome, '.claude.json'), 'utf8')) as unknown;
     const gemini = JSON.parse(await readFile(path.join(providerHome, '.gemini', 'settings.json'), 'utf8')) as unknown;
@@ -279,7 +280,7 @@ describe('applyAll', () => {
       path.join(home, 'mcp', 'servers.json'),
       `${JSON.stringify({ mcpServers: { beta: { url: 'https://beta.example.test' } } }, null, 2)}\n`,
     );
-    await applyAll({ providers: ['cursor', 'windsurf'], contents: ['mcp'] });
+    await applyAll({ providers: ['cursor', 'windsurf'], contents: ['mcp'], reviewedReplacement: true });
 
     const cursor = JSON.parse(await readFile(path.join(providerHome, '.cursor', 'mcp.json'), 'utf8')) as unknown;
     const windsurf = JSON.parse(
@@ -304,6 +305,7 @@ describe('applyAll', () => {
   test('applies codex toml mcp while preserving unrelated tables and unmanaged servers', async () => {
     const { home, providerHome } = await useTempHomes();
     await enableProviders(home, ['codex']);
+    process.env.REGLET_TEST_TOKEN = 'one';
     await mkdir(path.join(home, 'rules'), { recursive: true });
     await mkdir(path.join(home, 'mcp'), { recursive: true });
     await writeFile(
@@ -311,7 +313,7 @@ describe('applyAll', () => {
       `${JSON.stringify(
         {
           mcpServers: {
-            alpha: { command: 'node', args: ['alpha.js'], env: { TOKEN: 'one' } },
+            alpha: { command: 'node', args: ['alpha.js'], env: { TOKEN: { source: 'process-env', name: 'REGLET_TEST_TOKEN' } } },
             remote: { url: 'https://remote.example.test' },
           },
         },
@@ -337,7 +339,7 @@ describe('applyAll', () => {
       path.join(home, 'mcp', 'servers.json'),
       `${JSON.stringify({ mcpServers: { remote: { url: 'https://remote.example.test' } } }, null, 2)}\n`,
     );
-    await applyAll({ providers: ['codex'], contents: ['mcp'] });
+    await applyAll({ providers: ['codex'], contents: ['mcp'], reviewedReplacement: true });
 
     const config = parseToml(await readFile(path.join(providerHome, '.codex', 'config.toml'), 'utf8')) as {
       profile?: { model?: string };
@@ -354,6 +356,7 @@ describe('applyAll', () => {
   test('applies opencode mcp schema for local and remote servers', async () => {
     const { home, providerHome } = await useTempHomes();
     await enableProviders(home, ['opencode']);
+    process.env.REGLET_TEST_TOKEN = 'one';
     await mkdir(path.join(home, 'rules'), { recursive: true });
     await mkdir(path.join(home, 'mcp'), { recursive: true });
     await writeFile(
@@ -361,7 +364,7 @@ describe('applyAll', () => {
       `${JSON.stringify(
         {
           mcpServers: {
-            alpha: { command: 'node', args: ['alpha.js'], env: { TOKEN: 'one' } },
+            alpha: { command: 'node', args: ['alpha.js'], env: { TOKEN: { source: 'process-env', name: 'REGLET_TEST_TOKEN' } } },
             remote: { url: 'https://remote.example.test' },
           },
         },
@@ -380,7 +383,7 @@ describe('applyAll', () => {
       path.join(home, 'mcp', 'servers.json'),
       `${JSON.stringify({ mcpServers: { remote: { url: 'https://remote.example.test' } } }, null, 2)}\n`,
     );
-    await applyAll({ providers: ['opencode'], contents: ['mcp'] });
+    await applyAll({ providers: ['opencode'], contents: ['mcp'], reviewedReplacement: true });
 
     const config = JSON.parse(await readFile(path.join(providerHome, '.config', 'opencode', 'opencode.json'), 'utf8')) as unknown;
 

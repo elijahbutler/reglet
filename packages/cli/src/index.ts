@@ -6,13 +6,11 @@ import { promisify } from 'node:util';
 import { confirm, isCancel, multiselect, outro } from '@clack/prompts';
 import { Command, InvalidArgumentError } from 'commander';
 import {
-  accountSession,
   applyAll,
   applyStructuredPreview,
   adoptSkill,
-  claimPairing,
-  configureTokenLogin,
   createSkill,
+  detachManagedContent,
   deleteMcpServer,
   deleteSkill,
   deleteSkillFile,
@@ -24,9 +22,8 @@ import {
   initMasterDir,
   loadConfig,
   loadMasterDir,
-  loadSyncState,
-  loginWithAccount,
   listMcpServers,
+  listOperationReceipts,
   listManagedSkillTrees,
   listSkills,
   listUnmanagedSkills,
@@ -35,13 +32,19 @@ import {
   readProviderMcpServers,
   readSkillFile,
   regletHome,
+  isCanonicalMcpServerDef,
+  publicReleaseCapabilities,
+  inspectLegacySyncState,
+  clearLegacySyncState,
+  getOperationReceipt,
+  restoreOperationReceipt,
+  recoverPendingOperations,
   restore,
   revert,
   renameSkill,
   renameSkillFile,
   saveConfig,
-  startPairing,
-  syncOnce,
+  serializeMcpServers,
   type ApplyContent,
   type ApplyResult,
   type DriftRecord,
@@ -85,12 +88,13 @@ program
   .option('-y, --yes', 'run non-interactively and enroll detected providers')
   .option('-p, --provider <provider...>', 'provider(s) to enroll/import', parseProviderList)
   .option('-c, --content <content...>', 'content type(s) to import/apply', parseContentList)
-  .action(async (options: { yes?: boolean; provider?: ProviderId[]; content?: ApplyContent[] }) => {
+  .option('--no-apply', 'stage enrollment and imported master content without provider writes')
+  .action(async (options: { yes?: boolean; provider?: ProviderId[]; content?: ApplyContent[]; apply?: boolean }) => {
     await initMasterDir();
     if (options.yes === true || options.provider !== undefined || options.content !== undefined) {
       const providers = options.provider ?? (await detectedProviderIds());
       const contents = options.content ?? [...contentIds];
-      await runOnboarding(providers, contents);
+      await runOnboarding(providers, contents, options.apply !== false);
     } else if (process.stdin.isTTY) {
       await runInteractiveOnboarding();
     }
@@ -112,6 +116,33 @@ program
       const inventory = await adapter.inventory();
       console.log(`${adapter.id}\t${detected ? 'detected' : 'missing'}\trules=${inventory.rulesExists ? 'yes' : 'no'}\tskills=${inventory.skills.length}\tmcp=${inventory.mcpServers.length}`);
     }
+  });
+
+const manager = program.command('manager').description('Read local-only manager state');
+
+manager
+  .command('snapshot')
+  .description('Return one redacted local manager snapshot')
+  .option('--json', 'print machine-readable JSON')
+  .action(async (options: { json?: boolean }) => {
+    const master = await loadMasterDir();
+    const skills = await listSkills();
+    const mcpServers = await listMcpServers();
+    const snapshot = {
+      version: 1,
+      scan: await buildScanJson(),
+      status: await buildStatusJson(),
+      skills: { version: 1, regletHome: regletHome(), ...skills },
+      rules: { version: 1, documents: master.rules.map((rule) => ({ path: rule.relPath })) },
+      mcp: { version: 1, servers: mcpServers.servers },
+      operations: await listOperationReceipts(),
+      legacyNetworkState: await inspectLegacySyncState(),
+    };
+    if (options.json === true) {
+      printJson(snapshot);
+      return;
+    }
+    console.log(`manager-snapshot\tproviders=${snapshot.scan.providers.length}\tdrift=${snapshot.status.driftedCount}\toperations=${snapshot.operations.length}`);
   });
 
 program
@@ -140,11 +171,13 @@ program
   .option('-p, --provider <provider>', 'provider to apply', parseProvider)
   .option('-c, --content <content>', 'content type to apply', parseContent)
   .option('--dry-run', 'report planned writes without changing files')
-  .action(async (options: { provider?: ProviderId; content?: ApplyContent; dryRun?: boolean }) => {
+  .option('--reviewed-replacement', 'confirm replacement of detected provider drift')
+  .action(async (options: { provider?: ProviderId; content?: ApplyContent; dryRun?: boolean; reviewedReplacement?: boolean }) => {
     const report = await applyAll({
       providers: options.provider === undefined ? undefined : [options.provider],
       contents: options.content === undefined ? undefined : [options.content],
       dryRun: options.dryRun,
+      reviewedReplacement: options.reviewedReplacement,
     });
     printApplyResults(report.results);
   });
@@ -213,6 +246,99 @@ program
   .argument('[provider]', 'provider to revert', parseProvider)
   .action(async (provider?: ProviderId) => {
     printRevertResults(await revert(provider));
+  });
+
+const operations = program.command('operations').description('Inspect and restore Reglet apply operations');
+
+operations
+  .command('list')
+  .description('List completed and recovered operation receipts')
+  .option('--json', 'print machine-readable JSON')
+  .action(async (options: { json?: boolean }) => {
+    const receipts = await listOperationReceipts();
+    if (options.json === true) {
+      printJson({ version: 1, receipts });
+      return;
+    }
+    for (const receipt of receipts) {
+      console.log(`${receipt.id}\t${receipt.lifecycle}\t${receipt.startedAt}\ttargets=${receipt.targets.length}`);
+    }
+  });
+
+const state = program.command('state').description('Inspect and clear local Reglet state');
+
+state
+  .command('legacy-network-status')
+  .description('Report inert pre-V1 network state without reading credentials')
+  .option('--json', 'print machine-readable JSON')
+  .action(async (options: { json?: boolean }) => {
+    const status = await inspectLegacySyncState();
+    if (options.json === true) {
+      printJson({ version: 1, legacyNetworkState: status });
+      return;
+    }
+    console.log(status.present ? `legacy-network-state\tpresent\tpaths=${status.paths.length}` : 'legacy-network-state\tclear');
+  });
+
+state
+  .command('clear-legacy-network-state')
+  .description('Explicitly remove inert pre-V1 network credentials and snapshots')
+  .option('--json', 'print machine-readable JSON')
+  .action(async (options: { json?: boolean }) => {
+    const cleared = await clearLegacySyncState();
+    if (options.json === true) {
+      printJson({ version: 1, legacyNetworkState: cleared });
+      return;
+    }
+    console.log('legacy-network-state\tcleared');
+  });
+
+operations
+  .command('show')
+  .description('Show one operation receipt')
+  .argument('<id>')
+  .option('--json', 'print machine-readable JSON')
+  .action(async (id: string, options: { json?: boolean }) => {
+    const receipt = await getOperationReceipt(id);
+    if (options.json === true) {
+      printJson({ version: 1, receipt });
+      return;
+    }
+    console.log(`${receipt.id}\t${receipt.lifecycle}\t${receipt.startedAt}`);
+    for (const target of receipt.targets) {
+      console.log(`${target.snapshotKind}\t${target.path}\t${target.snapshot ?? 'none'}`);
+    }
+  });
+
+operations
+  .command('restore')
+  .description('Restore provider outputs captured by an operation receipt')
+  .argument('<id>')
+  .option('--json', 'print machine-readable JSON')
+  .action(async (id: string, options: { json?: boolean }) => {
+    const actions = await restoreOperationReceipt(id);
+    if (options.json === true) {
+      printJson({ version: 1, actions });
+      return;
+    }
+    for (const action of actions) {
+      console.log(`${action.action}\t${action.path}`);
+    }
+  });
+
+operations
+  .command('recover')
+  .description('Recover unfinished apply operations')
+  .option('--json', 'print machine-readable JSON')
+  .action(async (options: { json?: boolean }) => {
+    const result = await recoverPendingOperations();
+    if (options.json === true) {
+      printJson({ version: 1, ...result });
+      return;
+    }
+    for (const receipt of result.recovered) {
+      console.log(`${receipt.id}\t${receipt.lifecycle}\ttargets=${receipt.targets.length}`);
+    }
   });
 
 program
@@ -537,96 +663,6 @@ mcp.command('delete').argument('<name>').action(async (name: string) => {
   console.log(`mcp\tdeleted\t${name}`);
 });
 
-program
-  .command('login')
-  .description('Configure sync login with a server token or account credentials')
-  .argument('<url>', 'sync server URL')
-  .option('--token <token>', 'single-user server token')
-  .option('--email <email>', 'account email')
-  .option('--password <password>', 'account password')
-  .option('--device <name>', 'device name', 'device')
-  .action(async (url: string, options: { token?: string; email?: string; password?: string; device: string }) => {
-    if (options.token !== undefined) {
-      await configureTokenLogin(url, options.token, options.device);
-      console.log(`sync\tlogged-in\t${url}`);
-      return;
-    }
-
-    if (options.email === undefined || options.password === undefined) {
-      throw new InvalidArgumentError('Pass --token, or --email and --password for account login');
-    }
-
-    await loginWithAccount({
-      serverUrl: url,
-      email: options.email,
-      password: options.password,
-      deviceName: options.device,
-      mode: 'login',
-    });
-    console.log(`sync\tlogged-in\t${url}\tdevice=${options.device}`);
-  });
-
-program
-  .command('register')
-  .description('Create a sync account and pair this device')
-  .argument('<url>', 'sync server URL')
-  .requiredOption('--email <email>', 'account email')
-  .requiredOption('--password <password>', 'account password')
-  .option('--device <name>', 'device name', 'device')
-  .action(async (url: string, options: { email: string; password: string; device: string }) => {
-    await loginWithAccount({
-      serverUrl: url,
-      email: options.email,
-      password: options.password,
-      deviceName: options.device,
-      mode: 'register',
-    });
-    console.log(`sync\tregistered\t${url}\tdevice=${options.device}`);
-  });
-
-const pair = program.command('pair').description('Pair another device to a sync account');
-
-pair
-  .command('start')
-  .description('Print a pairing code for another device to claim')
-  .argument('<url>', 'sync server URL')
-  .requiredOption('--email <email>', 'account email')
-  .requiredOption('--password <password>', 'account password')
-  .action(async (url: string, options: { email: string; password: string }) => {
-    const sessionToken = await accountSession(url, options.email, options.password, 'login');
-    const code = await startPairing(url, sessionToken);
-    console.log(`pair\tcode\t${code}\texpires in 10 minutes`);
-  });
-
-pair
-  .command('claim')
-  .description('Claim a pairing code on this device and store its sync token')
-  .argument('<url>', 'sync server URL')
-  .argument('<code>', 'pairing code from pair start')
-  .option('--device <name>', 'device name', 'device')
-  .action(async (url: string, code: string, options: { device: string }) => {
-    await claimPairing(url, code, options.device);
-    console.log(`sync\tlogged-in\t${url}\tdevice=${options.device}`);
-  });
-
-program
-  .command('sync')
-  .description('Pull then push master directory changes')
-  .option('--json', 'print machine-readable JSON for manager apps')
-  .action(async (options: { json?: boolean }) => {
-    const result = await syncOnce();
-    if (options.json === true) {
-      printJson({ version: 1, ...result });
-      return;
-    }
-    console.log(
-      `sync\tpulled=${result.pulled.length}\tpushed=${result.pushed.length}\tconflicts=${result.conflicts.length}\tdeleted=${result.deleted.length}`,
-    );
-    for (const conflict of result.conflicts) {
-      console.log(`conflict\t${conflict}`);
-    }
-  });
-
 const daemon = program.command('daemon').description('Run or manage the background daemon');
 
 daemon
@@ -711,19 +747,17 @@ interface StatusProviderJson {
   contents: Record<ContentId, boolean>;
 }
 
-interface StatusSyncJson {
-  configured: boolean;
-  serverUrl: string;
-  deviceName: string;
-}
-
 interface StatusJson {
   version: 1;
   regletHome: string;
+  capabilities: {
+    mode: 'public-v1';
+    localOnly: true;
+    sync: false;
+  };
   providers: StatusProviderJson[];
   drift: DriftRecord[];
   driftedCount: number;
-  sync: StatusSyncJson;
 }
 
 interface OnboardingPlanJson {
@@ -826,7 +860,7 @@ function sameSkillScope(scope: SkillScope, options: SkillCommandOptions): boolea
 function safetyDefaults(): SafetyJson {
   return {
     daemonEnabled: false,
-    syncEnabled: false,
+    syncEnabled: publicReleaseCapabilities.sync,
     notificationsEnabled: false,
     requiresExplicitConfirmation: true,
   };
@@ -871,7 +905,7 @@ function parseProviderTarget(value: string): ProviderTarget {
   return { provider, content: parseContent(contentRaw) };
 }
 
-async function runOnboarding(providers: ProviderId[], contents: ApplyContent[]): Promise<void> {
+async function runOnboarding(providers: ProviderId[], contents: ApplyContent[], applyProviderOutputs = true): Promise<void> {
   const config = await loadConfig();
   for (const provider of providers) {
     config.providers[provider].enabled = true;
@@ -889,7 +923,9 @@ async function runOnboarding(providers: ProviderId[], contents: ApplyContent[]):
     }
   }
   await saveConfig(config);
-  await applyAll({ providers, contents });
+  if (applyProviderOutputs) {
+    await applyAll({ providers, contents });
+  }
 }
 
 async function runInteractiveOnboarding(): Promise<void> {
@@ -975,11 +1011,15 @@ async function buildScanJson(): Promise<ScanJson> {
 async function buildStatusJson(): Promise<StatusJson> {
   const config = await loadConfig();
   const drift = await detectDrift();
-  const syncState = await loadSyncState();
 
   return {
     version: 1,
     regletHome: regletHome(),
+    capabilities: {
+      mode: publicReleaseCapabilities.mode,
+      localOnly: publicReleaseCapabilities.localOnly,
+      sync: publicReleaseCapabilities.sync,
+    },
     providers: allAdapters().map((adapter) => {
       const providerConfig = config.providers[adapter.id];
       return {
@@ -995,11 +1035,6 @@ async function buildStatusJson(): Promise<StatusJson> {
     }),
     drift,
     driftedCount: drift.filter((record) => record.status !== 'clean').length,
-    sync: {
-      configured: syncState.serverUrl.length > 0 && syncState.deviceToken.length > 0,
-      serverUrl: syncState.serverUrl,
-      deviceName: syncState.deviceName,
-    },
   };
 }
 
@@ -1385,6 +1420,7 @@ async function detectedProviderIds(): Promise<ProviderId[]> {
 
 async function setEnrollment(target: ProviderTarget, enabled: boolean): Promise<void> {
   const config = await loadConfig();
+  const detachment = enabled ? undefined : await detachManagedContent(target.provider, target.content);
   if (target.content === undefined) {
     config.providers[target.provider].enabled = enabled;
   } else {
@@ -1392,6 +1428,11 @@ async function setEnrollment(target: ProviderTarget, enabled: boolean): Promise<
   }
   await saveConfig(config);
   console.log(`${enabled ? 'Enrolled' : 'Unenrolled'} ${formatTarget(target)}`);
+  if (detachment !== undefined) {
+    for (const output of detachment.detached) {
+      console.log(`detached\t${output.content}\t${output.outputPath}\theader=${output.headerRemoved ? 'removed' : 'preserved'}`);
+    }
+  }
 }
 
 async function importProviderRules(provider: ProviderId): Promise<void> {
@@ -1430,6 +1471,9 @@ async function importProviderMcp(provider: ProviderId): Promise<void> {
   const nextServers: Record<string, McpServerDef> = { ...master.mcpServers };
 
   for (const [name, server] of Object.entries(importedServers).sort(([left], [right]) => left.localeCompare(right))) {
+    if (!isCanonicalMcpServerDef(name, server)) {
+      throw new Error(`Cannot import MCP server ${name}: raw env values must be replaced with process-env references in mcp/servers.json`);
+    }
     const targetName = sameMcpServer(nextServers[name], server) ? name : uniqueName(name, provider, existingNames);
     existingNames.add(targetName);
     nextServers[targetName] = server;
@@ -1437,7 +1481,7 @@ async function importProviderMcp(provider: ProviderId): Promise<void> {
 
   const targetPath = path.join(regletHome(), 'mcp', 'servers.json');
   await mkdir(path.dirname(targetPath), { recursive: true });
-  await writeFile(targetPath, `${JSON.stringify({ mcpServers: nextServers }, null, 2)}\n`);
+  await writeFile(targetPath, serializeMcpServers(nextServers));
 }
 
 function uniqueName(name: string, provider: ProviderId, existingNames: Set<string>): string {

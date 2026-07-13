@@ -1,93 +1,48 @@
 # Installation
 
-Reglet can be installed with Homebrew, from a GitHub Release binary, or from source.
-
 ## Requirements
 
-- Bun 1.1+
-- Git
-- macOS or Windows for daemon service installation
+Public V1 is macOS-only and supports macOS Sonoma (14) or later. The graphical manager is distributed as a signed and notarized `Reglet.app` archive and installer package. The CLI is available through the matching Homebrew formula or release binary.
 
 ## Homebrew
-
-Recommended macOS install:
 
 ```bash
 brew tap elijahbutler/reglet
 brew install --cask elijahbutler/reglet/reglet
 ```
 
-The cask installs `Reglet.app` in `/Applications` and exposes the app's bundled CLI as `reglet`. Until Apple Developer ID signing and notarization are configured, its postflight removes quarantine from the checksum-verified app bundle. The install does **not** load or start the Reglet daemon, configure sync, or write provider files until you confirm those actions in the app.
+The cask preserves macOS quarantine. Do not bypass Gatekeeper: use only the signed, notarized release it downloads. It installs `Reglet.app` in `/Applications` and makes its bundled `reglet` executable available.
 
-The client install never includes the Reglet sync server. Choose local-only mode for a fully offline setup, Reglet Cloud for managed multi-device sync, or install the public server separately using the self-hosting guide.
-
-For a CLI-only installation:
+For CLI automation only:
 
 ```bash
-brew trust --formula elijahbutler/reglet/reglet
 brew install --formula elijahbutler/reglet/reglet
 ```
 
-## GitHub Release Binaries
+## Verify a release
 
-Raw binaries are available from GitHub Releases:
+Each release contains `SHA256SUMS.txt`, `provenance.txt`, the app archives, installer packages, and CLI binaries. After downloading an artifact, verify its checksum:
 
-```text
-https://github.com/elijahbutler/reglet/releases
+```bash
+shasum -a 256 -c SHA256SUMS.txt
 ```
 
-The Homebrew cask uses an ad-hoc-signed app until Apple Developer ID signing and notarization are configured. Homebrew installs this build without quarantine; direct app downloads are not suitable for broad distribution yet.
+macOS verifies the notarization ticket when the app or package is opened. You can inspect it explicitly:
 
-## From Checkout
+```bash
+spctl --assess --type execute --verbose=4 /Applications/Reglet.app
+pkgutil --check-signature reglet-macos-arm64.pkg
+```
+
+## Source checkout
+
+Source work requires Bun and Xcode Command Line Tools:
 
 ```bash
 git clone https://github.com/elijahbutler/reglet.git
 cd reglet
-bun install
-```
-
-Run the CLI from source:
-
-```bash
+bun install --frozen-lockfile
 bun packages/cli/src/index.ts scan
 ```
 
-## Initial Setup
-
-Create the master directory:
-
-```bash
-bun packages/cli/src/index.ts init
-```
-
-Non-interactive test/script mode:
-
-```bash
-bun packages/cli/src/index.ts init --yes
-```
-
-`init --yes` enrolls detected providers and imports detected rules, skills, and MCP servers. Run `init` without flags for interactive selective onboarding, or use `--provider` and `--content` for scripted selective onboarding.
-
-## Mac App
-
-The app uses the same CLI engine through a machine-readable contract:
-
-```bash
-reglet scan --json
-reglet plan --provider claude --content rules,mcp --json
-```
-
-These commands are read-only and are intended for the native onboarding app to show detected providers, exact file reads/writes, and safety defaults before the user confirms backup/apply.
-
-## Background Daemon
-
-The daemon is opt-in. It is not installed or started by `init`.
-
-```bash
-reglet daemon status
-reglet daemon run
-reglet daemon start
-reglet daemon install --dry-run
-```
-
-Daemon run/start/install refuses to proceed until at least one provider is enrolled.
+Source builds are for development. The release scripts intentionally refuse to produce a public installer without Developer ID and notary credentials.

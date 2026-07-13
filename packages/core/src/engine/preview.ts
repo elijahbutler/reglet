@@ -4,13 +4,15 @@ import path from 'node:path';
 import { loadConfig } from '../config.js';
 import { renderRulesFile } from '../header.js';
 import { getOutput, loadManifest } from '../manifest.js';
-import { loadMasterDir, type McpServerDef } from '../master.js';
-import { listMcpServers } from '../mcp.js';
+import { loadMasterDir, type McpServerDef, type ResolvedMcpServerDef } from '../master.js';
+import { listMcpServers, mcpEnvironmentDigest, resolveMcpServersEnv } from '../mcp.js';
 import { providerHome, regletHome } from '../paths.js';
 import { allAdapters, getAdapter } from '../providers/registry.js';
 import type { ProviderAdapter, ProviderId } from '../providers/types.js';
 import { sha256String } from '../fsutil.js';
 import { applyAll, type ApplyContent } from './apply.js';
+import { detectDrift, type DriftStatus } from './drift.js';
+import type { OperationReceipt } from './operations.js';
 
 export interface StructuredApplyPreviewOptions {
   providers?: ProviderId[];
@@ -25,6 +27,11 @@ export interface StructuredApplyPreview {
   entries: StructuredApplyPreviewEntry[];
 }
 
+export interface StructuredApplyResult {
+  preview: StructuredApplyPreview;
+  receipt: OperationReceipt;
+}
+
 export interface StructuredApplyPreviewEntry {
   provider: ProviderId;
   content: ApplyContent;
@@ -33,6 +40,16 @@ export interface StructuredApplyPreviewEntry {
   before: unknown;
   after: unknown;
   diff: string;
+  /** SHA-256 of the exact target state that this plan expects, never its raw content. */
+  expectedTargetHash: string | null;
+  /** SHA-256 of the exact rendered target state, never its raw content. */
+  resultingTargetHash: string | null;
+  driftStatus: DriftStatus | 'unmanaged' | 'not-applicable';
+  snapshot: {
+    behavior: 'snapshot-before-write' | 'record-absence' | 'none';
+    /** The receipt-scoped location pattern; the receipt id is assigned at apply time. */
+    location: string | null;
+  };
   backup: {
     behavior: 'none' | 'existing-backup' | 'backup-before-write';
     location: string | null;
@@ -44,19 +61,31 @@ export async function previewApplyStructured(
 ): Promise<StructuredApplyPreview> {
   const home = options.home ?? regletHome();
   const body = await previewApplyStructuredBody(options, home);
-  return { ...body, digest: sha256String(stableStringify(body)) };
+  return { ...body, digest: sha256String(stableStringify({ body, processEnv: await previewProcessEnvDigest(home) })) };
 }
 
 export async function applyStructuredPreview(
   expectedDigest: string,
   options: StructuredApplyPreviewOptions = {},
-): Promise<StructuredApplyPreview> {
+): Promise<StructuredApplyResult> {
   const preview = await previewApplyStructured(options);
+  if (preview.validationIssues.length > 0) {
+    throw new Error(`Structured apply preview has validation issues: ${preview.validationIssues.join('; ')}`);
+  }
   if (preview.digest !== expectedDigest) {
     throw new Error(`Structured apply preview is stale: expected ${expectedDigest}, got ${preview.digest}`);
   }
-  await applyAll({ providers: options.providers, contents: options.contents, home: options.home });
-  return preview;
+  const report = await applyAll({
+    providers: options.providers,
+    contents: options.contents,
+    home: options.home,
+    reviewedReplacement: true,
+    structuredPreviewDigest: preview.digest,
+  });
+  if (report.receipt === undefined) {
+    throw new Error('Structured apply did not create an operation receipt');
+  }
+  return { preview, receipt: report.receipt };
 }
 
 async function previewApplyStructuredBody(
@@ -68,6 +97,9 @@ async function previewApplyStructuredBody(
   const providers = options.providers === undefined ? allAdapters() : options.providers.map((id) => getAdapter(id));
   const contents = options.contents ?? ['rules', 'skills', 'mcp'];
   const validationIssues = await collectValidationIssues(home);
+  const driftByPath = new Map<string, DriftStatus>(
+    (await detectDrift(home)).map((record): [string, DriftStatus] => [record.outputPath, record.status]),
+  );
   const entries: StructuredApplyPreviewEntry[] = [];
 
   for (const adapter of providers) {
@@ -77,9 +109,9 @@ async function previewApplyStructuredBody(
         entries.push(skipEntry(adapter.id, content, !providerConfig.enabled ? `${adapter.id} disabled` : `${adapter.id}:${content} unenrolled`));
         continue;
       }
-      if (content === 'rules') entries.push(await previewRules(adapter, master.rules, home));
-      if (content === 'skills') entries.push(...(await previewSkills(adapter, master, home)));
-      if (content === 'mcp') entries.push(await previewMcp(adapter, master.mcpServers, home));
+      if (content === 'rules') entries.push(await previewRules(adapter, master.rules, home, driftByPath));
+      if (content === 'skills') entries.push(...(await previewSkills(adapter, master, home, driftByPath)));
+      if (content === 'mcp') entries.push(await previewMcp(adapter, master.mcpServers, home, driftByPath, validationIssues));
     }
   }
 
@@ -90,6 +122,11 @@ async function collectValidationIssues(home: string): Promise<string[]> {
   const issues: string[] = [];
   for (const server of (await listMcpServers(home)).servers) {
     issues.push(...server.issues.map((issue) => `mcp/${server.name}: ${issue}`));
+  }
+  try {
+    resolveMcpServersEnv((await loadMasterDir(home)).mcpServers);
+  } catch (error) {
+    issues.push(error instanceof Error ? error.message : String(error));
   }
   const master = await loadMasterDir(home);
   for (const skill of [...master.skills, ...Object.values(master.providerSkills).flat()]) {
@@ -104,18 +141,20 @@ async function previewRules(
   adapter: ProviderAdapter,
   rules: { relPath: string; content: string }[],
   home: string,
+  driftByPath: ReadonlyMap<string, DriftStatus>,
 ): Promise<StructuredApplyPreviewEntry> {
   const outputPath = adapter.rulesPath();
   if (outputPath === null) return skipEntry(adapter.id, 'rules', `${adapter.id}:rules unsupported`);
   const before = await readOptionalFile(outputPath);
   const after = renderRulesFile(adapter.id, rules);
-  return makeEntry(adapter.id, 'rules', 'write', outputPath, before, after, home);
+  return makeEntry(adapter.id, 'rules', 'write', outputPath, before, after, home, driftByPath.get(outputPath) ?? 'unmanaged');
 }
 
 async function previewSkills(
   adapter: ProviderAdapter,
   master: Awaited<ReturnType<typeof loadMasterDir>>,
   home: string,
+  driftByPath: ReadonlyMap<string, DriftStatus>,
 ): Promise<StructuredApplyPreviewEntry[]> {
   const skillsDir = adapter.skillsDir();
   if (skillsDir === null) return [skipEntry(adapter.id, 'skills', `${adapter.id}:skills unsupported`)];
@@ -134,6 +173,7 @@ async function previewSkills(
         await readDirectorySnapshot(outputPath),
         await readDirectorySnapshot(sourceDir),
         home,
+        driftByPath.get(outputPath) ?? 'unmanaged',
       ),
     );
   }
@@ -141,7 +181,18 @@ async function previewSkills(
   for (const [outputPath, output] of Object.entries(manifest.outputs)) {
     if (output.provider !== adapter.id || output.content !== 'skills' || path.dirname(outputPath) !== skillsDir) continue;
     if (!resolved.has(path.basename(outputPath))) {
-      entries.push(await makeEntry(adapter.id, 'skills', 'remove', outputPath, await readDirectorySnapshot(outputPath), null, home));
+      entries.push(
+        await makeEntry(
+          adapter.id,
+          'skills',
+          'remove',
+          outputPath,
+          await readDirectorySnapshot(outputPath),
+          null,
+          home,
+          driftByPath.get(outputPath) ?? 'unmanaged',
+        ),
+      );
     }
   }
   return entries.length === 0 ? [skipEntry(adapter.id, 'skills', `${adapter.id}:skills no master skills`)] : entries;
@@ -151,14 +202,41 @@ async function previewMcp(
   adapter: ProviderAdapter,
   servers: Record<string, McpServerDef>,
   home: string,
+  driftByPath: ReadonlyMap<string, DriftStatus>,
+  validationIssues: readonly string[],
 ): Promise<StructuredApplyPreviewEntry> {
   const outputPath = adapter.mcpPath();
-  if (outputPath === null || adapter.applyMcp(servers, { dryRun: true }) === null) {
+  if (outputPath === null) {
     return skipEntry(adapter.id, 'mcp', `${adapter.id}:mcp unsupported`);
   }
-  const before = redactMcpSecrets(await readOptionalFile(outputPath), servers);
-  const after = redactMcpSecrets(await renderMcpInSandbox(adapter, outputPath, home), servers);
-  return makeEntry(adapter.id, 'mcp', 'write', outputPath, before, after, home);
+  if (validationIssues.some((issue) => issue.startsWith('mcp/'))) {
+    return skipEntry(adapter.id, 'mcp', `${adapter.id}:mcp blocked by validation`);
+  }
+  let resolvedServers: Record<string, ResolvedMcpServerDef>;
+  try {
+    resolvedServers = resolveMcpServersEnv(servers);
+  } catch {
+    return skipEntry(adapter.id, 'mcp', `${adapter.id}:mcp blocked by validation`);
+  }
+  if (adapter.applyMcp(resolvedServers, { dryRun: true, home }) === null) {
+    return skipEntry(adapter.id, 'mcp', `${adapter.id}:mcp unsupported`);
+  }
+  const rawBefore = await readOptionalFile(outputPath);
+  const rawAfter = await renderMcpInSandbox(adapter, outputPath, home);
+  const before = redactMcpSecrets(rawBefore, servers);
+  const after = redactMcpSecrets(rawAfter, servers);
+  return makeEntry(
+    adapter.id,
+    'mcp',
+    'write',
+    outputPath,
+    before,
+    after,
+    home,
+    driftByPath.get(outputPath) ?? 'unmanaged',
+    rawBefore,
+    rawAfter,
+  );
 }
 
 async function renderMcpInSandbox(
@@ -198,14 +276,58 @@ async function copyIfPresent(source: string, destination: string): Promise<void>
 
 function redactMcpSecrets(content: string | null, servers: Record<string, McpServerDef>): string | null {
   if (content === null) return null;
-  let redacted = content;
+  let redacted = redactLikelyEnvironmentValues(content);
   for (const server of Object.values(servers)) {
-    for (const [key, value] of Object.entries(server.env ?? {})) {
-      if (value.length === 0) continue;
-      redacted = redacted.replaceAll(value, `<redacted:${key}>`);
+    for (const [key, ref] of Object.entries(server.env ?? {})) {
+      const replacement = `<redacted:${key}>`;
+      const resolvedValue = process.env[ref.name];
+      if (resolvedValue !== undefined && resolvedValue.length > 0) {
+        redacted = redacted.replaceAll(resolvedValue, replacement);
+      }
+      redacted = redactJsonEnvValue(redacted, key, replacement);
+      redacted = redactTomlEnvValue(redacted, key, replacement);
     }
   }
   return redacted;
+}
+
+/**
+ * Legacy raw MCP entries are intentionally omitted from the typed master
+ * model, so their key names are not available to the normal typed-redaction
+ * pass. Scrub every conventional environment-variable assignment as a final
+ * defense before any preview leaves this process.
+ */
+function redactLikelyEnvironmentValues(content: string): string {
+  const json = content.replace(
+    /("[A-Z_][A-Z0-9_]*"\s*:\s*)"(?:\\.|[^"\\])*"/g,
+    '$1"<redacted:environment>"',
+  );
+  return json.replace(
+    /^(\s*[A-Z_][A-Z0-9_]*\s*=\s*)"(?:\\.|[^"\\])*"\s*$/gm,
+    '$1"<redacted:environment>"',
+  );
+}
+
+async function previewProcessEnvDigest(home: string): Promise<Record<string, unknown>> {
+  return mcpEnvironmentDigest((await loadMasterDir(home)).mcpServers);
+}
+
+function redactJsonEnvValue(content: string, key: string, replacement: string): string {
+  return content.replace(
+    new RegExp(`("${escapeRegExp(key)}"\\s*:\\s*)"(?:\\\\.|[^"\\\\])*"`, 'g'),
+    `$1"${replacement}"`,
+  );
+}
+
+function redactTomlEnvValue(content: string, key: string, replacement: string): string {
+  return content.replace(
+    new RegExp(`(\\b${escapeRegExp(key)}\\b\\s*=\\s*)"(?:\\\\.|[^"\\\\])*"`, 'g'),
+    `$1"${replacement}"`,
+  );
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 async function makeEntry(
@@ -216,6 +338,9 @@ async function makeEntry(
   before: unknown,
   after: unknown,
   home: string,
+  driftStatus: DriftStatus | 'unmanaged',
+  rawBefore: unknown = before,
+  rawAfter: unknown = after,
 ): Promise<StructuredApplyPreviewEntry> {
   const previous = await getOutput(outputPath, home);
   return {
@@ -226,6 +351,15 @@ async function makeEntry(
     before,
     after,
     diff: unifiedDiff(formatPreviewValue(before), formatPreviewValue(after), outputPath),
+    expectedTargetHash: fingerprintTarget(rawBefore),
+    resultingTargetHash: fingerprintTarget(rawAfter),
+    driftStatus,
+    snapshot: before === null
+      ? { behavior: 'record-absence', location: null }
+      : {
+          behavior: 'snapshot-before-write',
+          location: path.join(home, '.state', 'operations', 'snapshots', '<receipt-id>', encodeURIComponent(outputPath)),
+        },
     backup: previous?.backedUpTo
       ? { behavior: 'existing-backup', location: previous.backedUpTo }
       : before === null
@@ -243,18 +377,27 @@ function skipEntry(provider: ProviderId, content: ApplyContent, message: string)
     before: null,
     after: message,
     diff: '',
+    expectedTargetHash: null,
+    resultingTargetHash: null,
+    driftStatus: 'not-applicable',
+    snapshot: { behavior: 'none', location: null },
     backup: { behavior: 'none', location: null },
   };
 }
 
+function fingerprintTarget(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  return sha256String(typeof value === 'string' ? value : stableStringify(value));
+}
+
 async function readDirectorySnapshot(dirPath: string): Promise<Record<string, string> | null> {
   const result: Record<string, string> = {};
-  async function visit(current: string): Promise<void> {
+  async function visit(current: string): Promise<boolean> {
     let entries;
     try {
       entries = await readdir(current, { withFileTypes: true });
     } catch (error) {
-      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false;
       throw error;
     }
     for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
@@ -262,9 +405,9 @@ async function readDirectorySnapshot(dirPath: string): Promise<Record<string, st
       if (entry.isDirectory()) await visit(entryPath);
       if (entry.isFile()) result[path.relative(dirPath, entryPath).split(path.sep).join('/')] = await readFile(entryPath, 'utf8');
     }
+    return true;
   }
-  await visit(dirPath);
-  return Object.keys(result).length === 0 ? null : result;
+  return (await visit(dirPath)) ? result : null;
 }
 
 async function readOptionalFile(filePath: string | null): Promise<string | null> {

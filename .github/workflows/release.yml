@@ -6,31 +6,120 @@ on:
       - "v*"
 
 jobs:
-  build-binaries:
+  publish-macos-v1:
     runs-on: macos-latest
     permissions:
       contents: write
+      attestations: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
+      - run: bun run lint
       - run: bun test
+      - run: swift test --package-path apps/macos/RegletSetup
+      - name: Import Developer ID certificate and notary key
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+          PRODUCTSIGN_IDENTITY: ${{ secrets.PRODUCTSIGN_IDENTITY }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          for required in \
+            MACOS_CERTIFICATE_P12_BASE64 \
+            MACOS_CERTIFICATE_PASSWORD \
+            APPLE_NOTARY_KEY_BASE64 \
+            CODESIGN_IDENTITY \
+            PRODUCTSIGN_IDENTITY \
+            APPLE_NOTARY_KEY_ID \
+            APPLE_NOTARY_ISSUER_ID; do
+            if [[ -z "${!required:-}" ]]; then
+              echo "Release signing requirement is missing: $required" >&2
+              exit 1
+            fi
+          done
+
+          KEYCHAIN_PATH="$RUNNER_TEMP/reglet-release.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          CERTIFICATE_PATH="$RUNNER_TEMP/reglet-developer-id.p12"
+          NOTARY_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+
+          printf '%s' "$MACOS_CERTIFICATE_P12_BASE64" | base64 -D > "$CERTIFICATE_PATH"
+          printf '%s' "$APPLE_NOTARY_KEY_BASE64" | base64 -D > "$NOTARY_KEY_PATH"
+          chmod 600 "$NOTARY_KEY_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -k "$KEYCHAIN_PATH" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productsign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+          printf 'NOTARY_KEY_PATH=%s\n' "$NOTARY_KEY_PATH" >> "$GITHUB_ENV"
+          printf 'CODESIGN_IDENTITY=%s\n' "$CODESIGN_IDENTITY" >> "$GITHUB_ENV"
+          printf 'PRODUCTSIGN_IDENTITY=%s\n' "$PRODUCTSIGN_IDENTITY" >> "$GITHUB_ENV"
+          printf 'APPLE_NOTARY_KEY_ID=%s\n' "$APPLE_NOTARY_KEY_ID" >> "$GITHUB_ENV"
+          printf 'APPLE_NOTARY_ISSUER_ID=%s\n' "$APPLE_NOTARY_ISSUER_ID" >> "$GITHUB_ENV"
       - run: bun run build:binaries
+      - name: Sign public CLI binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          for binary in dist/reglet-darwin-arm64 dist/reglet-darwin-x64; do
+            codesign --force --timestamp --options runtime --sign "$CODESIGN_IDENTITY" "$binary"
+            codesign --verify --strict --verbose=2 "$binary"
+          done
       - name: Build macOS app archives
         run: |
           REGLET_ARCH=arm64 bun run build:macos-installer
           REGLET_ARCH=x86_64 bun run build:macos-installer
+      - name: Create checksums and release provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          shasum -a 256 \
+            dist/reglet-darwin-arm64 \
+            dist/reglet-darwin-x64 \
+            dist/reglet-macos-arm64.app.zip \
+            dist/reglet-macos-x86_64.app.zip \
+            dist/reglet-macos-arm64.pkg \
+            dist/reglet-macos-x86_64.pkg > dist/SHA256SUMS.txt
+          printf 'commit=%s\nref=%s\nrun=%s\n' \
+            "$GITHUB_SHA" "$GITHUB_REF_NAME" "$GITHUB_RUN_ID" > dist/provenance.txt
       - run: bun run build:homebrew-formula
       - run: bun run build:homebrew-cask
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/reglet-darwin-arm64
+            dist/reglet-darwin-x64
+            dist/reglet-macos-arm64.app.zip
+            dist/reglet-macos-x86_64.app.zip
+            dist/reglet-macos-arm64.pkg
+            dist/reglet-macos-x86_64.pkg
+            dist/SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/reglet-darwin-arm64
             dist/reglet-darwin-x64
-            dist/reglet-windows-x64.exe
             dist/reglet-macos-arm64.app.zip
             dist/reglet-macos-x86_64.app.zip
+            dist/reglet-macos-arm64.pkg
+            dist/reglet-macos-x86_64.pkg
+            dist/SHA256SUMS.txt
+            dist/provenance.txt
       - name: Update Homebrew tap
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

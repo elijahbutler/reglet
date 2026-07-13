@@ -1,5 +1,6 @@
 import type { ManagedContent } from '../manifest.js';
-import type { McpServerDef } from '../master.js';
+import type { ResolvedMcpServerDef } from '../master.js';
+import type { OperationContext } from '../engine/operations.js';
 
 export type ProviderId = 'claude' | 'codex' | 'cursor' | 'gemini' | 'windsurf' | 'opencode';
 
@@ -16,6 +17,8 @@ export interface ApplyResult {
 
 export interface ApplyContext {
   dryRun: boolean;
+  home?: string;
+  operation?: OperationContext;
 }
 
 export interface ProviderInventory {
@@ -34,6 +37,6 @@ export interface ProviderAdapter {
   rulesPath(): string | null;
   skillsDir(): string | null;
   mcpPath(): string | null;
-  applyMcp(servers: Record<string, McpServerDef>, ctx: ApplyContext): Promise<ApplyResult> | null;
+  applyMcp(servers: Record<string, ResolvedMcpServerDef>, ctx: ApplyContext): Promise<ApplyResult> | null;
   inventory(): Promise<ProviderInventory>;
 }

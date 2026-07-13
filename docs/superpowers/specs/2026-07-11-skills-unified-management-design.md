@@ -17,10 +17,10 @@ until something else runs `reglet apply`.
 1. One structured CLI operation that exposes the whole skills world (shared,
    provider-scoped, per-provider unmanaged).
 2. Checkbox-driven bulk adoption during onboarding and in the Skills manager.
-3. Sync-through: after adoption, automatically apply skills so they land in providers.
+3. Apply-through: after adoption, offer a reviewed apply so skills can land in providers.
 
 Non-goals: batch-adopt CLI command (the app loops the existing `skills adopt`),
-skill content editing, sync-server changes.
+skill content editing, remote-service changes.
 
 ## CLI/core contract
 
@@ -109,11 +109,11 @@ The one-at-a-time `SkillAdoptionView` sheet is removed in favor of the checkbox 
 - `RegletCommand`: `skillsList()`, `applySkills()` (runs `apply --content skills`),
   adopt gains an overwrite flag.
 
-## Sync-through semantics
+## Apply-through semantics
 
 `reglet apply --content skills` applies master skills to all enrolled providers that
 support skills. Running it once after the adopt loop propagates shared adoptions to every
-provider and scoped adoptions to their provider. No daemon or sync-server involvement;
+provider and scoped adoptions to their provider. No daemon or remote-service involvement;
 Safety copy in the wizard stays accurate.
 
 ## Testing

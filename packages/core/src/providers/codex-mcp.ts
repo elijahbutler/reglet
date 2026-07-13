@@ -3,7 +3,7 @@ import { parse, stringify } from 'smol-toml';
 import { safeWriteFile } from '../engine/writer.js';
 import type { ManagedContent } from '../manifest.js';
 import { getOutput } from '../manifest.js';
-import type { McpServerDef } from '../master.js';
+import type { ResolvedMcpServerDef } from '../master.js';
 import { isNodeError, isRecord } from './common.js';
 import type { ApplyContext, ApplyResult } from './types.js';
 
@@ -22,10 +22,10 @@ interface CodexMcpServerTable extends TomlTable {
 
 export async function applyCodexMcp(
   outputPath: string,
-  servers: Record<string, McpServerDef>,
+  servers: Record<string, ResolvedMcpServerDef>,
   ctx: ApplyContext,
 ): Promise<ApplyResult> {
-  const previous = await getOutput(outputPath);
+  const previous = await getOutput(outputPath, ctx.home);
   const previousManagedKeys = previous?.managedKeys ?? [];
   const config = await readTomlObject(outputPath);
   const existingServers = readServerTable(config.mcp_servers);
@@ -52,6 +52,8 @@ export async function applyCodexMcp(
     managedContent: 'mcp' satisfies ManagedContent,
     dryRun: ctx.dryRun,
     managedKeys,
+    home: ctx.home,
+    operation: ctx.operation,
   });
 
   return {
@@ -99,7 +101,7 @@ function readServerTable(value: TomlValue | undefined): Record<string, CodexMcpS
   return servers;
 }
 
-function toCodexServer(server: McpServerDef): CodexMcpServerTable {
+function toCodexServer(server: ResolvedMcpServerDef): CodexMcpServerTable {
   return {
     ...(server.command === undefined ? {} : { command: server.command }),
     ...(server.url === undefined ? {} : { url: server.url }),

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { loadConfig } from '../src/config.js';
 import { initMasterDir, loadMasterDir } from '../src/master.js';
+import { clearLegacySyncState, inspectLegacySyncState, publicReleaseCapabilities } from '../src/release.js';
 
 let currentHome: string | undefined;
 
@@ -24,6 +25,17 @@ async function useTempHome(): Promise<string> {
 }
 
 describe('master dir', () => {
+  test('exposes an immutable local-only public release capability gate', () => {
+    expect(publicReleaseCapabilities).toEqual({
+      mode: 'public-v1',
+      localOnly: true,
+      sync: false,
+      disabledCommands: ['login', 'register', 'pair', 'sync'],
+    });
+    expect(Object.isFrozen(publicReleaseCapabilities)).toBe(true);
+    expect(Object.isFrozen(publicReleaseCapabilities.disabledCommands)).toBe(true);
+  });
+
   test('loads rules, skills, and mcp servers from fixture tree', async () => {
     const home = await useTempHome();
     await mkdir(path.join(home, 'rules'), { recursive: true });
@@ -35,7 +47,7 @@ describe('master dir', () => {
     await writeFile(path.join(home, 'skills', 'alpha', 'assets', 'note.txt'), 'note');
     await writeFile(
       path.join(home, 'mcp', 'servers.json'),
-      JSON.stringify({ mcpServers: { local: { command: 'node', args: ['server.js'], env: { A: 'B' } } } }),
+      JSON.stringify({ mcpServers: { local: { command: 'node', args: ['server.js'], env: { A: { source: 'process-env', name: 'LOCAL_A' } } } } }),
     );
 
     const master = await loadMasterDir(home);
@@ -53,7 +65,7 @@ describe('master dir', () => {
     ]);
     expect(master.providerSkills.claude).toEqual([]);
     expect(master.providerSkills.codex).toEqual([]);
-    expect(master.mcpServers).toEqual({ local: { command: 'node', args: ['server.js'], env: { A: 'B' } } });
+    expect(master.mcpServers).toEqual({ local: { command: 'node', args: ['server.js'], env: { A: { source: 'process-env', name: 'LOCAL_A' } } } });
   });
 
   test('loads provider-specific skills separately from shared skills', async () => {
@@ -97,5 +109,23 @@ describe('master dir', () => {
     expect(await readFile(path.join(home, 'rules', '00-general.md'), 'utf8')).toBe('custom');
     expect(await readFile(path.join(home, 'mcp', 'servers.json'), 'utf8')).toBe('{\n  "mcpServers": {}\n}\n');
     expect((await loadConfig(home)).providers.claude.enabled).toBe(true);
+    expect(await readFile(path.join(home, 'reglet.toml'), 'utf8')).not.toContain('[sync]');
+    expect(await Bun.file(path.join(home, '.state', 'sync-base')).exists()).toBe(false);
+  });
+
+  test('legacy sync state remains inert until explicitly cleared', async () => {
+    const home = await useTempHome();
+    await initMasterDir(home);
+    await mkdir(path.join(home, '.state', 'sync-base'), { recursive: true });
+    await writeFile(path.join(home, '.state', 'sync.json'), '{"deviceToken":"legacy-secret"}\n');
+
+    const status = await inspectLegacySyncState(home);
+    expect(status.present).toBe(true);
+    expect(status.paths).toHaveLength(2);
+    expect(await readFile(path.join(home, '.state', 'sync.json'), 'utf8')).toContain('legacy-secret');
+
+    expect(await clearLegacySyncState(home)).toEqual({ present: false, paths: [] });
+    expect(await Bun.file(path.join(home, '.state', 'sync.json')).exists()).toBe(false);
+    expect(await Bun.file(path.join(home, '.state', 'sync-base')).exists()).toBe(false);
   });
 });

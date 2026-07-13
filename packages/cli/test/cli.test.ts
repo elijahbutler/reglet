@@ -420,7 +420,6 @@ describe('reglet CLI', () => {
             existingServer: {
               command: 'node',
               args: ['server.js'],
-              env: { TOKEN: 'one' },
             },
           },
         },
@@ -439,7 +438,6 @@ describe('reglet CLI', () => {
         existingServer: {
           command: 'node',
           args: ['server.js'],
-          env: { TOKEN: 'one' },
         },
       },
     });
@@ -450,12 +448,24 @@ describe('reglet CLI', () => {
         existingServer: {
           command: 'node',
           args: ['server.js'],
-          env: { TOKEN: 'one' },
         },
       },
     });
     expect(await readFile(path.join(home, 'reglet.toml'), 'utf8')).toContain('[providers.claude]');
     expect(await readFile(path.join(home, 'reglet.toml'), 'utf8')).toContain('enabled = true');
+  });
+
+  test('init --yes rejects provider MCP env raw values before writing canonical master state', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await writeFile(
+      path.join(providerHome, '.claude.json'),
+      `${JSON.stringify({ mcpServers: { secretServer: { command: 'node', env: { TOKEN: 'one' } } } }, null, 2)}\n`,
+    );
+
+    await expect(runCli(['init', '--yes', '--provider', 'claude', '--content', 'mcp'], home, providerHome))
+      .rejects.toMatchObject({ code: 1 });
+    expect(await Bun.file(path.join(home, 'mcp', 'servers.json')).exists()).toBe(true);
+    expect(JSON.parse(await readFile(path.join(home, 'mcp', 'servers.json'), 'utf8'))).toEqual({ mcpServers: {} });
   });
 
   test('init --yes imports opencode mcp schema into canonical master format', async () => {
@@ -470,7 +480,6 @@ describe('reglet CLI', () => {
             localServer: {
               type: 'local',
               command: ['node', 'server.js'],
-              environment: { TOKEN: 'one' },
             },
             remoteServer: {
               type: 'remote',
@@ -490,7 +499,6 @@ describe('reglet CLI', () => {
         localServer: {
           command: 'node',
           args: ['server.js'],
-          env: { TOKEN: 'one' },
         },
         remoteServer: {
           url: 'https://example.test/mcp',
@@ -521,6 +529,23 @@ describe('reglet CLI', () => {
     expect(config).toContain('rules = true');
     expect(config).toContain('skills = false');
     expect(config).toContain('mcp = false');
+  });
+
+  test('init --no-apply stages onboarding without touching provider outputs', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const claudeRules = path.join(providerHome, '.claude', 'CLAUDE.md');
+    await mkdir(path.dirname(claudeRules), { recursive: true });
+    await writeFile(claudeRules, 'leave this provider file alone\n');
+
+    await runCli(['init', '--provider', 'claude', '--content', 'rules', '--no-apply'], home, providerHome);
+
+    expect(await readFile(path.join(home, 'rules', 'imported-claude.md'), 'utf8')).toBe('leave this provider file alone\n');
+    expect(await readFile(claudeRules, 'utf8')).toBe('leave this provider file alone\n');
+    const preview = JSON.parse(
+      (await runCli(['apply-structured', 'preview', '--provider', 'claude', '--content', 'rules'], home, providerHome)).stdout,
+    ) as { digest: string; entries: { expectedTargetHash: string | null; driftStatus: string }[] };
+    expect(preview.digest).not.toBeEmpty();
+    expect(preview.entries[0]).toMatchObject({ driftStatus: 'unmanaged', expectedTargetHash: expect.any(String) });
   });
 
   test('apply, status --check, and restore work in a sandbox', async () => {
@@ -589,7 +614,7 @@ describe('reglet CLI', () => {
     expect(await readFile(importedFile ?? '', 'utf8')).toContain('Provider-only edit.');
   });
 
-  test('status --json reports enrollment, drift, and sync state', async () => {
+  test('status --json reports enrollment and drift without loading sync state', async () => {
     const { home, providerHome } = await useTempHomes();
     const claudeDir = path.join(providerHome, '.claude');
     await mkdir(path.join(home, 'rules'), { recursive: true });
@@ -601,15 +626,20 @@ describe('reglet CLI', () => {
     const clean = JSON.parse((await runCli(['status', '--json'], home, providerHome)).stdout) as {
       version: number;
       driftedCount: number;
+      capabilities: { mode: string; localOnly: boolean; sync: boolean };
       providers: { id: string; enabled: boolean }[];
       drift: { provider: string; content: string; status: string; outputPath: string }[];
-      sync: { configured: boolean; serverUrl: string; deviceName: string };
+      sync?: unknown;
     };
     expect(clean.version).toBe(1);
     expect(clean.driftedCount).toBe(0);
     expect(clean.providers.find((provider) => provider.id === 'claude')).toMatchObject({ enabled: true });
     expect(clean.drift).toHaveLength(1);
-    expect(clean.sync).toEqual({ configured: false, serverUrl: '', deviceName: 'device' });
+    expect(clean.capabilities).toEqual({ mode: 'public-v1', localOnly: true, sync: false });
+    expect(clean.sync).toBeUndefined();
+    await mkdir(path.join(home, '.state'), { recursive: true });
+    await writeFile(path.join(home, '.state', 'sync.json'), '{not-json');
+    expect(JSON.parse((await runCli(['status', '--json'], home, providerHome)).stdout).sync).toBeUndefined();
 
     const outputPath = path.join(claudeDir, 'CLAUDE.md');
     await writeFile(outputPath, `${await readFile(outputPath, 'utf8')}\nhand edit\n`);
@@ -775,17 +805,34 @@ describe('reglet CLI', () => {
     });
   });
 
-  test('login --token writes sync state with device name', async () => {
+  test('public CLI does not expose sync commands', async () => {
     const { home, providerHome } = await useTempHomes();
 
-    await runCli(['login', 'http://reglet.test', '--token', 'dev-token', '--device', 'laptop'], home, providerHome);
-    const state = JSON.parse(await readFile(path.join(home, '.state', 'sync.json'), 'utf8')) as unknown;
+    const help = (await runCli(['--help'], home, providerHome)).stdout;
 
-    expect(state).toMatchObject({
-      version: 1,
-      serverUrl: 'http://reglet.test',
-      deviceToken: 'dev-token',
-      deviceName: 'laptop',
-    });
+    expect(help).not.toContain(' login');
+    expect(help).not.toContain(' register');
+    expect(help).not.toContain(' pair');
+    expect(help).not.toContain(' sync');
+    await expect(runCli(['sync'], home, providerHome)).rejects.toMatchObject({ code: 1 });
+    await expect(runCli(['login', 'http://reglet.test', '--token', 'dev-token'], home, providerHome)).rejects.toMatchObject({ code: 1 });
+    expect(await Bun.file(path.join(home, '.state', 'sync.json')).exists()).toBe(false);
+  });
+
+  test('manager snapshot is redacted and legacy network state stays inert', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await runCli(['init'], home, providerHome);
+    await writeFile(path.join(home, '.state', 'sync.json'), '{"deviceToken":"legacy-network-secret"}\n');
+
+    const result = await runCli(['manager', 'snapshot', '--json'], home, providerHome);
+    const snapshot = JSON.parse(result.stdout) as {
+      version: number;
+      operations: unknown[];
+      legacyNetworkState: { present: boolean; paths: string[] };
+    };
+    expect(snapshot.version).toBe(1);
+    expect(snapshot.operations).toEqual([]);
+    expect(snapshot.legacyNetworkState).toEqual({ present: true, paths: [path.join(home, '.state', 'sync.json')] });
+    expect(result.stdout).not.toContain('legacy-network-secret');
   });
 });

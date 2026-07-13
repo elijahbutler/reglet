@@ -1,22 +1,22 @@
 import { readFile } from 'node:fs/promises';
 import type { ManagedContent } from '../manifest.js';
-import type { McpServerDef } from '../master.js';
+import type { ResolvedMcpServerDef } from '../master.js';
 import type { ApplyContext, ApplyResult, ProviderId } from './types.js';
 import { isNodeError, isRecord } from './common.js';
 import { getOutput } from '../manifest.js';
 import { safeWriteFile } from '../engine/writer.js';
 
 interface JsonMcpFile {
-  mcpServers: Record<string, McpServerDef>;
+  mcpServers: Record<string, ResolvedMcpServerDef>;
 }
 
 export async function applyJsonMcp(
   provider: ProviderId,
   outputPath: string,
-  servers: Record<string, McpServerDef>,
+  servers: Record<string, ResolvedMcpServerDef>,
   ctx: ApplyContext,
 ): Promise<ApplyResult> {
-  const previous = await getOutput(outputPath);
+  const previous = await getOutput(outputPath, ctx.home);
   const previousManagedKeys = previous?.managedKeys ?? [];
   const baseConfig = await readJsonObject(outputPath);
   const existingServers = isRecord(baseConfig.mcpServers) ? { ...baseConfig.mcpServers } : {};
@@ -28,7 +28,7 @@ export async function applyJsonMcp(
   const nextServers = sortRecord({ ...existingServers, ...servers });
   const nextConfig: JsonMcpFile & Record<string, unknown> = {
     ...baseConfig,
-    mcpServers: nextServers as Record<string, McpServerDef>,
+    mcpServers: nextServers as Record<string, ResolvedMcpServerDef>,
   };
   const managedKeys = Object.keys(servers).sort((left, right) => left.localeCompare(right));
   const content = `${JSON.stringify(nextConfig, null, 2)}\n`;
@@ -40,6 +40,8 @@ export async function applyJsonMcp(
     managedContent: 'mcp' satisfies ManagedContent,
     dryRun: ctx.dryRun,
     managedKeys,
+    home: ctx.home,
+    operation: ctx.operation,
   });
 
   return {

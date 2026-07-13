@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import {
-  createSkill, deleteMcpServer, listManagedSkillTrees, listMcpServers, readSkillFile,
+  applyAll, createSkill, deleteMcpServer, listManagedSkillTrees, listMcpServers, readMcpServer, readSkillFile,
   applyStructuredPreview, initMasterDir, loadConfig, previewApplyStructured, renameSkill, renameSkillFile, saveConfig,
   serializeMcpServers, upsertMcpServer, validateMcpServer, writeSkillFile,
 } from '../src/index.js';
@@ -13,7 +13,7 @@ let providerHome = '';
 afterEach(async () => {
   if (home !== '') await rm(home, { recursive: true, force: true });
   if (providerHome !== '') await rm(providerHome, { recursive: true, force: true });
-  home = ''; providerHome = ''; delete process.env.REGLET_PROVIDER_HOME;
+  home = ''; providerHome = ''; delete process.env.REGLET_PROVIDER_HOME; delete process.env.REGLET_TEST_TOKEN;
 });
 async function setup(): Promise<string> { home = await mkdtemp(path.join(tmpdir(), 'reglet-native-edit-')); return home; }
 
@@ -47,13 +47,69 @@ describe('native MCP editing', () => {
     expect(validateMcpServer('bad', { command: 'node', url: 'https://example.test' }).ok).toBe(false);
     expect(validateMcpServer('remote', { url: 'file:///tmp/socket' }).ok).toBe(false);
     await upsertMcpServer('zeta', { url: 'https://example.test' }, root);
-    await upsertMcpServer('alpha', { command: 'node', env: { Z: 'secret', A: 'value' } }, root);
+    await expect(validateMcpServer('raw', { command: 'node', env: { TOKEN: 'secret' } }).issues).toContain(
+      'env.TOKEN must be a process-env reference, not a raw string',
+    );
+    await upsertMcpServer('alpha', {
+      command: 'node',
+      env: { Z: { source: 'process-env', name: 'REGLET_TEST_TOKEN' }, A: { source: 'process-env', name: 'REGLET_TEST_TOKEN' } },
+    }, root);
     expect((await listMcpServers(root)).servers.map((entry) => entry.name)).toEqual(['alpha', 'zeta']);
     expect(await readFile(path.join(root, 'mcp', 'servers.json'), 'utf8')).toBe(serializeMcpServers({
-      alpha: { command: 'node', env: { A: 'value', Z: 'secret' } }, zeta: { url: 'https://example.test' },
+      alpha: {
+        command: 'node',
+        env: {
+          A: { source: 'process-env', name: 'REGLET_TEST_TOKEN' },
+          Z: { source: 'process-env', name: 'REGLET_TEST_TOKEN' },
+        },
+      },
+      zeta: { url: 'https://example.test' },
     }));
     await deleteMcpServer('alpha', root);
     expect((await listMcpServers(root)).servers.map((entry) => entry.name)).toEqual(['zeta']);
+  });
+
+  test('rejects raw legacy environment values without exposing or copying them', async () => {
+    const root = await setup();
+    await initMasterDir(root);
+    const serversPath = path.join(root, 'mcp', 'servers.json');
+    await writeFile(serversPath, JSON.stringify({
+      mcpServers: {
+        legacy: { command: 'node', env: { TOKEN: 'super-secret' } },
+      },
+    }));
+
+    const listed = await listMcpServers(root);
+    expect(listed.servers[0]?.issues).toContain('env.TOKEN must be a process-env reference, not a raw string');
+    expect(JSON.stringify(listed)).not.toContain('super-secret');
+    expect(JSON.stringify(await readMcpServer('legacy', root))).not.toContain('super-secret');
+    await expect(upsertMcpServer('new-server', { command: 'node' }, root)).rejects.toThrow('Invalid MCP server legacy');
+    await expect(applyAll({ contents: ['mcp'], home: root })).rejects.toThrow('Invalid MCP configuration');
+
+    await deleteMcpServer('legacy', root);
+    expect((await listMcpServers(root)).servers).toEqual([]);
+  });
+
+  test('redacts raw legacy MCP values from a blocked structured preview', async () => {
+    const root = await setup();
+    providerHome = await mkdtemp(path.join(tmpdir(), 'reglet-native-provider-'));
+    process.env.REGLET_PROVIDER_HOME = providerHome;
+    await initMasterDir(root);
+    const config = await loadConfig(root);
+    config.providers.claude.enabled = true;
+    await saveConfig(config, root);
+    await writeFile(
+      path.join(root, 'mcp', 'servers.json'),
+      '{"mcpServers":{"legacy":{"command":"node","env":{"TOKEN":"raw-preview-secret"}}}}\n',
+    );
+    await writeFile(
+      path.join(providerHome, '.claude.json'),
+      '{"mcpServers":{"legacy":{"command":"node","env":{"TOKEN":"raw-preview-secret"}}}}\n',
+    );
+
+    const preview = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root });
+    expect(preview.validationIssues).toContain('mcp/legacy: env.TOKEN must be a process-env reference, not a raw string');
+    expect(JSON.stringify(preview)).not.toContain('raw-preview-secret');
   });
 
   test('renders exact redacted provider output and rejects a stale digest', async () => {
@@ -65,7 +121,11 @@ describe('native MCP editing', () => {
     config.providers.claude.enabled = true;
     config.providers.claude.mcp = true;
     await saveConfig(config, root);
-    await upsertMcpServer('managed', { command: 'node', env: { TOKEN: 'super-secret' } }, root);
+    process.env.REGLET_TEST_TOKEN = 'super-secret';
+    await upsertMcpServer('managed', {
+      command: 'node',
+      env: { TOKEN: { source: 'process-env', name: 'REGLET_TEST_TOKEN' } },
+    }, root);
     const output = path.join(providerHome, '.claude.json');
     await writeFile(output, '{"theme":"dark","mcpServers":{"local":{"command":"ruby"}}}\n');
 
@@ -73,9 +133,57 @@ describe('native MCP editing', () => {
     expect(preview.entries[0]?.diff).toContain('"theme": "dark"');
     expect(preview.entries[0]?.diff).toContain('<redacted:TOKEN>');
     expect(preview.entries[0]?.diff).not.toContain('super-secret');
+    expect(preview.entries[0]?.expectedTargetHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(preview.entries[0]?.resultingTargetHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(preview.entries[0]?.driftStatus).toBe('unmanaged');
+    expect(preview.entries[0]?.snapshot).toMatchObject({
+      behavior: 'snapshot-before-write',
+      location: expect.stringContaining('<receipt-id>'),
+    });
+
+    await writeFile(
+      output,
+      '{"mcpServers":{"managed":{"command":"node","env":{"TOKEN":"provider-secret-one"}}}}\n',
+    );
+    const changedProviderSecret = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root });
+    await writeFile(
+      output,
+      '{"mcpServers":{"managed":{"command":"node","env":{"TOKEN":"provider-secret-two"}}}}\n',
+    );
+    const rotatedProviderSecret = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root });
+    expect(rotatedProviderSecret.digest).not.toBe(changedProviderSecret.digest);
+    expect(JSON.stringify(rotatedProviderSecret)).not.toContain('provider-secret-two');
+
+    const sameFilesNewEnv = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root });
+    process.env.REGLET_TEST_TOKEN = 'rotated-secret';
+    const changedEnv = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root });
+    expect(changedEnv.digest).not.toBe(sameFilesNewEnv.digest);
+    expect(JSON.stringify(changedEnv)).not.toContain('rotated-secret');
 
     await writeFile(output, '{"theme":"light","mcpServers":{}}\n');
     await expect(applyStructuredPreview(preview.digest, { providers: ['claude'], contents: ['mcp'], home: root }))
       .rejects.toThrow('stale');
+  });
+
+  test('rejects missing process env references before writing providers', async () => {
+    const root = await setup();
+    providerHome = await mkdtemp(path.join(tmpdir(), 'reglet-native-provider-'));
+    process.env.REGLET_PROVIDER_HOME = providerHome;
+    await initMasterDir(root);
+    const config = await loadConfig(root);
+    config.providers.claude.enabled = true;
+    config.providers.claude.mcp = true;
+    await saveConfig(config, root);
+    await upsertMcpServer('managed', {
+      command: 'node',
+      env: { TOKEN: { source: 'process-env', name: 'REGLET_TEST_TOKEN' } },
+    }, root);
+
+    const preview = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root });
+    expect(preview.validationIssues).toContain('Missing process environment for MCP server managed: TOKEN:REGLET_TEST_TOKEN');
+    expect(preview.entries[0]).toMatchObject({ operation: 'skip', after: 'claude:mcp blocked by validation' });
+    await expect(applyStructuredPreview('unused', { providers: ['claude'], contents: ['mcp'], home: root }))
+      .rejects.toThrow('Missing process environment');
+    expect(await Bun.file(path.join(providerHome, '.claude.json')).exists()).toBe(false);
   });
 });

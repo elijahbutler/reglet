@@ -1,41 +1,29 @@
 # Usage
 
-## Scan Providers
+## Scan and enroll
 
 ```bash
 reglet scan
-```
-
-This prints detected provider directories and inventory counts without changing files.
-
-## Onboard Selectively
-
-Interactive:
-
-```bash
 reglet init
+reglet enroll claude:rules
 ```
 
-Scripted:
+`scan` is read-only. `init` creates the local master directory and lets you choose what to manage. Enrollment can be scoped to a provider or one content type (`rules`, `skills`, or `mcp`).
+
+## Review and apply
+
+Use the structured flow whenever a person reviews an operation:
 
 ```bash
-reglet init --provider claude --content rules
-reglet init --provider claude,codex --content rules,mcp
+reglet apply-structured preview --provider claude codex --content rules mcp
+reglet apply-structured apply --digest <digest> --provider claude codex --content rules mcp
 ```
 
-## Apply Master Config
+The preview reports exact redacted diffs, expected target hashes, validation issues, drift, snapshot locations, and a digest. The apply command regenerates the plan and rejects a stale digest.
 
-```bash
-reglet apply
-reglet apply --provider claude
-reglet apply --provider codex --content mcp
-```
+For unattended automation, `reglet apply` remains available. It refuses provider drift by default. A caller that has independently reviewed the replacement must pass `--reviewed-replacement`.
 
-Reglet writes generated provider files through the safe writer, creating a first backup and recording hashes in `.state/manifest.json`.
-
-Shared skills live in `~/.reglet/skills/<skill-name>/` and apply to every enrolled provider with skills support. Provider-specific skills live in `~/.reglet/skills/<provider>/<skill-name>/`, such as `~/.reglet/skills/codex/my-skill/`, and apply only to that provider. A provider-specific skill with the same name as a shared skill overrides the shared version for that provider.
-
-Provider-local skills are never imported automatically. Review and adopt them explicitly:
+## Skills
 
 ```bash
 reglet skills unmanaged
@@ -43,43 +31,53 @@ reglet skills adopt claude my-skill --scope shared
 reglet skills adopt claude my-skill --scope provider
 ```
 
-Adoption copies the skill into the master without deleting the provider-local source. Existing master destinations are reported as conflicts; use `--overwrite` only after reviewing the destination.
+Adoption copies a provider-local skill into the master directory without deleting the source. Review the resulting structured apply before distributing it.
 
-## Drift
+## MCP environment references
+
+Use a named local variable reference rather than a raw secret:
+
+```json
+{
+  "mcpServers": {
+    "example": {
+      "command": "node",
+      "env": {
+        "TOKEN": { "source": "process-env", "name": "LOCAL_TOKEN" }
+      }
+    }
+  }
+}
+```
+
+Export `LOCAL_TOKEN` in the environment that runs Reglet. A missing reference blocks preview/apply. Reglet never persists the resolved value in its master MCP file, review output, diagnostics, journal, or receipt.
+
+## Drift and recovery
 
 ```bash
 reglet status --check
 reglet import claude:rules
+reglet operations list
+reglet operations show <receipt-id>
+reglet operations restore <receipt-id>
+```
+
+Operation receipts show affected paths and the snapshot source for each. Restore is explicit. `reglet restore` and `reglet revert` are retained as compatibility shortcuts over the recovery model.
+
+## Stop managing
+
+```bash
 reglet unenroll claude:rules
 ```
 
-`status --check` exits with code `2` when drift is present. Rules drift can be imported back into the master directory.
+This retains the current provider file, removes Reglet ownership from the manifest, and strips the generated rules header. It does not erase provider content.
 
-## Restore
-
-```bash
-reglet restore claude
-reglet revert
-```
-
-Restore/revert uses the recorded backups and removes Reglet-created files that had no original.
-
-## Sync
-
-Single-user token mode:
+## Legacy state and manager snapshot
 
 ```bash
-reglet login http://localhost:3000 --token "$REGLET_TOKEN" --device laptop
-reglet sync
+reglet state legacy-network-status --json
+reglet state clear-legacy-network-state --json
+reglet manager snapshot --json
 ```
 
-Sync scope is limited to:
-
-- `rules/`
-- `skills/`
-- `mcp/servers.json`
-- `reglet.toml`
-
-Provider-specific skills are included because they are nested under `skills/<provider>/`.
-
-`.state/` is never synced.
+Pre-V1 network state is inert and only reports file paths/counts; Reglet never reads or sends its credential values. Clearing it is an explicit action. The manager snapshot is a single redacted local JSON response used by the native manager refresh path.

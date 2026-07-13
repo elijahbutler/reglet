@@ -100,7 +100,7 @@ struct StatusResponse: Decodable {
   let providers: [Provider]
   let drift: [DriftRecord]
   let driftedCount: Int
-  let sync: SyncInfo
+  let capabilities: Capabilities
 
   struct Provider: Decodable, Identifiable {
     let id: String
@@ -109,10 +109,10 @@ struct StatusResponse: Decodable {
     let contents: ScanResponse.Contents
   }
 
-  struct SyncInfo: Decodable {
-    let configured: Bool
-    let serverUrl: String
-    let deviceName: String
+  struct Capabilities: Decodable {
+    let mode: String
+    let localOnly: Bool
+    let sync: Bool
   }
 }
 
@@ -123,14 +123,6 @@ struct DriftRecord: Decodable, Identifiable {
   let status: String
 
   var id: String { "\(provider):\(content):\(outputPath)" }
-}
-
-struct SyncRunResponse: Decodable {
-  let version: Int
-  let pulled: [String]
-  let pushed: [String]
-  let conflicts: [String]
-  let deleted: [String]
 }
 
 struct RulesListResponse: Decodable {
@@ -288,8 +280,52 @@ struct McpServersResponse: Decodable {
 struct McpServerDefinition: Codable, Equatable {
   var command: String?
   var args: [String]?
-  var env: [String: String]?
+  var env: [String: McpProcessEnvironmentReference]?
   var url: String?
+}
+
+struct McpProcessEnvironmentReference: Codable, Equatable {
+  var source: String = "process-env"
+  var name: String
+}
+
+struct OperationReceipt: Decodable, Identifiable {
+  let id: String
+  let lifecycle: String
+  let startedAt: String
+  let completedAt: String?
+  let structuredPreviewDigest: String?
+  let targets: [Target]
+  let recovery: Recovery
+
+  struct Target: Decodable, Identifiable {
+    let path: String
+    let snapshot: String?
+    let snapshotKind: String
+    var id: String { path }
+  }
+
+  struct Recovery: Decodable {
+    let attempted: Bool
+    let recovered: Bool
+    let message: String?
+  }
+}
+
+struct LegacyNetworkState: Decodable {
+  let present: Bool
+  let paths: [String]
+}
+
+struct ManagerSnapshotResponse: Decodable {
+  let version: Int
+  let scan: ScanResponse
+  let status: StatusResponse
+  let skills: SkillsOverviewResponse
+  let rules: RulesListResponse
+  let mcp: McpServersResponse
+  let operations: [OperationReceipt]
+  let legacyNetworkState: LegacyNetworkState
 }
 
 struct StructuredApplyPreview: Decodable, Identifiable {
@@ -305,8 +341,17 @@ struct StructuredApplyPreview: Decodable, Identifiable {
     let operation: String
     let path: String
     let diff: String
+    let expectedTargetHash: String?
+    let resultingTargetHash: String?
+    let driftStatus: String
+    let snapshot: Snapshot
     let backup: Backup
     var id: String { "\(provider):\(content):\(path)" }
+  }
+
+  struct Snapshot: Decodable {
+    let behavior: String
+    let location: String?
   }
 
   struct Backup: Decodable {

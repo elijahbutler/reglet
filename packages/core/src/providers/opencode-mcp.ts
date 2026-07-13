@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { safeWriteFile } from '../engine/writer.js';
 import type { ManagedContent } from '../manifest.js';
 import { getOutput } from '../manifest.js';
-import type { McpServerDef } from '../master.js';
+import type { ResolvedMcpServerDef } from '../master.js';
 import { isNodeError, isRecord } from './common.js';
 import type { ApplyContext, ApplyResult } from './types.js';
 
@@ -28,10 +28,10 @@ const openCodeSchema = 'https://opencode.ai/config.json';
 
 export async function applyOpenCodeMcp(
   outputPath: string,
-  servers: Record<string, McpServerDef>,
+  servers: Record<string, ResolvedMcpServerDef>,
   ctx: ApplyContext,
 ): Promise<ApplyResult> {
-  const previous = await getOutput(outputPath);
+  const previous = await getOutput(outputPath, ctx.home);
   const previousManagedKeys = previous?.managedKeys ?? [];
   const baseConfig = await readJsonObject(outputPath);
   const existingServers = isRecord(baseConfig.mcp) ? { ...baseConfig.mcp } : {};
@@ -59,6 +59,8 @@ export async function applyOpenCodeMcp(
     managedContent: 'mcp' satisfies ManagedContent,
     dryRun: ctx.dryRun,
     managedKeys,
+    home: ctx.home,
+    operation: ctx.operation,
   });
 
   return {
@@ -95,7 +97,7 @@ async function readJsonObject(filePath: string): Promise<Record<string, unknown>
   }
 }
 
-function toOpenCodeServer(server: McpServerDef): OpenCodeServer {
+function toOpenCodeServer(server: ResolvedMcpServerDef): OpenCodeServer {
   if (server.url !== undefined && server.command === undefined) {
     return {
       type: 'remote',

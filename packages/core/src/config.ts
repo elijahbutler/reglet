@@ -16,9 +16,6 @@ export interface ProviderConfig {
 
 export interface RegletConfig {
   providers: Record<ProviderName, ProviderConfig>;
-  sync: {
-    server_url: string;
-  };
 }
 
 type TomlValue = string | number | boolean | Date | TomlValue[] | { readonly [key: string]: TomlValue };
@@ -35,9 +32,6 @@ export function defaultConfig(): RegletConfig {
     providers: Object.fromEntries(
       providerNames.map((name) => [name, { ...defaultProviderConfig }]),
     ) as Record<ProviderName, ProviderConfig>,
-    sync: {
-      server_url: '',
-    },
   };
 }
 
@@ -74,8 +68,6 @@ function normalizeConfig(value: unknown): RegletConfig {
   }
 
   const providers = isRecord(value.providers) ? value.providers : {};
-  const sync = isRecord(value.sync) ? value.sync : {};
-
   return {
     providers: Object.fromEntries(
       providerNames.map((name) => {
@@ -91,9 +83,6 @@ function normalizeConfig(value: unknown): RegletConfig {
         ];
       }),
     ) as Record<ProviderName, ProviderConfig>,
-    sync: {
-      server_url: typeof sync.server_url === 'string' ? sync.server_url : defaults.sync.server_url,
-    },
   };
 }
 
