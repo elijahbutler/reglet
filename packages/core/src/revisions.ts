@@ -3,7 +3,7 @@ import { providerNames, type ProviderName, type RegletConfig } from './config.js
 import { sha256String } from './fsutil.js';
 import type { ManagedContent } from './manifest.js';
 import type { MasterDir, MasterSkill } from './master.js';
-import { mcpEnvironmentDigest, redactMcpServers } from './mcp.js';
+import { effectiveMcpEnvironmentDigest, redactMcpServers, resolveEffectiveMcpDefinitions } from './mcp.js';
 
 export interface MasterRevisionSet {
   masterRevision: string;
@@ -53,7 +53,10 @@ export async function deriveMasterRevisions(
       ),
     },
     mcp: {
-      servers: redactMcpServers(master.mcpServers),
+      shared: canonicalMcpDefinitions(master.mcpDefinitions),
+      providers: Object.fromEntries(
+        providerNames.map((provider) => [provider, canonicalMcpDefinitions(master.providerMcpDefinitions[provider])]),
+      ),
     },
     enrollment: canonicalEnrollment(config),
   };
@@ -83,14 +86,34 @@ export async function deriveMasterRevisions(
           provider,
           content: 'mcp',
           enrollment: contentEnrollment(config, provider, 'mcp'),
-          servers: canonicalMaster.mcp.servers,
-          environmentFingerprint: mcpEnvironmentDigest(master.mcpServers, env),
+          servers: resolveEffectiveMcpDefinitions(master.mcpDefinitions, master.providerMcpDefinitions[provider], provider).map((entry) => ({
+            id: entry.id,
+            displayName: entry.displayName,
+            scope: entry.scope,
+            overrideOf: entry.overrideOf,
+            server: redactMcpServers({ [entry.id]: entry.server })[entry.id],
+            conflictStatus: entry.conflictStatus,
+          })),
+          environmentFingerprint: effectiveMcpEnvironmentDigest(
+            resolveEffectiveMcpDefinitions(master.mcpDefinitions, master.providerMcpDefinitions[provider], provider),
+            env,
+          ),
         }),
       },
     ]),
   ) as MasterRevisionSet['compositionRevisions'];
 
   return { masterRevision, compositionRevisions };
+}
+
+function canonicalMcpDefinitions(definitions: MasterDir['mcpDefinitions']): unknown[] {
+  return Object.values(definitions)
+    .map((definition) => ({
+      id: definition.id,
+      displayName: definition.displayName,
+      server: redactMcpServers({ [definition.id]: definition.server })[definition.id],
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
 }
 
 function contentEnrollment(

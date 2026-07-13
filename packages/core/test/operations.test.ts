@@ -18,6 +18,8 @@ import {
   replacePathFromText,
   restoreOperationReceipt,
   saveConfig,
+  getAdapter,
+  type ProviderName,
 } from '../src/index.js';
 
 let home = '';
@@ -33,7 +35,7 @@ afterEach(async () => {
   delete process.env.REGLET_TEST_TOKEN;
 });
 
-async function setup(enabled: Array<'claude' | 'codex' | 'gemini'>): Promise<void> {
+async function setup(enabled: ProviderName[]): Promise<void> {
   home = await mkdtemp(path.join(tmpdir(), 'reglet-operations-home-'));
   providerHome = await mkdtemp(path.join(tmpdir(), 'reglet-operations-provider-'));
   process.env.REGLET_HOME = home;
@@ -271,5 +273,29 @@ describe('operation receipts and recovery', () => {
     expect(detached.detached).toEqual([{ outputPath, content: 'rules', headerRemoved: true }]);
     expect(await readFile(outputPath, 'utf8')).toBe('<!-- source: rules/00-general.md -->\n\n# Keep this rule\n');
     expect((await loadManifest(home)).outputs[outputPath]).toBeUndefined();
+  });
+
+  test('detaches and restores MCP outputs for every compatible provider adapter', async () => {
+    const providers: ProviderName[] = ['claude', 'codex', 'cursor', 'gemini', 'windsurf', 'opencode'];
+    await setup(providers);
+    await writeFile(path.join(home, 'mcp', 'servers.json'), '{"mcpServers":{"shared":{"command":"node"}}}\n');
+    const report = await applyAll({ providers, contents: ['mcp'], home });
+    const receiptId = report.receipt?.id;
+    expect(receiptId).toBeDefined();
+
+    for (const provider of providers) {
+      const outputPath = getAdapter(provider).mcpPath();
+      expect(outputPath).not.toBeNull();
+      const before = await readFile(outputPath ?? '', 'utf8');
+      const detached = await detachManagedContent(provider, 'mcp', home);
+      expect(detached.detached).toEqual([{ outputPath, content: 'mcp', headerRemoved: false }]);
+      expect(await readFile(outputPath ?? '', 'utf8')).toBe(before);
+      expect((await loadManifest(home)).outputs[outputPath ?? '']).toBeUndefined();
+    }
+
+    await restoreOperationReceipt(receiptId ?? '', home);
+    for (const provider of providers) {
+      expect(await Bun.file(getAdapter(provider).mcpPath() ?? '').exists()).toBe(false);
+    }
   });
 });

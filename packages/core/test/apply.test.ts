@@ -48,6 +48,17 @@ async function enableProviders(home: string, providers: ProviderName[]): Promise
   await saveConfig(config, home);
 }
 
+async function readAppliedMcp(provider: ProviderName): Promise<Record<string, unknown>> {
+  const mcpPath = getAdapter(provider).mcpPath();
+  if (mcpPath === null) return {};
+  if (provider === 'codex') {
+    const parsed = parseToml(await readFile(mcpPath, 'utf8')) as { mcp_servers?: Record<string, unknown> };
+    return parsed.mcp_servers ?? {};
+  }
+  const parsed = JSON.parse(await readFile(mcpPath, 'utf8')) as { mcpServers?: Record<string, unknown>; mcp?: Record<string, unknown> };
+  return provider === 'opencode' ? parsed.mcp ?? {} : parsed.mcpServers ?? {};
+}
+
 describe('applyAll', () => {
   test('writes golden rules files for providers with rules support', async () => {
     const { home } = await useTempHomes();
@@ -271,6 +282,99 @@ describe('applyAll', () => {
 
     expect(claude).toEqual({ theme: 'dark', mcpServers: { userServer: { command: 'python' } } });
     expect(gemini).toEqual({ selectedAuthType: 'oauth', mcpServers: { userServer: { url: 'https://example.test' } } });
+  });
+
+  test('applies shared, provider-only, overrides, and display names for every mcp adapter', async () => {
+    const { home } = await useTempHomes();
+    const providers: ProviderName[] = ['claude', 'codex', 'cursor', 'gemini', 'windsurf', 'opencode'];
+    await enableProviders(home, providers);
+    await mkdir(path.join(home, 'mcp', 'providers'), { recursive: true });
+    await writeFile(
+      path.join(home, 'mcp', 'servers.json'),
+      `${JSON.stringify(
+        {
+          mcpServers: {
+            shared: { displayName: 'shared-out', server: { command: 'node' } },
+            renamed: { displayName: 'renamed-out', server: { url: 'https://shared.example.test/mcp' } },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    for (const provider of providers) {
+      await mkdir(path.join(home, 'mcp', 'providers', provider), { recursive: true });
+      await writeFile(
+        path.join(home, 'mcp', 'providers', provider, 'servers.json'),
+        `${JSON.stringify(
+          {
+            mcpServers: {
+              shared: { displayName: 'shared-out', server: { command: 'ruby' } },
+              only: { displayName: 'provider-out', server: { command: 'python' } },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    }
+
+    await applyAll({ providers, contents: ['mcp'], reviewedReplacement: true });
+
+    for (const provider of providers) {
+      expect(await readAppliedMcp(provider)).toEqual({
+        'provider-out': provider === 'opencode' ? { type: 'local', command: ['python'] } : { command: 'python' },
+        'renamed-out': provider === 'opencode' ? { type: 'remote', url: 'https://shared.example.test/mcp' } : { url: 'https://shared.example.test/mcp' },
+        'shared-out': provider === 'opencode' ? { type: 'local', command: ['ruby'] } : { command: 'ruby' },
+      });
+    }
+
+    await writeFile(
+      path.join(home, 'mcp', 'servers.json'),
+      `${JSON.stringify({
+        mcpServers: {
+          shared: { displayName: 'shared-out', server: { command: 'node' } },
+          renamed: { displayName: 'renamed-again', server: { url: 'https://shared.example.test/mcp' } },
+        },
+      }, null, 2)}\n`,
+    );
+    for (const provider of providers) {
+      await writeFile(
+        path.join(home, 'mcp', 'providers', provider, 'servers.json'),
+        '{"mcpServers":{}}\n',
+      );
+    }
+    await applyAll({ providers, contents: ['mcp'], reviewedReplacement: true });
+    for (const provider of providers) {
+      expect(await readAppliedMcp(provider)).toEqual({
+        'renamed-again': provider === 'opencode'
+          ? { type: 'remote', url: 'https://shared.example.test/mcp' }
+          : { url: 'https://shared.example.test/mcp' },
+        'shared-out': provider === 'opencode' ? { type: 'local', command: ['node'] } : { command: 'node' },
+      });
+    }
+  });
+
+  test('blocks provider mcp apply when distinct stable ids share a display name', async () => {
+    const { home } = await useTempHomes();
+    await enableProviders(home, ['claude']);
+    await mkdir(path.join(home, 'mcp'), { recursive: true });
+    await writeFile(
+      path.join(home, 'mcp', 'servers.json'),
+      `${JSON.stringify(
+        {
+          mcpServers: {
+            one: { displayName: 'duplicate', server: { command: 'node' } },
+            two: { displayName: 'duplicate', server: { command: 'ruby' } },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    await expect(applyAll({ providers: ['claude'], contents: ['mcp'] }))
+      .rejects.toThrow('display-name conflict duplicate (one, two)');
   });
 
   test('applies json mcp converters for cursor and windsurf with managed-key removal', async () => {

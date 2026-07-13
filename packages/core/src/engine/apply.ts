@@ -3,7 +3,7 @@ import { loadConfig } from '../config.js';
 import { renderRulesFile } from '../header.js';
 import { loadManifest, saveManifest, type ManagedContent } from '../manifest.js';
 import { loadMasterDir, type MasterDir } from '../master.js';
-import { listMcpServers, resolveMcpServersEnv } from '../mcp.js';
+import { listEffectiveMcpServers, listMcpServers, providerMcpScope, resolveEffectiveMcpServersEnv } from '../mcp.js';
 import { regletHome } from '../paths.js';
 import { allAdapters, getAdapter } from '../providers/registry.js';
 import type { ApplyResult, ProviderAdapter, ProviderId } from '../providers/types.js';
@@ -74,7 +74,7 @@ async function applyAllWithHome(opts: ApplyAllOptions, home: string): Promise<Ap
 
   try {
     if (selectedContents.includes('mcp')) {
-      await assertValidMcp(home);
+      await assertValidMcp(home, selectedProviders);
     }
 
     for (const adapter of selectedProviders) {
@@ -106,7 +106,7 @@ async function applyAllWithHome(opts: ApplyAllOptions, home: string): Promise<Ap
           continue;
         }
 
-        const mcpResult = adapter.applyMcp(resolveMcpServersEnv(master.mcpServers), {
+        const mcpResult = adapter.applyMcp(await resolveEffectiveMcpServersEnv(adapter.id, home), {
           dryRun,
           home,
           operation,
@@ -154,10 +154,21 @@ function appliedCompositionRevisions(
   return applied;
 }
 
-async function assertValidMcp(home: string): Promise<void> {
+async function assertValidMcp(home: string, providers: readonly ProviderAdapter[]): Promise<void> {
   const issues = (await listMcpServers(home)).servers.flatMap((server) =>
-    server.issues.map((issue) => `mcp/${server.name}: ${issue}`),
+    server.issues.map((issue) => `mcp/${server.id}: ${issue}`),
   );
+  for (const provider of providers) {
+    issues.push(
+      ...(await listMcpServers(providerMcpScope(provider.id), home)).servers.flatMap((server) =>
+        server.issues.map((issue) => `mcp/${provider.id}/${server.id}: ${issue}`),
+      ),
+    );
+    const conflict = (await listEffectiveMcpServers(provider.id, home)).find((entry) => entry.conflictStatus.state === 'conflict');
+    if (conflict !== undefined && conflict.conflictStatus.state === 'conflict') {
+      issues.push(`mcp/${provider.id}: display-name conflict ${conflict.conflictStatus.displayName} (${conflict.conflictStatus.conflictingIds.join(', ')})`);
+    }
+  }
   if (issues.length > 0) {
     throw new Error(`Invalid MCP configuration: ${issues.join('; ')}`);
   }

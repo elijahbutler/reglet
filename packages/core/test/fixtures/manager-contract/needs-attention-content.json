@@ -10,25 +10,158 @@
     "requiresExplicitReview": true
   },
   "providerDiscovery": [
-    { "provider": "claude", "displayName": "Claude Code", "presence": "needs-attention", "detected": true, "capabilities": { "rules": { "state": "supported" }, "skills": { "state": "supported" }, "mcp": { "state": "needs-attention", "reason": "invalid JSON" } } }
+    {
+      "provider": "claude",
+      "displayName": "Claude Code",
+      "presence": "needs-attention",
+      "detected": true,
+      "capabilities": {
+        "rules": {
+          "state": "supported"
+        },
+        "skills": {
+          "state": "supported"
+        },
+        "mcp": {
+          "state": "needs-attention",
+          "reason": "invalid JSON"
+        }
+      }
+    }
   ],
   "sourceInventory": [
-    { "provider": "claude", "content": "mcp", "path": "/providers/.claude.json", "readable": false, "exists": true, "items": [], "issue": "invalid JSON" }
+    {
+      "provider": "claude",
+      "content": "mcp",
+      "path": "/providers/.claude.json",
+      "readable": false,
+      "exists": true,
+      "items": [],
+      "issue": "invalid JSON"
+    }
   ],
   "enrollmentMatrix": [
-    { "provider": "claude", "displayName": "Claude Code", "enabled": true, "cells": { "rules": { "provider": "claude", "content": "rules", "enrolled": true, "capability": { "state": "supported" }, "destinationPath": "/providers/.claude/CLAUDE.md" }, "skills": { "provider": "claude", "content": "skills", "enrolled": true, "capability": { "state": "supported" }, "destinationPath": "/providers/.claude/skills" }, "mcp": { "provider": "claude", "content": "mcp", "enrolled": false, "capability": { "state": "needs-attention", "reason": "invalid JSON" }, "destinationPath": "/providers/.claude.json" } } }
+    {
+      "provider": "claude",
+      "displayName": "Claude Code",
+      "enabled": true,
+      "cells": {
+        "rules": {
+          "provider": "claude",
+          "content": "rules",
+          "enrolled": true,
+          "capability": {
+            "state": "supported"
+          },
+          "destinationPath": "/providers/.claude/CLAUDE.md"
+        },
+        "skills": {
+          "provider": "claude",
+          "content": "skills",
+          "enrolled": true,
+          "capability": {
+            "state": "supported"
+          },
+          "destinationPath": "/providers/.claude/skills"
+        },
+        "mcp": {
+          "provider": "claude",
+          "content": "mcp",
+          "enrolled": false,
+          "capability": {
+            "state": "needs-attention",
+            "reason": "invalid JSON"
+          },
+          "destinationPath": "/providers/.claude.json"
+        }
+      }
+    }
   ],
   "master": {
-    "rules": { "sharedDocuments": 1, "providerOverlays": { "claude": 0, "codex": 0, "cursor": 0, "gemini": 0, "windsurf": 0, "opencode": 0 } },
-    "skills": { "sharedSkills": 0, "providerScopedSkills": { "claude": 0, "codex": 0, "cursor": 0, "gemini": 0, "windsurf": 0, "opencode": 0 } },
-    "mcp": { "sharedServers": [] }
+    "rules": {
+      "sharedDocuments": 1,
+      "providerOverlays": {
+        "claude": 0,
+        "codex": 0,
+        "cursor": 0,
+        "gemini": 0,
+        "windsurf": 0,
+        "opencode": 0
+      }
+    },
+    "skills": {
+      "sharedSkills": 0,
+      "providerScopedSkills": {
+        "claude": 0,
+        "codex": 0,
+        "cursor": 0,
+        "gemini": 0,
+        "windsurf": 0,
+        "opencode": 0
+      }
+    },
+    "mcp": {
+      "sharedServers": [],
+      "providerServers": {
+        "claude": [],
+        "codex": [],
+        "cursor": [],
+        "gemini": [],
+        "windsurf": [],
+        "opencode": []
+      }
+    }
   },
-  "state": { "state": "changesReady", "reasons": ["noAppliedRevision"] },
+  "state": {
+    "state": "changesReady",
+    "reasons": [
+      "noAppliedRevision"
+    ]
+  },
   "effectiveProviders": [
-    { "provider": "claude", "displayName": "Claude Code", "contents": { "rules": { "enrolled": true, "destinationPath": "/providers/.claude/CLAUDE.md", "masterItems": 1, "capability": { "state": "supported" } }, "skills": { "enrolled": true, "destinationPath": "/providers/.claude/skills", "masterItems": 0, "capability": { "state": "supported" } } } }
+    {
+      "provider": "claude",
+      "displayName": "Claude Code",
+      "contents": {
+        "rules": {
+          "enrolled": true,
+          "destinationPath": "/providers/.claude/CLAUDE.md",
+          "masterItems": 1,
+          "capability": {
+            "state": "supported"
+          }
+        },
+        "skills": {
+          "enrolled": true,
+          "destinationPath": "/providers/.claude/skills",
+          "masterItems": 0,
+          "capability": {
+            "state": "supported"
+          }
+        }
+      }
+    }
   ],
-  "structuredPlan": { "available": false, "reason": "snapshot-read-only", "entries": [{ "provider": "claude", "content": "mcp", "destinationPath": "/providers/.claude.json", "state": "needs-attention", "reason": "invalid JSON" }] },
+  "structuredPlan": {
+    "available": false,
+    "reason": "snapshot-read-only",
+    "entries": [
+      {
+        "provider": "claude",
+        "content": "mcp",
+        "destinationPath": "/providers/.claude.json",
+        "state": "needs-attention",
+        "reason": "invalid JSON"
+      }
+    ]
+  },
   "driftInbox": [],
-  "receipts": { "list": [], "details": [] },
-  "legacyNetworkState": { "present": false, "paths": [] }
+  "receipts": {
+    "list": [],
+    "details": []
+  },
+  "legacyNetworkState": {
+    "present": false,
+    "paths": []
+  }
 }

@@ -100,4 +100,38 @@ describe('master and composition revisions', () => {
     expect(JSON.stringify(second)).not.toContain('secret-two');
     expect(second.entries[0]?.compositionRevision).not.toBe(first.entries[0]?.compositionRevision);
   });
+
+  test('provider-scoped MCP edits invalidate only the matching provider composition', async () => {
+    await setup();
+    const config = await loadConfig(home);
+    const before = await deriveMasterRevisions(await loadMasterDir(home), config);
+    await mkdir(path.join(home, 'mcp', 'providers', 'claude'), { recursive: true });
+    await writeFile(
+      path.join(home, 'mcp', 'providers', 'claude', 'servers.json'),
+      '{"mcpServers":{"local":{"command":"node"}}}\n',
+    );
+    const after = await deriveMasterRevisions(await loadMasterDir(home), config);
+
+    expect(after.compositionRevisions.claude.mcp).not.toBe(before.compositionRevisions.claude.mcp);
+    expect(after.compositionRevisions.codex.mcp).toBe(before.compositionRevisions.codex.mcp);
+  });
+
+  test('unrelated provider-scoped MCP edits do not stale a selected provider preview', async () => {
+    await setup();
+    const config = await loadConfig(home);
+    config.providers.claude.enabled = true;
+    config.providers.claude.mcp = true;
+    await saveConfig(config, home);
+    const before = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home });
+    await mkdir(path.join(home, 'mcp', 'providers', 'codex'), { recursive: true });
+    await writeFile(
+      path.join(home, 'mcp', 'providers', 'codex', 'servers.json'),
+      '{"mcpServers":{"codex-only":{"command":"node"}}}\n',
+    );
+    const after = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home });
+
+    expect(after.masterRevision).not.toBe(before.masterRevision);
+    expect(after.entries[0]?.compositionRevision).toBe(before.entries[0]?.compositionRevision);
+    expect(after.digest).toBe(before.digest);
+  });
 });

@@ -92,6 +92,8 @@ Merge gate:
 
 ### Round 0.4: provider-scoped MCP core
 
+Status: Complete.
+
 Goal: make MCP composition match the shared/provider-specific model before building its Manager UI.
 
 Deliverables:

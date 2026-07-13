@@ -5,7 +5,8 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import {
   applyAll, createSkill, deleteMcpServer, listManagedSkillTrees, listMcpServers, readMcpServer, readSkillFile,
   applyStructuredPreview, initMasterDir, loadConfig, previewApplyStructured, renameSkill, renameSkillFile, saveConfig,
-  serializeMcpServers, upsertMcpServer, validateMcpServer, writeSkillFile,
+  listEffectiveMcpServers, providerMcpScope, renameMcpServerDisplayName, serializeMcpServers, upsertMcpServer,
+  validateMcpServer, writeSkillFile,
 } from '../src/index.js';
 
 let home = '';
@@ -88,6 +89,51 @@ describe('native MCP editing', () => {
 
     await deleteMcpServer('legacy', root);
     expect((await listMcpServers(root)).servers).toEqual([]);
+  });
+
+  test('keeps stable ids across provider overrides, display renames, and deletes without rewriting legacy shared data', async () => {
+    const root = await setup();
+    await initMasterDir(root);
+    const sharedPath = path.join(root, 'mcp', 'servers.json');
+    const legacy = '{"mcpServers":{"stable":{"command":"node"},"shared-only":{"command":"ruby"}}}\n';
+    await writeFile(sharedPath, legacy);
+
+    await upsertMcpServer('stable', { command: 'python' }, providerMcpScope('claude'), root, 'claude-name');
+    await upsertMcpServer('provider-only', { command: 'deno' }, providerMcpScope('claude'), root, 'provider-name');
+
+    const shared = await listMcpServers(root);
+    const scoped = await listMcpServers(providerMcpScope('claude'), root);
+    expect(shared.servers.find((entry) => entry.id === 'stable')?.affectedProviders).not.toContain('claude');
+    expect(shared.servers.find((entry) => entry.id === 'stable')?.affectedProviders).toContain('codex');
+    expect(scoped.servers.find((entry) => entry.id === 'stable')?.overrideOf).toBe('stable');
+    expect(scoped.servers.find((entry) => entry.id === 'provider-only')?.overrideOf).toBeNull();
+    expect(await readFile(sharedPath, 'utf8')).toBe(legacy);
+
+    await renameMcpServerDisplayName('stable', 'renamed-output', providerMcpScope('claude'), root);
+    expect((await listEffectiveMcpServers('claude', root)).find((entry) => entry.id === 'stable'))
+      .toMatchObject({ displayName: 'renamed-output', overrideOf: 'stable' });
+    await deleteMcpServer('stable', providerMcpScope('claude'), root);
+    expect((await listEffectiveMcpServers('claude', root)).find((entry) => entry.id === 'stable'))
+      .toMatchObject({ displayName: 'stable', scope: { kind: 'shared' }, overrideOf: null });
+  });
+
+  test('does not let an invalid unselected provider scope block preview', async () => {
+    const root = await setup();
+    providerHome = await mkdtemp(path.join(tmpdir(), 'reglet-native-provider-'));
+    process.env.REGLET_PROVIDER_HOME = providerHome;
+    await initMasterDir(root);
+    const config = await loadConfig(root);
+    config.providers.claude.enabled = true;
+    config.providers.claude.mcp = true;
+    await saveConfig(config, root);
+    await upsertMcpServer('shared', { command: 'node' }, root);
+    const codexScope = path.join(root, 'mcp', 'providers', 'codex');
+    await Bun.write(path.join(codexScope, 'servers.json'), '{"mcpServers":{"bad":{"command":"node","env":{"TOKEN":"provider-secret"}}}}\n');
+
+    const preview = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root });
+    expect(preview.validationIssues).toEqual([]);
+    expect(preview.entries[0]?.operation).toBe('write');
+    expect(JSON.stringify(preview)).not.toContain('provider-secret');
   });
 
   test('redacts raw legacy MCP values from a blocked structured preview', async () => {

@@ -5,7 +5,7 @@ import { loadConfig } from '../config.js';
 import { renderRulesFile } from '../header.js';
 import { getOutput, loadManifest } from '../manifest.js';
 import { loadMasterDir, type McpServerDef, type ResolvedMcpServerDef } from '../master.js';
-import { listMcpServers, mcpEnvironmentDigest, resolveMcpServersEnv } from '../mcp.js';
+import { effectiveMcpEnvironmentDigest, listEffectiveMcpServers, listMcpServers, providerMcpScope, resolveEffectiveMcpServersEnv } from '../mcp.js';
 import { providerHome, regletHome } from '../paths.js';
 import { allAdapters, getAdapter } from '../providers/registry.js';
 import type { ProviderAdapter, ProviderId } from '../providers/types.js';
@@ -64,7 +64,20 @@ export async function previewApplyStructured(
 ): Promise<StructuredApplyPreview> {
   const home = options.home ?? regletHome();
   const body = await previewApplyStructuredBody(options, home);
-  return { ...body, digest: sha256String(stableStringify({ body, processEnv: await previewProcessEnvDigest(home) })) };
+  const compositionBody = {
+    version: body.version,
+    validationIssues: body.validationIssues,
+    entries: body.entries,
+  };
+  const providers = options.providers ?? allAdapters().map((adapter) => adapter.id);
+  const includesMcp = (options.contents ?? ['rules', 'skills', 'mcp']).includes('mcp');
+  return {
+    ...body,
+    digest: sha256String(stableStringify({
+      body: compositionBody,
+      processEnv: includesMcp ? await previewProcessEnvDigest(home, providers) : {},
+    })),
+  };
 }
 
 export async function applyStructuredPreview(
@@ -100,7 +113,7 @@ async function previewApplyStructuredBody(
   const revisions = await deriveMasterRevisions(master, config);
   const providers = options.providers === undefined ? allAdapters() : options.providers.map((id) => getAdapter(id));
   const contents = options.contents ?? ['rules', 'skills', 'mcp'];
-  const validationIssues = await collectValidationIssues(home);
+  const validationIssues = await collectValidationIssues(home, providers);
   const driftByPath = new Map<string, DriftStatus>(
     (await detectDrift(home)).map((record): [string, DriftStatus] => [record.outputPath, record.status]),
   );
@@ -117,22 +130,31 @@ async function previewApplyStructuredBody(
         entries.push(await previewRules(adapter, [...master.rules, ...master.providerRules[adapter.id]], home, driftByPath, revisions.compositionRevisions[adapter.id].rules));
       }
       if (content === 'skills') entries.push(...(await previewSkills(adapter, master, home, driftByPath, revisions.compositionRevisions[adapter.id].skills)));
-      if (content === 'mcp') entries.push(await previewMcp(adapter, master.mcpServers, home, driftByPath, validationIssues, revisions.compositionRevisions[adapter.id].mcp));
+      if (content === 'mcp') entries.push(await previewMcp(adapter, home, driftByPath, validationIssues, revisions.compositionRevisions[adapter.id].mcp));
     }
   }
 
   return { version: 1, masterRevision: revisions.masterRevision, validationIssues, entries };
 }
 
-async function collectValidationIssues(home: string): Promise<string[]> {
+async function collectValidationIssues(home: string, providers: readonly ProviderAdapter[]): Promise<string[]> {
   const issues: string[] = [];
   for (const server of (await listMcpServers(home)).servers) {
-    issues.push(...server.issues.map((issue) => `mcp/${server.name}: ${issue}`));
+    issues.push(...server.issues.map((issue) => `mcp/${server.id}: ${issue}`));
   }
-  try {
-    resolveMcpServersEnv((await loadMasterDir(home)).mcpServers);
-  } catch (error) {
-    issues.push(error instanceof Error ? error.message : String(error));
+  for (const adapter of providers) {
+    for (const server of (await listMcpServers(providerMcpScope(adapter.id), home)).servers) {
+      issues.push(...server.issues.map((issue) => `mcp/${adapter.id}/${server.id}: ${issue}`));
+    }
+    const conflict = (await listEffectiveMcpServers(adapter.id, home)).find((entry) => entry.conflictStatus.state === 'conflict');
+    if (conflict !== undefined && conflict.conflictStatus.state === 'conflict') {
+      issues.push(`mcp/${adapter.id}: display-name conflict ${conflict.conflictStatus.displayName} (${conflict.conflictStatus.conflictingIds.join(', ')})`);
+    }
+    try {
+      await resolveEffectiveMcpServersEnv(adapter.id, home);
+    } catch (error) {
+      issues.push(error instanceof Error ? error.message : String(error));
+    }
   }
   const master = await loadMasterDir(home);
   for (const skill of [...master.skills, ...Object.values(master.providerSkills).flat()]) {
@@ -210,7 +232,6 @@ async function previewSkills(
 
 async function previewMcp(
   adapter: ProviderAdapter,
-  servers: Record<string, McpServerDef>,
   home: string,
   driftByPath: ReadonlyMap<string, DriftStatus>,
   validationIssues: readonly string[],
@@ -220,12 +241,14 @@ async function previewMcp(
   if (outputPath === null) {
     return skipEntry(adapter.id, 'mcp', `${adapter.id}:mcp unsupported`);
   }
-  if (validationIssues.some((issue) => issue.startsWith('mcp/'))) {
+  if (validationIssues.some((issue) => issue.startsWith('mcp/') && !isOtherProviderMcpIssue(issue, adapter.id))) {
     return skipEntry(adapter.id, 'mcp', `${adapter.id}:mcp blocked by validation`);
   }
+  const effectiveServers = await listEffectiveMcpServers(adapter.id, home);
+  const redactionServers = Object.fromEntries(effectiveServers.map((entry) => [entry.displayName, entry.server]));
   let resolvedServers: Record<string, ResolvedMcpServerDef>;
   try {
-    resolvedServers = resolveMcpServersEnv(servers);
+    resolvedServers = await resolveEffectiveMcpServersEnv(adapter.id, home);
   } catch {
     return skipEntry(adapter.id, 'mcp', `${adapter.id}:mcp blocked by validation`);
   }
@@ -234,8 +257,8 @@ async function previewMcp(
   }
   const rawBefore = await readOptionalFile(outputPath);
   const rawAfter = await renderMcpInSandbox(adapter, outputPath, home);
-  const before = redactMcpSecrets(rawBefore, servers);
-  const after = redactMcpSecrets(rawAfter, servers);
+  const before = redactMcpSecrets(rawBefore, redactionServers);
+  const after = redactMcpSecrets(rawAfter, redactionServers);
   return makeEntry(
     adapter.id,
     'mcp',
@@ -249,6 +272,11 @@ async function previewMcp(
     rawBefore,
     rawAfter,
   );
+}
+
+function isOtherProviderMcpIssue(issue: string, provider: ProviderId): boolean {
+  const scopedProvider = issue.match(/^mcp\/(claude|codex|cursor|gemini|windsurf|opencode)(?:\/|:)/)?.[1];
+  return scopedProvider !== undefined && scopedProvider !== provider;
 }
 
 async function renderMcpInSandbox(
@@ -266,6 +294,7 @@ async function renderMcpInSandbox(
     await mkdir(path.join(sandboxHome, 'mcp'), { recursive: true });
     await copyIfPresent(path.join(home, 'reglet.toml'), path.join(sandboxHome, 'reglet.toml'));
     await copyIfPresent(path.join(home, 'mcp', 'servers.json'), path.join(sandboxHome, 'mcp', 'servers.json'));
+    await copyIfPresent(path.join(home, 'mcp', 'providers'), path.join(sandboxHome, 'mcp', 'providers'));
     await copyIfPresent(outputPath, sandboxOutput);
     process.env.REGLET_PROVIDER_HOME = sandboxProviderHome;
     await applyAll({ providers: [adapter.id], contents: ['mcp'], home: sandboxHome });
@@ -320,8 +349,15 @@ function redactLikelyEnvironmentValues(content: string): string {
   );
 }
 
-async function previewProcessEnvDigest(home: string): Promise<Record<string, unknown>> {
-  return mcpEnvironmentDigest((await loadMasterDir(home)).mcpServers);
+async function previewProcessEnvDigest(home: string, providers: readonly ProviderId[]): Promise<Record<string, unknown>> {
+  return Object.fromEntries(
+    await Promise.all(
+      providers.map(async (provider) => [
+        provider,
+        effectiveMcpEnvironmentDigest(await listEffectiveMcpServers(provider, home)),
+      ] as const),
+    ),
+  );
 }
 
 function redactJsonEnvValue(content: string, key: string, replacement: string): string {

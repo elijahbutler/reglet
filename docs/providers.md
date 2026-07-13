@@ -11,7 +11,9 @@
 
 ## Managed MCP Keys
 
-Reglet tracks the server names it manages in `.state/manifest.json`. On subsequent applies it removes or updates only those managed keys. User-added MCP server entries in the same provider file are preserved.
+Reglet tracks the provider output names it manages in `.state/manifest.json`. On subsequent applies it removes or updates only those managed keys. User-added MCP server entries in the same provider file are preserved.
+
+In the Master directory, MCP server identity is a stable id independent from the editable provider output name. Shared definitions live in `mcp/servers.json`; provider-specific definitions and overrides live in `mcp/providers/<provider>/servers.json`.
 
 ## Generated Rules Header
 

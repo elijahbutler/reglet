@@ -35,6 +35,23 @@ Adoption copies a provider-local skill into the master directory without deletin
 
 ## MCP environment references
 
+MCP definitions are shared by default:
+
+```bash
+reglet mcp list --json
+reglet mcp upsert stable-id --display-name provider-output-name --json < server.json
+reglet mcp rename-display-name stable-id new-output-name --json
+```
+
+Provider-scoped definitions use the same stable id model and override shared definitions with the same id only for that provider:
+
+```bash
+reglet mcp list --scope provider --provider claude --json
+reglet mcp upsert stable-id --scope provider --provider claude --display-name claude-output --json < server.json
+reglet mcp list --effective-provider claude --json
+reglet import claude:mcp --scope provider --json
+```
+
 Use a named local variable reference rather than a raw secret:
 
 ```json

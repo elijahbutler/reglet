@@ -213,6 +213,50 @@ describe('drift, import, and revert', () => {
     expect(master.mcpServers.managed).toBeUndefined();
   });
 
+  test('imports a renamed managed server into provider scope without rewriting shared definitions', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await mkdir(path.join(home, 'mcp'), { recursive: true });
+    await enableProviders(home, ['claude']);
+    const sharedPath = path.join(home, 'mcp', 'servers.json');
+    const shared = `${JSON.stringify({
+      mcpServers: { stable: { displayName: 'provider-output', server: { command: 'node' } } },
+    }, null, 2)}\n`;
+    await writeFile(sharedPath, shared);
+    await applyAll({ providers: ['claude'], contents: ['mcp'] });
+    await writeFile(
+      path.join(providerHome, '.claude.json'),
+      `${JSON.stringify({ mcpServers: { 'provider-output': { command: 'ruby' } } }, null, 2)}\n`,
+    );
+
+    const result = await importDriftedMcp('claude', home, 'provider');
+
+    expect(result).toMatchObject({ scope: 'provider', importedServers: ['provider-output'] });
+    expect(result.importedPath).toBe(path.join(home, 'mcp', 'providers', 'claude', 'servers.json'));
+    expect(await readFile(sharedPath, 'utf8')).toBe(shared);
+    const scoped = JSON.parse(await readFile(result.importedPath, 'utf8')) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(scoped.mcpServers).toEqual({
+      stable: { displayName: 'provider-output', server: { command: 'ruby' } },
+    });
+  });
+
+  test('rejects provider-scope removal of a shared server without changing either scope', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await mkdir(path.join(home, 'mcp'), { recursive: true });
+    await enableProviders(home, ['claude']);
+    const sharedPath = path.join(home, 'mcp', 'servers.json');
+    const shared = '{"mcpServers":{"managed":{"command":"node"}}}\n';
+    await writeFile(sharedPath, shared);
+    await applyAll({ providers: ['claude'], contents: ['mcp'] });
+    await writeFile(path.join(providerHome, '.claude.json'), '{"mcpServers":{}}\n');
+
+    await expect(importDriftedMcp('claude', home, 'provider'))
+      .rejects.toThrow('Cannot import removal of shared MCP server managed into provider scope');
+    expect(await readFile(sharedPath, 'utf8')).toBe(shared);
+    expect(await Bun.file(path.join(home, 'mcp', 'providers', 'claude', 'servers.json')).exists()).toBe(false);
+  });
+
   test('revert restores backed-up originals byte-identically and removes created outputs', async () => {
     const { home, providerHome } = await useTempHomes();
     await writeMasterRule(home);

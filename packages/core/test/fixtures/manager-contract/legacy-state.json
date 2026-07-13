@@ -13,17 +13,88 @@
   "sourceInventory": [],
   "enrollmentMatrix": [],
   "master": {
-    "rules": { "sharedDocuments": 0, "providerOverlays": { "claude": 0, "codex": 0, "cursor": 0, "gemini": 0, "windsurf": 0, "opencode": 0 } },
-    "skills": { "sharedSkills": 0, "providerScopedSkills": { "claude": 0, "codex": 0, "cursor": 0, "gemini": 0, "windsurf": 0, "opencode": 0 } },
-    "mcp": { "sharedServers": [] }
+    "rules": {
+      "sharedDocuments": 0,
+      "providerOverlays": {
+        "claude": 0,
+        "codex": 0,
+        "cursor": 0,
+        "gemini": 0,
+        "windsurf": 0,
+        "opencode": 0
+      }
+    },
+    "skills": {
+      "sharedSkills": 0,
+      "providerScopedSkills": {
+        "claude": 0,
+        "codex": 0,
+        "cursor": 0,
+        "gemini": 0,
+        "windsurf": 0,
+        "opencode": 0
+      }
+    },
+    "mcp": {
+      "sharedServers": [],
+      "providerServers": {
+        "claude": [],
+        "codex": [],
+        "cursor": [],
+        "gemini": [],
+        "windsurf": [],
+        "opencode": []
+      }
+    }
   },
-  "state": { "state": "driftDetected", "reasons": ["managedOutputModified"] },
+  "state": {
+    "state": "driftDetected",
+    "reasons": [
+      "managedOutputModified"
+    ]
+  },
   "effectiveProviders": [],
-  "structuredPlan": { "available": false, "reason": "snapshot-read-only", "entries": [] },
-  "driftInbox": [{ "provider": "claude", "content": "rules", "outputPath": "/providers/.claude/CLAUDE.md", "status": "modified" }],
-  "receipts": {
-    "list": [{ "id": "receipt-1", "lifecycle": "completed", "startedAt": "2026-07-13T00:00:00.000Z", "completedAt": "2026-07-13T00:00:01.000Z", "targetCount": 1 }],
-    "details": [{ "id": "receipt-1", "lifecycle": "completed", "startedAt": "2026-07-13T00:00:00.000Z", "completedAt": "2026-07-13T00:00:01.000Z", "targets": [], "recovery": { "attempted": false, "recovered": false } }]
+  "structuredPlan": {
+    "available": false,
+    "reason": "snapshot-read-only",
+    "entries": []
   },
-  "legacyNetworkState": { "present": true, "paths": ["/tmp/reglet-legacy/.state/sync.json"] }
+  "driftInbox": [
+    {
+      "provider": "claude",
+      "content": "rules",
+      "outputPath": "/providers/.claude/CLAUDE.md",
+      "status": "modified"
+    }
+  ],
+  "receipts": {
+    "list": [
+      {
+        "id": "receipt-1",
+        "lifecycle": "completed",
+        "startedAt": "2026-07-13T00:00:00.000Z",
+        "completedAt": "2026-07-13T00:00:01.000Z",
+        "targetCount": 1
+      }
+    ],
+    "details": [
+      {
+        "id": "receipt-1",
+        "lifecycle": "completed",
+        "startedAt": "2026-07-13T00:00:00.000Z",
+        "completedAt": "2026-07-13T00:00:01.000Z",
+        "targets": [],
+        "recovery": {
+          "attempted": false,
+          "recovered": false
+        }
+      }
+    ]
+  },
+  "legacyNetworkState": {
+    "present": true,
+    "paths": [
+      "/tmp/reglet-legacy/.state/sync.json"
+    ]
+  }
 }

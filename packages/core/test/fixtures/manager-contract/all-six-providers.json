@@ -10,51 +10,359 @@
     "requiresExplicitReview": true
   },
   "providerDiscovery": [
-    { "provider": "claude", "displayName": "Claude Code", "presence": "installed", "detected": true, "capabilities": { "rules": { "state": "supported" }, "skills": { "state": "supported" }, "mcp": { "state": "supported" } } },
-    { "provider": "codex", "displayName": "Codex", "presence": "installed", "detected": true, "capabilities": { "rules": { "state": "supported" }, "skills": { "state": "supported" }, "mcp": { "state": "supported" } } },
-    { "provider": "cursor", "displayName": "Cursor", "presence": "installed", "detected": true, "capabilities": { "rules": { "state": "supported" }, "skills": { "state": "supported" }, "mcp": { "state": "supported" } } },
-    { "provider": "gemini", "displayName": "Gemini", "presence": "installed", "detected": true, "capabilities": { "rules": { "state": "supported" }, "skills": { "state": "supported" }, "mcp": { "state": "supported" } } },
-    { "provider": "windsurf", "displayName": "Windsurf", "presence": "installed", "detected": true, "capabilities": { "rules": { "state": "supported" }, "skills": { "state": "unsupported", "reason": "provider has no skills directory" }, "mcp": { "state": "supported" } } },
-    { "provider": "opencode", "displayName": "OpenCode", "presence": "installed", "detected": true, "capabilities": { "rules": { "state": "supported" }, "skills": { "state": "supported" }, "mcp": { "state": "supported" } } }
+    {
+      "provider": "claude",
+      "displayName": "Claude Code",
+      "presence": "installed",
+      "detected": true,
+      "capabilities": {
+        "rules": {
+          "state": "supported"
+        },
+        "skills": {
+          "state": "supported"
+        },
+        "mcp": {
+          "state": "supported"
+        }
+      }
+    },
+    {
+      "provider": "codex",
+      "displayName": "Codex",
+      "presence": "installed",
+      "detected": true,
+      "capabilities": {
+        "rules": {
+          "state": "supported"
+        },
+        "skills": {
+          "state": "supported"
+        },
+        "mcp": {
+          "state": "supported"
+        }
+      }
+    },
+    {
+      "provider": "cursor",
+      "displayName": "Cursor",
+      "presence": "installed",
+      "detected": true,
+      "capabilities": {
+        "rules": {
+          "state": "supported"
+        },
+        "skills": {
+          "state": "supported"
+        },
+        "mcp": {
+          "state": "supported"
+        }
+      }
+    },
+    {
+      "provider": "gemini",
+      "displayName": "Gemini",
+      "presence": "installed",
+      "detected": true,
+      "capabilities": {
+        "rules": {
+          "state": "supported"
+        },
+        "skills": {
+          "state": "supported"
+        },
+        "mcp": {
+          "state": "supported"
+        }
+      }
+    },
+    {
+      "provider": "windsurf",
+      "displayName": "Windsurf",
+      "presence": "installed",
+      "detected": true,
+      "capabilities": {
+        "rules": {
+          "state": "supported"
+        },
+        "skills": {
+          "state": "unsupported",
+          "reason": "provider has no skills directory"
+        },
+        "mcp": {
+          "state": "supported"
+        }
+      }
+    },
+    {
+      "provider": "opencode",
+      "displayName": "OpenCode",
+      "presence": "installed",
+      "detected": true,
+      "capabilities": {
+        "rules": {
+          "state": "supported"
+        },
+        "skills": {
+          "state": "supported"
+        },
+        "mcp": {
+          "state": "supported"
+        }
+      }
+    }
   ],
   "sourceInventory": [
-    { "provider": "claude", "content": "rules", "path": "/providers/claude/rules.md", "readable": true, "exists": true, "items": ["/providers/claude/rules.md"] },
-    { "provider": "codex", "content": "rules", "path": "/providers/codex/rules.md", "readable": true, "exists": true, "items": ["/providers/codex/rules.md"] },
-    { "provider": "cursor", "content": "rules", "path": "/providers/cursor/rules.md", "readable": true, "exists": true, "items": ["/providers/cursor/rules.md"] },
-    { "provider": "gemini", "content": "rules", "path": "/providers/gemini/rules.md", "readable": true, "exists": true, "items": ["/providers/gemini/rules.md"] },
-    { "provider": "windsurf", "content": "rules", "path": "/providers/windsurf/rules.md", "readable": true, "exists": true, "items": ["/providers/windsurf/rules.md"] },
-    { "provider": "opencode", "content": "rules", "path": "/providers/opencode/rules.md", "readable": true, "exists": true, "items": ["/providers/opencode/rules.md"] }
+    {
+      "provider": "claude",
+      "content": "rules",
+      "path": "/providers/claude/rules.md",
+      "readable": true,
+      "exists": true,
+      "items": [
+        "/providers/claude/rules.md"
+      ]
+    },
+    {
+      "provider": "codex",
+      "content": "rules",
+      "path": "/providers/codex/rules.md",
+      "readable": true,
+      "exists": true,
+      "items": [
+        "/providers/codex/rules.md"
+      ]
+    },
+    {
+      "provider": "cursor",
+      "content": "rules",
+      "path": "/providers/cursor/rules.md",
+      "readable": true,
+      "exists": true,
+      "items": [
+        "/providers/cursor/rules.md"
+      ]
+    },
+    {
+      "provider": "gemini",
+      "content": "rules",
+      "path": "/providers/gemini/rules.md",
+      "readable": true,
+      "exists": true,
+      "items": [
+        "/providers/gemini/rules.md"
+      ]
+    },
+    {
+      "provider": "windsurf",
+      "content": "rules",
+      "path": "/providers/windsurf/rules.md",
+      "readable": true,
+      "exists": true,
+      "items": [
+        "/providers/windsurf/rules.md"
+      ]
+    },
+    {
+      "provider": "opencode",
+      "content": "rules",
+      "path": "/providers/opencode/rules.md",
+      "readable": true,
+      "exists": true,
+      "items": [
+        "/providers/opencode/rules.md"
+      ]
+    }
   ],
   "enrollmentMatrix": [
-    { "provider": "claude", "displayName": "Claude Code", "enabled": true, "cells": { "rules": { "provider": "claude", "content": "rules", "enrolled": true, "capability": { "state": "supported" }, "destinationPath": "/providers/claude/rules.md" }, "skills": { "provider": "claude", "content": "skills", "enrolled": false, "capability": { "state": "supported" }, "destinationPath": "/providers/claude/skills" }, "mcp": { "provider": "claude", "content": "mcp", "enrolled": false, "capability": { "state": "supported" }, "destinationPath": "/providers/claude/mcp.json" } } },
-    { "provider": "codex", "displayName": "Codex", "enabled": false, "cells": { "rules": { "provider": "codex", "content": "rules", "enrolled": false, "capability": { "state": "supported" }, "destinationPath": "/providers/codex/rules.md" }, "skills": { "provider": "codex", "content": "skills", "enrolled": false, "capability": { "state": "supported" }, "destinationPath": "/providers/codex/skills" }, "mcp": { "provider": "codex", "content": "mcp", "enrolled": false, "capability": { "state": "supported" }, "destinationPath": "/providers/codex/config.toml" } } }
+    {
+      "provider": "claude",
+      "displayName": "Claude Code",
+      "enabled": true,
+      "cells": {
+        "rules": {
+          "provider": "claude",
+          "content": "rules",
+          "enrolled": true,
+          "capability": {
+            "state": "supported"
+          },
+          "destinationPath": "/providers/claude/rules.md"
+        },
+        "skills": {
+          "provider": "claude",
+          "content": "skills",
+          "enrolled": false,
+          "capability": {
+            "state": "supported"
+          },
+          "destinationPath": "/providers/claude/skills"
+        },
+        "mcp": {
+          "provider": "claude",
+          "content": "mcp",
+          "enrolled": false,
+          "capability": {
+            "state": "supported"
+          },
+          "destinationPath": "/providers/claude/mcp.json"
+        }
+      }
+    },
+    {
+      "provider": "codex",
+      "displayName": "Codex",
+      "enabled": false,
+      "cells": {
+        "rules": {
+          "provider": "codex",
+          "content": "rules",
+          "enrolled": false,
+          "capability": {
+            "state": "supported"
+          },
+          "destinationPath": "/providers/codex/rules.md"
+        },
+        "skills": {
+          "provider": "codex",
+          "content": "skills",
+          "enrolled": false,
+          "capability": {
+            "state": "supported"
+          },
+          "destinationPath": "/providers/codex/skills"
+        },
+        "mcp": {
+          "provider": "codex",
+          "content": "mcp",
+          "enrolled": false,
+          "capability": {
+            "state": "supported"
+          },
+          "destinationPath": "/providers/codex/config.toml"
+        }
+      }
+    }
   ],
   "master": {
     "rules": {
       "sharedDocuments": 1,
-      "providerOverlays": { "claude": 1, "codex": 0, "cursor": 0, "gemini": 0, "windsurf": 0, "opencode": 0 }
+      "providerOverlays": {
+        "claude": 1,
+        "codex": 0,
+        "cursor": 0,
+        "gemini": 0,
+        "windsurf": 0,
+        "opencode": 0
+      }
     },
     "skills": {
       "sharedSkills": 1,
-      "providerScopedSkills": { "claude": 1, "codex": 0, "cursor": 0, "gemini": 0, "windsurf": 0, "opencode": 0 }
+      "providerScopedSkills": {
+        "claude": 1,
+        "codex": 0,
+        "cursor": 0,
+        "gemini": 0,
+        "windsurf": 0,
+        "opencode": 0
+      }
     },
-    "mcp": { "sharedServers": [{ "name": "local", "transport": "command", "envKeys": ["TOKEN"], "issues": [] }] }
+    "mcp": {
+      "sharedServers": [
+        {
+          "id": "local",
+          "name": "local",
+          "displayName": "local",
+          "scope": {
+            "kind": "shared"
+          },
+          "overrideOf": null,
+          "affectedProviders": [
+            "claude",
+            "codex",
+            "cursor",
+            "gemini",
+            "windsurf",
+            "opencode"
+          ],
+          "conflictStatus": {
+            "state": "none"
+          },
+          "transport": "command",
+          "envKeys": [
+            "TOKEN"
+          ],
+          "issues": []
+        }
+      ],
+      "providerServers": {
+        "claude": [],
+        "codex": [],
+        "cursor": [],
+        "gemini": [],
+        "windsurf": [],
+        "opencode": []
+      }
+    }
   },
   "masterRevision": "master-revision-fixture",
-  "state": { "state": "changesReady", "reasons": ["noAppliedRevision"] },
+  "state": {
+    "state": "changesReady",
+    "reasons": [
+      "noAppliedRevision"
+    ]
+  },
   "effectiveProviders": [
-    { "provider": "claude", "displayName": "Claude Code", "contents": { "rules": { "enrolled": true, "destinationPath": "/providers/claude/rules.md", "masterItems": 2, "capability": { "state": "supported" }, "compositionRevision": "claude-rules-revision" } } }
+    {
+      "provider": "claude",
+      "displayName": "Claude Code",
+      "contents": {
+        "rules": {
+          "enrolled": true,
+          "destinationPath": "/providers/claude/rules.md",
+          "masterItems": 2,
+          "capability": {
+            "state": "supported"
+          },
+          "compositionRevision": "claude-rules-revision"
+        }
+      }
+    }
   ],
   "structuredPlan": {
     "available": false,
     "reason": "snapshot-read-only",
     "entries": [
-      { "provider": "claude", "content": "rules", "destinationPath": "/providers/claude/rules.md", "state": "eligible" },
-      { "provider": "codex", "content": "rules", "destinationPath": "/providers/codex/rules.md", "state": "unenrolled" },
-      { "provider": "windsurf", "content": "skills", "destinationPath": null, "state": "unsupported", "reason": "provider has no skills directory" }
+      {
+        "provider": "claude",
+        "content": "rules",
+        "destinationPath": "/providers/claude/rules.md",
+        "state": "eligible"
+      },
+      {
+        "provider": "codex",
+        "content": "rules",
+        "destinationPath": "/providers/codex/rules.md",
+        "state": "unenrolled"
+      },
+      {
+        "provider": "windsurf",
+        "content": "skills",
+        "destinationPath": null,
+        "state": "unsupported",
+        "reason": "provider has no skills directory"
+      }
     ]
   },
   "driftInbox": [],
-  "receipts": { "list": [], "details": [] },
-  "legacyNetworkState": { "present": false, "paths": [] }
+  "receipts": {
+    "list": [],
+    "details": []
+  },
+  "legacyNetworkState": {
+    "present": false,
+    "paths": []
+  }
 }
