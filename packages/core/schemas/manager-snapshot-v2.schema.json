@@ -298,7 +298,7 @@
             "UNREADABLE_SOURCE",
             "OPERATION_FAILED",
             "PARTIAL_SNAPSHOT",
-            "INTERRUPTED_OPERATION"
+            "INTERRUPTED_OPERATION_RECOVERED"
           ]
         },
         "severity": { "enum": ["info", "warning", "error"] },

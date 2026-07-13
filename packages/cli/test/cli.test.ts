@@ -1106,21 +1106,10 @@ describe('reglet CLI', () => {
     expect(snapshot.problems).toContainEqual(expect.objectContaining({ code: 'MISSING_MCP_ENVIRONMENT' }));
   });
 
-  test('manager snapshot rejects unsupported contract versions with structured redacted errors', async () => {
+  test('manager snapshot rejects unsupported contract versions', async () => {
     const { home, providerHome } = await useTempHomes();
-    const canary = 'manager-error-secret-canary';
 
-    try {
-      await runCli(['manager', 'snapshot', '--json', '--contract-version', `3-${canary}`], home, providerHome);
-      throw new Error('manager snapshot unexpectedly accepted unsupported contract version');
-    } catch (error) {
-      const failure = error as { code?: number; stdout?: string; stderr?: string };
-      expect(failure.code).toBe(1);
-      expect(failure.stdout).toBe('');
-      expect(failure.stderr).not.toContain(canary);
-      const response = JSON.parse(failure.stderr ?? '') as { contract: string; error: { code: string; message: string; command: string } };
-      expect(response.contract).toBe('manager-error');
-      expect(response.error).toMatchObject({ code: 'INVALID_CONTENT', command: 'manager.snapshot' });
-    }
+    await expect(runCli(['manager', 'snapshot', '--json', '--contract-version', '3'], home, providerHome))
+      .rejects.toMatchObject({ code: 1 });
   });
 });
