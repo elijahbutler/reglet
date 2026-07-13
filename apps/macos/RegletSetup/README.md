@@ -24,18 +24,18 @@ All app-originated provider writes use the structured preview/apply pair. Master
 
 ## Local development
 
-From this directory:
+From the repository root, build the current architecture's CLI, install it to `~/.local/bin`, and launch the app from source with one command:
 
 ```bash
-swift build
-REGLET_BINARY=/path/to/reglet swift run RegletSetup
+bun run macos:local
 ```
 
-For source-checkout development, build the CLI binary first:
+To install an ad-hoc-signed local build to `~/Applications/Reglet.app` with the matching CLI bundled inside it:
 
 ```bash
-bun run build:binaries
-REGLET_BINARY=../../../dist/reglet-darwin-arm64 swift run RegletSetup
+bun run macos:install
 ```
 
-The macOS manager is retained source, not a public release artifact. Public releases currently ship CLI-only binaries and a Homebrew formula; they do not publish `Reglet.app`, installer packages, or a Homebrew cask.
+Both commands install the matching CLI at `~/.local/bin/reglet`. Override `REGLET_CLI_INSTALL_DIR` or `REGLET_APP_INSTALL_DIR` to use different destinations; set `REGLET_NO_OPEN=1` to install without launching the app.
+
+The macOS manager remains absent from public release artifacts. `macos:install` is a source-checkout convenience that creates an ad-hoc-signed local app, not a notarized public distribution.

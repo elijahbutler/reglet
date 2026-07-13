@@ -74,4 +74,10 @@ bun install --frozen-lockfile
 bun packages/cli/src/index.ts scan
 ```
 
-Source builds are for development. Public release automation builds only CLI artifacts and does not package or distribute the macOS app.
+On macOS, install a local build of both the current-architecture CLI and app from the checkout:
+
+```bash
+bun run macos:install
+```
+
+This installs the CLI to `~/.local/bin/reglet` and an ad-hoc-signed app to `~/Applications/Reglet.app`. Use `bun run macos:local` instead to install the CLI and run the Swift app directly from source. These are development conveniences; public release automation still builds only CLI artifacts and does not distribute or notarize the macOS app.

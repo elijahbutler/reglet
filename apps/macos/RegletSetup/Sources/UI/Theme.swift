@@ -86,7 +86,7 @@ enum Theme {
     }
 
     private static func registerFont(named name: String) -> Bool {
-      guard let url = Bundle.module.url(forResource: name, withExtension: "ttf", subdirectory: "Fonts") else {
+      guard let url = resourceBundle.url(forResource: name, withExtension: "ttf", subdirectory: "Fonts") else {
         print("RegletSetup: missing font resource \(name).ttf")
         return false
       }
@@ -101,6 +101,14 @@ enum Theme {
         print("RegletSetup: could not register \(name).ttf: \(description)")
       }
       return false
+    }
+
+    private static var resourceBundle: Bundle {
+      if let url = Bundle.main.url(forResource: "RegletSetup_RegletSetup", withExtension: "bundle"),
+         let bundle = Bundle(url: url) {
+        return bundle
+      }
+      return Bundle.module
     }
   }
 }

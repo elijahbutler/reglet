@@ -5,6 +5,8 @@
   "scripts": {
     "build:binaries": "bash scripts/build-binaries.sh",
     "build:homebrew-formula": "bash scripts/generate-homebrew-formula.sh",
+    "macos:local": "bash scripts/macos-local.sh run",
+    "macos:install": "bash scripts/macos-local.sh install",
     "typecheck": "tsc --build",
     "lint": "eslint .",
     "test": "bun test"
