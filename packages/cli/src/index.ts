@@ -29,6 +29,7 @@ import {
   listUnmanagedSkills,
   type McpServerDef,
   previewApplyStructured,
+  PROVIDER_RULES_MARKER,
   readProviderMcpServers,
   readSkillFile,
   regletHome,
@@ -133,7 +134,7 @@ manager
       scan: await buildScanJson(),
       status: await buildStatusJson(),
       skills: { version: 1, regletHome: regletHome(), ...skills },
-      rules: { version: 1, documents: master.rules.map((rule) => ({ path: rule.relPath })) },
+      rules: { version: 1, documents: ruleDocuments(master) },
       mcp: { version: 1, servers: mcpServers.servers },
       operations: await listOperationReceipts(),
       legacyNetworkState: await inspectLegacySyncState(),
@@ -384,7 +385,7 @@ rules
   .option('--json', 'print machine-readable JSON for manager apps')
   .action(async (options: { json?: boolean }) => {
     const master = await loadMasterDir();
-    const documents = master.rules.map((rule) => ({ path: rule.relPath }));
+    const documents = ruleDocuments(master);
     if (options.json === true) {
       printJson({ version: 1, documents });
       return;
@@ -790,6 +791,14 @@ interface RuleMergeSourceJson {
   bytes: number;
 }
 
+interface RuleDocumentJson {
+  path: string;
+  scope: {
+    kind: 'shared' | 'provider';
+    provider?: ProviderId;
+  };
+}
+
 interface RuleMergeDraftJson {
   provider: string;
   draft: string;
@@ -1090,7 +1099,7 @@ async function buildRuleComparison(provider: ProviderId, inventory: ProviderInve
   }
 
   const sourceContent = await readFile(inventory.rulesPath, 'utf8');
-  const destinationPath = path.join(regletHome(), 'rules', `imported-${provider}.md`);
+  const destinationPath = providerRuleImportPath(provider);
   const destinationContent = await readOptionalFile(destinationPath);
 
   return {
@@ -1331,7 +1340,7 @@ async function buildContentPlan(
   if (content === 'rules') {
     const readPaths = inventory.rulesPath === null || !inventory.rulesExists ? [] : [inventory.rulesPath];
     const writePaths = [
-      path.join(regletHome(), 'rules', `imported-${provider}.md`),
+      providerRuleImportPath(provider),
       ...(inventory.rulesPath === null ? [] : [inventory.rulesPath]),
     ];
     return {
@@ -1444,14 +1453,44 @@ async function importProviderRules(provider: ProviderId): Promise<void> {
 
   try {
     const content = await readFile(rulesPath, 'utf8');
-    const targetPath = path.join(regletHome(), 'rules', `imported-${provider}.md`);
+    const targetPath = providerRuleImportPath(provider);
     await mkdir(path.dirname(targetPath), { recursive: true });
+    await writeIfMissing(path.join(path.dirname(targetPath), PROVIDER_RULES_MARKER), 'v1\n');
     await writeFile(targetPath, content, { flag: 'wx' });
   } catch (error) {
     if (!isNodeError(error) || (error.code !== 'ENOENT' && error.code !== 'EEXIST')) {
       throw error;
     }
   }
+}
+
+async function writeIfMissing(filePath: string, content: string): Promise<void> {
+  try {
+    await writeFile(filePath, content, { flag: 'wx' });
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== 'EEXIST') {
+      throw error;
+    }
+  }
+}
+
+function providerRuleImportPath(provider: ProviderId): string {
+  return path.join(regletHome(), 'rules', provider, '00-imported.md');
+}
+
+function ruleDocuments(master: Awaited<ReturnType<typeof loadMasterDir>>): RuleDocumentJson[] {
+  return [
+    ...master.rules.map((rule) => ({
+      path: rule.relPath,
+      scope: { kind: 'shared' as const },
+    })),
+    ...providerIds.flatMap((provider) =>
+      master.providerRules[provider].map((rule) => ({
+        path: rule.relPath,
+        scope: { kind: 'provider' as const, provider },
+      })),
+    ),
+  ];
 }
 
 async function importProviderMcp(provider: ProviderId): Promise<void> {

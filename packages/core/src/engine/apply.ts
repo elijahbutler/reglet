@@ -159,7 +159,7 @@ async function applyRules(
   await opts.testHooks?.beforeMutation?.(outputPath);
   const writeResult = await safeWriteFile({
     outputPath,
-    content: renderRulesFile(adapter.id, master.rules),
+    content: renderRulesFile(adapter.id, [...master.rules, ...master.providerRules[adapter.id]]),
     provider: adapter.id,
     managedContent: 'rules',
     dryRun,

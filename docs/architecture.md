@@ -14,6 +14,7 @@ The default master directory is `~/.reglet/`:
 
 ```text
 rules/
+rules/<provider>/
 skills/
 skills/<provider>/
 mcp/servers.json
@@ -26,6 +27,8 @@ reglet.toml
     receipts/
     snapshots/
 ```
+
+Rule documents directly under `rules/` are the ordered shared base. Reglet-created rule directories under `rules/<provider>/` contain an internal overlay marker; their documents are appended only to that provider's rendered output. An unmarked provider-named directory retains the legacy shared behavior. The provider directory remains part of each document's source path so previews and generated files preserve provenance.
 
 Shared skills in `skills/<skill-name>/` apply to every enrolled provider that supports skills. Provider-scoped skills in `skills/<provider>/<skill-name>/` apply only to that provider and override an equally named shared skill.
 

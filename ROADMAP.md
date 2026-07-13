@@ -43,6 +43,7 @@ The code and release automation enforce the following public CLI gates. Source-l
 
 ## Deferred after V1
 
+- A separately released native macOS Manager following the phased [macOS Manager product and delivery roadmap](docs/macos-manager-roadmap.md).
 - Remote collaboration, self-hosted deployment, hosted service, accounts, device lifecycle, and team features.
 - Project scope, advanced history views, richer bulk workflows, and additional providers.
 - Any future networked design will begin with a new public security and recovery model rather than re-enabling legacy code.

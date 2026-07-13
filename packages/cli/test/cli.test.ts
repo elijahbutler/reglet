@@ -77,14 +77,24 @@ describe('reglet CLI', () => {
   test('rules list, read, and write manage master documents without applying providers', async () => {
     const { home, providerHome } = await useTempHomes();
     await mkdir(path.join(home, 'rules'), { recursive: true });
+    await mkdir(path.join(home, 'rules', 'codex'), { recursive: true });
     await writeFile(path.join(home, 'rules', '00-general.md'), 'original\n');
+    await writeFile(path.join(home, 'rules', 'codex', '.reglet-provider-overlay'), 'v1\n');
+    await writeFile(path.join(home, 'rules', 'codex', '10-overlay.md'), 'codex only\n');
 
     const listed = JSON.parse((await runCli(['rules', 'list', '--json'], home, providerHome)).stdout) as {
       version: number;
-      documents: { path: string }[];
+      documents: { path: string; scope: { kind: string; provider?: string } }[];
     };
-    expect(listed).toEqual({ version: 1, documents: [{ path: '00-general.md' }] });
+    expect(listed).toEqual({
+      version: 1,
+      documents: [
+        { path: '00-general.md', scope: { kind: 'shared' } },
+        { path: 'codex/10-overlay.md', scope: { kind: 'provider', provider: 'codex' } },
+      ],
+    });
     expect((await runCli(['rules', 'read', '00-general.md'], home, providerHome)).stdout).toBe('original\n');
+    expect((await runCli(['rules', 'read', 'codex/10-overlay.md'], home, providerHome)).stdout).toBe('codex only\n');
 
     await runCliWithInput(['rules', 'write', '00-general.md'], 'edited\n', home, providerHome);
     expect(await readFile(path.join(home, 'rules', '00-general.md'), 'utf8')).toBe('edited\n');
@@ -179,7 +189,7 @@ describe('reglet CLI', () => {
     expect(plan.writes).toContainEqual({
       provider: 'claude',
       content: 'rules',
-      path: path.join(home, 'rules', 'imported-claude.md'),
+      path: path.join(home, 'rules', 'claude', '00-imported.md'),
       scope: 'master',
       operation: 'write',
       reason: 'manage claude:rules',
@@ -202,13 +212,13 @@ describe('reglet CLI', () => {
       {
         provider: 'claude',
         sourcePath: claudeRules,
-        destinationPath: path.join(home, 'rules', 'imported-claude.md'),
+        destinationPath: path.join(home, 'rules', 'claude', '00-imported.md'),
         state: 'new',
         preview: 'existing claude rules\n',
         truncated: false,
       },
     ]);
-    await expect(readFile(path.join(home, 'rules', 'imported-claude.md'), 'utf8')).rejects.toThrow();
+    await expect(readFile(path.join(home, 'rules', 'claude', '00-imported.md'), 'utf8')).rejects.toThrow();
   });
 
   test('plan --json reconciles selected provider rules without creating master files', async () => {
@@ -224,8 +234,10 @@ describe('reglet CLI', () => {
     await writeFile(claudeRules, 'same rules\n');
     await writeFile(codexRules, 'codex provider rules\n');
     await writeFile(opencodeRules, longRules);
-    await writeFile(path.join(home, 'rules', 'imported-claude.md'), 'same rules\n');
-    await writeFile(path.join(home, 'rules', 'imported-codex.md'), 'old codex rules\n');
+    await mkdir(path.join(home, 'rules', 'claude'), { recursive: true });
+    await mkdir(path.join(home, 'rules', 'codex'), { recursive: true });
+    await writeFile(path.join(home, 'rules', 'claude', '00-imported.md'), 'same rules\n');
+    await writeFile(path.join(home, 'rules', 'codex', '00-imported.md'), 'old codex rules\n');
 
     const result = await runCli(
       ['plan', '--provider', 'claude,codex,opencode,windsurf', '--content', 'rules', '--json'],
@@ -253,7 +265,7 @@ describe('reglet CLI', () => {
     expect(plan.reconciliation.rules.find((rule) => rule.provider === 'claude')).toEqual({
       provider: 'claude',
       sourcePath: claudeRules,
-      destinationPath: path.join(home, 'rules', 'imported-claude.md'),
+      destinationPath: path.join(home, 'rules', 'claude', '00-imported.md'),
       state: 'matching',
       preview: 'same rules\n',
       truncated: false,
@@ -261,7 +273,7 @@ describe('reglet CLI', () => {
     expect(plan.reconciliation.rules.find((rule) => rule.provider === 'codex')).toEqual({
       provider: 'codex',
       sourcePath: codexRules,
-      destinationPath: path.join(home, 'rules', 'imported-codex.md'),
+      destinationPath: path.join(home, 'rules', 'codex', '00-imported.md'),
       state: 'different',
       preview: 'codex provider rules\n',
       truncated: false,
@@ -270,14 +282,14 @@ describe('reglet CLI', () => {
     expect(opencode).toMatchObject({
       provider: 'opencode',
       sourcePath: opencodeRules,
-      destinationPath: path.join(home, 'rules', 'imported-opencode.md'),
+      destinationPath: path.join(home, 'rules', 'opencode', '00-imported.md'),
       state: 'new',
       truncated: true,
     });
     expect(opencode?.preview).toHaveLength(800);
     expect(plan.reconciliation.rules.some((rule) => rule.provider === 'windsurf')).toBe(false);
-    expect(await Bun.file(path.join(home, 'rules', 'imported-opencode.md')).exists()).toBe(false);
-    expect(await Bun.file(path.join(home, 'rules', 'imported-windsurf.md')).exists()).toBe(false);
+    expect(await Bun.file(path.join(home, 'rules', 'opencode', '00-imported.md')).exists()).toBe(false);
+    expect(await Bun.file(path.join(home, 'rules', 'windsurf', '00-imported.md')).exists()).toBe(false);
   });
 
   test('plan --json omits rule reconciliation when rules are not selected and leaves master absent', async () => {
@@ -430,7 +442,7 @@ describe('reglet CLI', () => {
 
     await runCli(['init', '--yes'], home, providerHome);
 
-    expect(await readFile(path.join(home, 'rules', 'imported-claude.md'), 'utf8')).toBe('existing claude rules\n');
+    expect(await readFile(path.join(home, 'rules', 'claude', '00-imported.md'), 'utf8')).toBe('existing claude rules\n');
     await expect(readFile(path.join(home, 'skills', 'alpha', 'SKILL.md'), 'utf8')).rejects.toThrow();
     expect(await readFile(path.join(providerHome, '.claude', 'skills', 'alpha', 'SKILL.md'), 'utf8')).toBe('alpha skill\n');
     expect(JSON.parse(await readFile(path.join(home, 'mcp', 'servers.json'), 'utf8'))).toEqual({
@@ -520,7 +532,7 @@ describe('reglet CLI', () => {
 
     await runCli(['init', '--provider', 'claude', '--content', 'rules'], home, providerHome);
 
-    expect(await readFile(path.join(home, 'rules', 'imported-claude.md'), 'utf8')).toBe('selected rules\n');
+    expect(await readFile(path.join(home, 'rules', 'claude', '00-imported.md'), 'utf8')).toBe('selected rules\n');
     await expect(readFile(path.join(home, 'skills', 'alpha', 'SKILL.md'), 'utf8')).rejects.toThrow();
     expect(JSON.parse(await readFile(path.join(home, 'mcp', 'servers.json'), 'utf8'))).toEqual({ mcpServers: {} });
     const config = await readFile(path.join(home, 'reglet.toml'), 'utf8');
@@ -539,7 +551,7 @@ describe('reglet CLI', () => {
 
     await runCli(['init', '--provider', 'claude', '--content', 'rules', '--no-apply'], home, providerHome);
 
-    expect(await readFile(path.join(home, 'rules', 'imported-claude.md'), 'utf8')).toBe('leave this provider file alone\n');
+    expect(await readFile(path.join(home, 'rules', 'claude', '00-imported.md'), 'utf8')).toBe('leave this provider file alone\n');
     expect(await readFile(claudeRules, 'utf8')).toBe('leave this provider file alone\n');
     const preview = JSON.parse(
       (await runCli(['apply-structured', 'preview', '--provider', 'claude', '--content', 'rules'], home, providerHome)).stdout,

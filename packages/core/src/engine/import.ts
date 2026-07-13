@@ -1,6 +1,6 @@
 import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { GENERATED_HEADER } from '../header.js';
+import { GENERATED_HEADER, LEGACY_GENERATED_HEADER } from '../header.js';
 import { loadManifest } from '../manifest.js';
 import { loadMasterDir } from '../master.js';
 import { isCanonicalMcpServerDef, serializeMcpServers } from '../mcp.js';
@@ -132,9 +132,11 @@ export async function importDriftedMcp(provider: ProviderId, home = regletHome()
 }
 
 export function stripGeneratedHeader(content: string, provider: ProviderId): string {
-  const renderedHeader = GENERATED_HEADER.replace('<provider>', provider);
-  if (content.startsWith(renderedHeader)) {
-    return content.slice(renderedHeader.length).replace(/^\r?\n+/, '');
+  for (const header of [GENERATED_HEADER, LEGACY_GENERATED_HEADER]) {
+    const renderedHeader = header.replace('<provider>', provider);
+    if (content.startsWith(renderedHeader)) {
+      return content.slice(renderedHeader.length).replace(/^\r?\n+/, '');
+    }
   }
   return content;
 }

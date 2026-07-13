@@ -109,7 +109,9 @@ async function previewApplyStructuredBody(
         entries.push(skipEntry(adapter.id, content, !providerConfig.enabled ? `${adapter.id} disabled` : `${adapter.id}:${content} unenrolled`));
         continue;
       }
-      if (content === 'rules') entries.push(await previewRules(adapter, master.rules, home, driftByPath));
+      if (content === 'rules') {
+        entries.push(await previewRules(adapter, [...master.rules, ...master.providerRules[adapter.id]], home, driftByPath));
+      }
       if (content === 'skills') entries.push(...(await previewSkills(adapter, master, home, driftByPath)));
       if (content === 'mcp') entries.push(await previewMcp(adapter, master.mcpServers, home, driftByPath, validationIssues));
     }
