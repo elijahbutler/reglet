@@ -242,7 +242,7 @@ private struct ManagerSidebarRow: View {
     Button(action: action) {
       HStack(spacing: 10) {
         Image(systemName: section.symbol)
-          .font(.system(size: 14, weight: .medium))
+          .font(Theme.Fonts.body)
           .foregroundStyle(iconColor)
           .frame(width: 18, height: 18)
 

@@ -87,6 +87,7 @@ struct OnboardingView: View {
           .padding(12)
       }
     }
+    .background(Theme.Colors.voidBlack)
     .alert("Reglet command failed", isPresented: Binding(
       get: { model.errorMessage != nil },
       set: { if !$0 { model.errorMessage = nil } }
@@ -127,28 +128,87 @@ struct HeaderView: View {
 
   var body: some View {
     HStack(spacing: 16) {
-      Image(systemName: "slider.horizontal.3")
-        .font(.title2)
-        .symbolRenderingMode(.hierarchical)
+      ZStack {
+        RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+          .fill(Theme.Colors.coral)
+        Image(systemName: "slider.horizontal.3")
+          .font(Theme.Fonts.bodyLg)
+          .symbolRenderingMode(.hierarchical)
+          .foregroundStyle(Theme.Colors.voidBlack)
+      }
+      .frame(width: 34, height: 34)
+      .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
         Text("Reglet Setup")
-          .font(.headline)
+          .font(Theme.Fonts.subheading)
+          .foregroundStyle(Theme.Colors.mist)
         Text("One source of truth for local agent configuration")
-          .foregroundStyle(.secondary)
-          .font(.subheadline)
+          .foregroundStyle(Theme.Colors.ash)
+          .font(Theme.Fonts.body)
       }
       Spacer()
-      Picker("Step", selection: .constant(step)) {
-        ForEach(steps.indices, id: \.self) { index in
-          Text(steps[index]).tag(index)
-        }
-      }
-      .pickerStyle(.segmented)
-      .frame(width: 460)
-      .disabled(true)
+      StepRail(steps: steps, currentStep: step)
+        .frame(width: 460)
     }
     .padding(20)
-    .background(.regularMaterial)
+    .background(Theme.Colors.ink)
+  }
+}
+
+private struct StepRail: View {
+  let steps: [String]
+  let currentStep: Int
+
+  var body: some View {
+    HStack(spacing: 6) {
+      ForEach(steps.indices, id: \.self) { index in
+        StepPill(title: steps[index], state: state(for: index))
+      }
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("Step \(min(currentStep + 1, steps.count)) of \(steps.count): \(steps[min(currentStep, steps.count - 1)])")
+  }
+
+  private func state(for index: Int) -> StepPill.State {
+    if index < currentStep { return .completed }
+    if index == currentStep { return .active }
+    return .upcoming
+  }
+}
+
+private struct StepPill: View {
+  enum State {
+    case completed
+    case active
+    case upcoming
+  }
+
+  let title: String
+  let state: State
+
+  var body: some View {
+    HStack(spacing: 5) {
+      if state == .completed {
+        Image(systemName: "checkmark")
+          .font(Theme.Fonts.eyebrow)
+      }
+      Text(title)
+        .lineLimit(1)
+    }
+    .font(Theme.Fonts.eyebrow)
+    .foregroundStyle(foreground)
+    .padding(.horizontal, 9)
+    .padding(.vertical, 6)
+    .frame(maxWidth: .infinity)
+    .background(background, in: Capsule())
+  }
+
+  private var background: Color {
+    state == .active ? Theme.Colors.mist : Theme.Colors.graphite
+  }
+
+  private var foreground: Color {
+    state == .active ? Theme.Colors.voidBlack : Theme.Colors.ash
   }
 }
 
@@ -160,10 +220,11 @@ struct SafetyView: View {
       Spacer()
       VStack(alignment: .leading, spacing: 10) {
         Text("Set up Reglet without surprises.")
-          .font(.system(size: 32, weight: .semibold))
+          .font(Theme.Fonts.headingLg)
+          .foregroundStyle(Theme.Colors.white)
         Text("Reglet will scan local agent configuration, show the exact files involved, and wait for confirmation before writing provider files.")
-          .font(.title3)
-          .foregroundStyle(.secondary)
+          .font(Theme.Fonts.bodyLg)
+          .foregroundStyle(Theme.Colors.ash)
           .frame(maxWidth: 680, alignment: .leading)
       }
 
@@ -179,7 +240,7 @@ struct SafetyView: View {
       } label: {
         Label("Continue", systemImage: "arrow.right")
       }
-      .buttonStyle(.borderedProminent)
+      .buttonStyle(.regletPrimary)
       .controlSize(.large)
       .keyboardShortcut(.defaultAction)
       .accessibilityHint("Continues to provider selection")
@@ -199,16 +260,18 @@ struct SelectionView: View {
     HSplitView {
       VStack(alignment: .leading, spacing: 12) {
         Label("Providers", systemImage: "macwindow")
-          .font(.headline)
+          .font(Theme.Fonts.subheading)
+          .foregroundStyle(Theme.Colors.mist)
         ScrollView {
           VStack(alignment: .leading, spacing: 8) {
             ForEach(model.scan?.providers ?? []) { provider in
               Toggle(isOn: providerBinding(provider.id)) {
                 VStack(alignment: .leading, spacing: 2) {
                   Text(provider.displayName)
+                    .foregroundStyle(Theme.Colors.mist)
                   Text(provider.detected ? "Detected" : "Not found")
-                    .font(.caption)
-                    .foregroundStyle(provider.detected ? .secondary : .tertiary)
+                    .font(Theme.Fonts.eyebrow)
+                    .foregroundStyle(provider.detected ? Theme.Colors.ash : Theme.Colors.smoke)
                 }
               }
               .disabled(!provider.detected)
@@ -222,7 +285,8 @@ struct SelectionView: View {
 
       VStack(alignment: .leading, spacing: 18) {
         Label("Content", systemImage: "checklist")
-          .font(.headline)
+          .font(Theme.Fonts.subheading)
+          .foregroundStyle(Theme.Colors.mist)
         VStack(alignment: .leading, spacing: 12) {
           ForEach(ContentKind.allCases) { content in
             Toggle(isOn: contentBinding(content)) {
@@ -245,7 +309,7 @@ struct SelectionView: View {
           } label: {
             Label("Preview Files", systemImage: "doc.text.magnifyingglass")
           }
-          .buttonStyle(.borderedProminent)
+          .buttonStyle(.regletPrimary)
           .keyboardShortcut(.defaultAction)
           .disabled(!model.canContinue)
         }
@@ -316,10 +380,10 @@ struct PromptHandlingStepView: View {
 
           if model.rulePromptMode == .providerSpecific {
             Text("Reglet will preserve selected providers' existing prompt files as separate master documents and compose them during apply.")
-              .foregroundStyle(.secondary)
+              .foregroundStyle(Theme.Colors.ash)
           } else {
             Text("Reglet will save one reviewed unified draft to 00-general.md and skip importing provider-specific prompt files.")
-              .foregroundStyle(.secondary)
+              .foregroundStyle(Theme.Colors.ash)
           }
         }
 
@@ -327,15 +391,16 @@ struct PromptHandlingStepView: View {
           Section {
             if availableSources.count < 2 {
               Text("At least two selected providers need existing prompt files before Reglet can generate a merge.")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.Colors.ash)
             } else {
               ForEach(availableSources) { source in
                 Toggle(isOn: mergeSourceBinding(source.provider)) {
                   VStack(alignment: .leading, spacing: 2) {
                     Text(model.providerDisplayName(source.provider))
+                      .foregroundStyle(Theme.Colors.mist)
                     Text(source.sourcePath)
-                      .font(.system(.caption, design: .monospaced))
-                      .foregroundStyle(.secondary)
+                      .font(Theme.Fonts.mono(size: 11))
+                      .foregroundStyle(Theme.Colors.ash)
                       .textSelection(.enabled)
                   }
                 }
@@ -351,20 +416,20 @@ struct PromptHandlingStepView: View {
             if let draft = model.ruleMergeDraft {
               LabeledContent("Generated with", value: draft.provider)
               Text("\(draft.sources.count) source prompts merged.")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.Colors.ash)
             } else {
               Text("Generate a draft, then review and edit it here before continuing.")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.Colors.ash)
             }
 
             TextEditor(text: $model.editableRuleMergeDraft)
-              .font(.system(.body, design: .monospaced))
+              .font(Theme.Fonts.mono(size: 13))
               .frame(minHeight: 180)
               .accessibilityLabel("Unified system prompt draft")
 
             if let error = model.ruleMergeError {
               Label(error, systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
+                .foregroundStyle(Theme.Colors.warning)
                 .textSelection(.enabled)
             }
 
@@ -373,8 +438,12 @@ struct PromptHandlingStepView: View {
               Button {
                 Task { await model.generateRuleMergeDraft() }
               } label: {
-                Label(model.ruleMergeDraft == nil ? "Generate AI Draft" : "Retry AI Merge", systemImage: "wand.and.stars")
+                HStack(spacing: 8) {
+                  StatusBadge(text: "AI", kind: .brand)
+                  Label(model.ruleMergeDraft == nil ? "Generate AI Draft" : "Retry AI Merge", systemImage: "wand.and.stars")
+                }
               }
+              .buttonStyle(.regletSecondary)
               .disabled(!canGenerate)
             }
           }
@@ -384,6 +453,7 @@ struct PromptHandlingStepView: View {
       Divider()
       HStack {
         Button("Back", action: back)
+          .buttonStyle(.regletGhost)
           .keyboardShortcut(.cancelAction)
         Spacer()
         Button {
@@ -391,12 +461,12 @@ struct PromptHandlingStepView: View {
         } label: {
           Label("Continue", systemImage: "arrow.right")
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.regletPrimary)
         .keyboardShortcut(.defaultAction)
         .disabled(!canContinue)
       }
       .padding(20)
-      .background(.regularMaterial)
+      .background(Theme.Colors.ink)
     }
   }
 
@@ -434,6 +504,7 @@ struct SkillsStepView: View {
       Divider()
       HStack {
         Button("Back", action: back)
+          .buttonStyle(.regletGhost)
           .keyboardShortcut(.cancelAction)
         Spacer()
         Button {
@@ -441,12 +512,12 @@ struct SkillsStepView: View {
         } label: {
           Label("Preview Files", systemImage: "doc.text.magnifyingglass")
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.regletPrimary)
         .keyboardShortcut(.defaultAction)
         .disabled(model.isWorking)
       }
       .padding(20)
-      .background(.regularMaterial)
+      .background(Theme.Colors.ink)
     }
   }
 }
@@ -521,7 +592,7 @@ struct PreviewView: View {
           let rules = model.plan?.reconciliation.rules ?? []
           if rules.isEmpty {
             Text("No provider rule files were selected for reconciliation.")
-              .foregroundStyle(.secondary)
+              .foregroundStyle(Theme.Colors.ash)
           } else {
             ScrollView(.horizontal) {
               HStack(alignment: .top, spacing: 0) {
@@ -548,7 +619,7 @@ struct PreviewView: View {
             if model.rulePromptMode == .unified {
               Label("Unified prompt draft will be saved to 00-general.md", systemImage: "doc.text")
               Text(model.editableRuleMergeDraft.isEmpty ? "No draft yet." : model.editableRuleMergeDraft)
-                .font(.system(.caption, design: .monospaced))
+                .font(Theme.Fonts.mono(size: 11))
                 .lineLimit(8)
                 .textSelection(.enabled)
             } else {
@@ -579,22 +650,23 @@ struct PreviewView: View {
       Divider()
       HStack {
         Button("Back", action: back)
+          .buttonStyle(.regletGhost)
           .keyboardShortcut(.cancelAction)
         Spacer()
         Text(statusMessage)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(Theme.Colors.ash)
         Button {
           review()
         } label: {
           Label("Review Exact Changes", systemImage: "doc.text.magnifyingglass")
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.regletPrimary)
         .keyboardShortcut(.defaultAction)
         .accessibilityHint("Stages the local master content, then opens the digest-backed provider review")
         .disabled(model.isWorking || hasBlockedAdoption || hasBlockedUnifiedDraft)
       }
       .padding(20)
-      .background(.regularMaterial)
+      .background(Theme.Colors.ink)
     }
   }
 
@@ -613,14 +685,27 @@ struct RuleComparisonRow: View {
   @EnvironmentObject private var model: SetupModel
   let comparison: RuleComparison
 
-  private var status: (String, String, Color) {
+  private var status: (String, String, StatusBadge.Kind) {
     switch comparison.state {
     case "new":
-      ("doc.badge.plus", "New master rule document", .blue)
+      ("doc.badge.plus", "New master rule document", .info)
     case "matching":
-      ("checkmark.circle", "Matches existing master document", .green)
+      ("checkmark.circle", "Matches existing master document", .success)
     default:
-      ("exclamationmark.triangle", "Different from existing master document", .orange)
+      ("exclamationmark.triangle", "Different from existing master document", .warning)
+    }
+  }
+
+  private var statusColor: Color {
+    switch status.2 {
+    case .info:
+      Theme.Colors.info
+    case .success:
+      Theme.Colors.success
+    case .warning:
+      Theme.Colors.warning
+    default:
+      Theme.Colors.ash
     }
   }
 
@@ -628,23 +713,23 @@ struct RuleComparisonRow: View {
     VStack(alignment: .leading, spacing: 8) {
       HStack(spacing: 8) {
         Image(systemName: status.0)
-          .foregroundStyle(status.2)
+          .foregroundStyle(statusColor)
           .accessibilityLabel(status.1)
         Text(model.providerDisplayName(comparison.provider))
-          .font(.headline)
-        Text(status.1)
-          .foregroundStyle(.secondary)
+          .font(Theme.Fonts.subheading)
+          .foregroundStyle(Theme.Colors.mist)
+        StatusBadge(text: status.1, kind: status.2)
       }
       PathSummary(label: "Source", value: comparison.sourcePath)
       PathSummary(label: "Destination", value: comparison.destinationPath)
       Text(comparison.preview.isEmpty ? "(empty file)" : comparison.preview)
-        .font(.system(.caption, design: .monospaced))
+        .font(Theme.Fonts.mono(size: 11))
         .textSelection(.enabled)
         .lineLimit(6)
       if comparison.truncated {
         Label("Preview truncated", systemImage: "scissors")
-          .font(.caption)
-          .foregroundStyle(.secondary)
+          .font(Theme.Fonts.eyebrow)
+          .foregroundStyle(Theme.Colors.ash)
       }
     }
     .padding(.vertical, 6)
@@ -662,19 +747,19 @@ struct SkillInventoryPreview: View {
   var body: some View {
     if overview == nil && selectedAdoptions.isEmpty {
       Text("Skill inventory unavailable.")
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Theme.Colors.ash)
     } else {
       ForEach(overview?.shared ?? []) { skill in
         VStack(alignment: .leading, spacing: 4) {
           Label(skill.name, systemImage: "hammer")
           Text(skill.path)
-            .font(.system(.caption, design: .monospaced))
-            .foregroundStyle(.secondary)
+            .font(Theme.Fonts.mono(size: 11))
+            .foregroundStyle(Theme.Colors.ash)
             .textSelection(.enabled)
           if !skill.shadowedBy.isEmpty {
             Text("Shadowed by \(skill.shadowedBy.map { model.providerDisplayName($0) }.joined(separator: ", "))")
-              .font(.caption)
-              .foregroundStyle(.secondary)
+              .font(Theme.Fonts.eyebrow)
+              .foregroundStyle(Theme.Colors.ash)
           }
         }
         .padding(.vertical, 3)
@@ -684,13 +769,13 @@ struct SkillInventoryPreview: View {
         VStack(alignment: .leading, spacing: 4) {
           Label("\(skill.name) (\(model.providerDisplayName(skill.provider)))", systemImage: "hammer.circle")
           Text(skill.path)
-            .font(.system(.caption, design: .monospaced))
-            .foregroundStyle(.secondary)
+            .font(Theme.Fonts.mono(size: 11))
+            .foregroundStyle(Theme.Colors.ash)
             .textSelection(.enabled)
           if skill.shadowsShared {
             Text("Shadows a shared skill for this provider.")
-              .font(.caption)
-              .foregroundStyle(.secondary)
+              .font(Theme.Fonts.eyebrow)
+              .foregroundStyle(Theme.Colors.ash)
           }
         }
         .padding(.vertical, 3)
@@ -698,7 +783,7 @@ struct SkillInventoryPreview: View {
 
       if selectedAdoptions.isEmpty {
         Text("No provider-local skills are selected for adoption.")
-          .foregroundStyle(.secondary)
+          .foregroundStyle(Theme.Colors.ash)
       } else {
         ForEach(selectedAdoptions) { skill in
           SkillProjectionRow(
@@ -745,24 +830,24 @@ struct SkillProjectionRow: View {
     VStack(alignment: .leading, spacing: 6) {
       HStack(spacing: 8) {
         Image(systemName: statusSymbol)
-          .foregroundStyle(blocked ? Color.red : (conflict ? Color.orange : Color.accentColor))
+          .foregroundStyle(statusColor)
           .accessibilityLabel(statusText)
         Text(skill.name)
-          .font(.headline)
+          .font(Theme.Fonts.subheading)
+          .foregroundStyle(Theme.Colors.mist)
         Text(model.providerDisplayName(skill.provider))
-          .foregroundStyle(.secondary)
-        Text(statusText)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(Theme.Colors.ash)
+        StatusBadge(text: statusText, kind: statusKind)
       }
       PathSummary(label: "Source", value: skill.sourcePath)
       PathSummary(label: "Destination", value: destination)
       Text("Affected providers: \(affectedProviders.map { model.providerDisplayName($0) }.joined(separator: ", "))")
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        .font(Theme.Fonts.eyebrow)
+        .foregroundStyle(Theme.Colors.ash)
       if scope == .provider && ((model.skillsOverview?.shared.contains { $0.name == skill.name } ?? false) || selectedSharedSkillNames.contains(skill.name)) {
         Text("This provider-scoped skill will shadow the shared skill for \(model.providerDisplayName(skill.provider)).")
-          .font(.caption)
-          .foregroundStyle(.secondary)
+          .font(Theme.Fonts.eyebrow)
+          .foregroundStyle(Theme.Colors.ash)
       }
     }
     .padding(.vertical, 6)
@@ -770,6 +855,25 @@ struct SkillProjectionRow: View {
 
   private var affectedProviders: [String] {
     scope == .provider ? [skill.provider] : skill.affectedProviders
+  }
+
+  private var statusKind: StatusBadge.Kind {
+    if blocked { return .error }
+    if conflict && overwrite { return .warning }
+    return .info
+  }
+
+  private var statusColor: Color {
+    switch statusKind {
+    case .error:
+      Theme.Colors.errorText
+    case .warning:
+      Theme.Colors.warning
+    case .info:
+      Theme.Colors.info
+    default:
+      Theme.Colors.ash
+    }
   }
 }
 
@@ -780,9 +884,10 @@ struct StatusView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 18) {
       Label("Setup Complete", systemImage: "checkmark.seal")
-        .font(.largeTitle.weight(.semibold))
+        .font(Theme.Fonts.headingLg)
+        .foregroundStyle(Theme.Colors.mist)
       Text(model.completionMessage ?? "Reglet finished onboarding.")
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Theme.Colors.ash)
         .textSelection(.enabled)
 
       List(model.detectedProviders) { provider in
@@ -790,13 +895,13 @@ struct StatusView: View {
           VStack(alignment: .leading) {
             Text(provider.displayName)
             Text(provider.id)
-              .font(.caption)
-              .foregroundStyle(.secondary)
+              .font(Theme.Fonts.eyebrow)
+              .foregroundStyle(Theme.Colors.ash)
           }
           Spacer()
           Text(provider.enabled ? "Managed" : "Available")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .font(Theme.Fonts.eyebrow)
+            .foregroundStyle(Theme.Colors.ash)
         }
         .padding(.vertical, 4)
       }
