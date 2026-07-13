@@ -13,6 +13,19 @@ brew install elijahbutler/reglet/reglet
 
 The Homebrew formula installs the CLI on macOS and is updated for every public release before the GitHub Release is published.
 
+## Migrate from the 0.1.6 app cask
+
+Reglet 0.1.6 was installed as a Homebrew cask. Casks cannot be upgraded in place to a formula, and that legacy app cask receives no later releases. After the first CLI-only release is published, switch once:
+
+```bash
+brew update
+brew uninstall --cask reglet
+brew install elijahbutler/reglet/reglet
+reglet --version
+```
+
+Uninstalling the cask removes `Reglet.app` and its linked binary; it does not remove your `~/.reglet` configuration or provider files.
+
 ## Direct binaries
 
 Download the matching CLI artifact from the GitHub Release:

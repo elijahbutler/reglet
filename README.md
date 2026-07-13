@@ -32,6 +32,8 @@ brew tap elijahbutler/reglet
 brew install elijahbutler/reglet/reglet
 ```
 
+If you installed 0.1.6 as `brew install --cask reglet`, it is a legacy app cask and cannot upgrade itself into the formula. Follow the [cask migration steps](docs/installation.md#migrate-from-the-016-app-cask) after the first CLI-only release is published.
+
 Or download the matching binary from the GitHub Release. Use `reglet-darwin-arm64` on Apple silicon, `reglet-darwin-x64` on Intel Macs, or `reglet-windows-x64.exe` on Windows x64.
 
 ```bash

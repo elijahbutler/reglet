@@ -14,6 +14,8 @@ Public releases are CLI-only. Release automation fails unless it can:
 
 `HOMEBREW_TAP_TOKEN` is a repository secret backed by a fine-grained token with **Contents: Read and write** access to `elijahbutler/homebrew-reglet`. If the secret is absent, cloning fails, committing fails, or pushing fails, the workflow fails and leaves the GitHub Release as a draft.
 
+The legacy 0.1.6 app cask remains an uninstall path only; the workflow does not update it. Existing cask users must uninstall it and install the formula after a CLI-only release publishes.
+
 ## Release contents
 
 Each tag release includes:
