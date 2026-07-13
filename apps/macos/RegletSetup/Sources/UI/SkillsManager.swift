@@ -343,7 +343,6 @@ struct NewSkillView: View {
   @State private var provider = ""
   @State private var content = "# New Skill\n"
   @State private var confirmsDiscard = false
-  @Environment(\.colorSchemeContrast) private var contrast
 
   private var hasUnsavedDraft: Bool {
     !name.isEmpty || !provider.isEmpty || content != "# New Skill\n"
@@ -398,10 +397,6 @@ struct NewSkillView: View {
       Button("Keep Editing", role: .cancel) {}
     }
   }
-
-  private var secondaryText: Color {
-    contrast == .increased ? Theme.Colors.mist : Theme.Colors.ash
-  }
 }
 
 /// Reusable grouped checkbox/scope-picker rows for unmanaged skills.
@@ -409,7 +404,6 @@ struct NewSkillView: View {
 /// Used by both the onboarding Skills step and the Skills manager.
 struct UnmanagedSkillsGroups: View {
   @EnvironmentObject private var model: SetupModel
-  @Environment(\.colorSchemeContrast) private var contrast
   let skills: [UnmanagedSkill]
 
   private var byProvider: [(provider: String, skills: [UnmanagedSkill])] {

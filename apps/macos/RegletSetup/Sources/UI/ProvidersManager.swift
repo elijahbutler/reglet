@@ -35,6 +35,7 @@ struct ProvidersManagerView: View {
           }
           .padding(.vertical, 8)
           .listRowBackground(Theme.Colors.voidBlack)
+          .listRowSeparatorTint(Theme.Colors.white.opacity(0.10))
         }
       } header: {
         SectionHeader(title: "Installed Providers")
@@ -98,6 +99,7 @@ struct InventoryManagerView: View {
       }
       .padding(.vertical, 8)
       .listRowBackground(Theme.Colors.voidBlack)
+      .listRowSeparatorTint(Theme.Colors.white.opacity(0.10))
     }
     .listStyle(.inset)
     .scrollContentBackground(.hidden)

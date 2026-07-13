@@ -164,7 +164,7 @@ struct DriftRow: View {
       } label: {
         Label("Import to Master", systemImage: "square.and.arrow.down")
       }
-      .buttonStyle(.regletSecondary)
+      .buttonStyle(.regletGhost)
       .disabled(isMissing || model.isWorking)
       .help("Copy the provider's edits back into the master directory")
       Button {

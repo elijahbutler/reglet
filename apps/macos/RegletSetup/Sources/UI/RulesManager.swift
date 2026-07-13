@@ -20,6 +20,7 @@ struct RulesManagerView: View {
           .foregroundStyle(Theme.Colors.mist)
           .tag(document.path)
           .listRowBackground(Theme.Colors.voidBlack)
+          .listRowSeparatorTint(Theme.Colors.white.opacity(0.10))
       }
       .listStyle(.sidebar)
       .scrollContentBackground(.hidden)

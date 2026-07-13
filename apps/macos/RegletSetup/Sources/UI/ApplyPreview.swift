@@ -16,7 +16,7 @@ struct ApplyPreviewView: View {
             .font(Theme.Fonts.body)
             .foregroundStyle(Theme.Colors.errorText)
             .padding(Theme.Spacing.sm)
-            .cardSurface()
+            .background(Theme.Colors.ink, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
         }
       }
       .padding(Theme.Spacing.md)
@@ -26,6 +26,9 @@ struct ApplyPreviewView: View {
             .font(Theme.Fonts.mono())
             .foregroundStyle(Theme.Colors.mist)
             .textSelection(.enabled)
+            .padding(Theme.Spacing.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.Colors.ink, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
           Text("Drift: \(entry.driftStatus)")
             .font(Theme.Fonts.body)
             .foregroundStyle(Theme.Colors.ash)
@@ -59,7 +62,7 @@ struct ApplyPreviewView: View {
         }
         .padding(.vertical, 6)
         .listRowBackground(Theme.Colors.voidBlack)
-        .listRowSeparatorTint(Color.white.opacity(0.10))
+        .listRowSeparatorTint(Theme.Colors.white.opacity(0.10))
       }
       .listStyle(.inset)
       .scrollContentBackground(.hidden)
@@ -68,7 +71,7 @@ struct ApplyPreviewView: View {
         HStack {
           Spacer()
           Button("Cancel", action: close)
-            .buttonStyle(.regletSecondary)
+            .buttonStyle(.regletGhost)
           Button("Apply to Providers") {
             Task {
               if await model.applyPreview(scope.preview, contents: scope.contents, providers: scope.providers) {

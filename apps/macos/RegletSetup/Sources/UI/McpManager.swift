@@ -51,12 +51,14 @@ struct McpManagerView: View {
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
         .background(Theme.Colors.voidBlack)
-        Rectangle()
-          .fill(Theme.Colors.white.opacity(0.10))
-          .frame(height: 1)
-        Button("New Server") { selectedName = nil }
+        StatusStrip {
+          Button {
+            selectedName = nil
+          } label: {
+            Label("New Server", systemImage: "plus")
+          }
           .buttonStyle(.regletSecondary)
-          .padding(Theme.Spacing.sm)
+        }
       }
       .background(Theme.Colors.voidBlack)
       .frame(minWidth: 220)
