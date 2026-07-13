@@ -113,6 +113,8 @@ Merge gate:
 
 ### Round 0.5: contract and privacy hardening
 
+Status: Complete.
+
 Goal: freeze the boundary used by the first Manager vertical slice.
 
 Deliverables:

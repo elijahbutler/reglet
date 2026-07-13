@@ -952,7 +952,7 @@ describe('reglet CLI', () => {
     const result = await runCli(['manager', 'snapshot', '--json', '--contract-version', '2'], home, providerHome);
     const snapshot = JSON.parse(result.stdout) as {
       version: number;
-      safety: { localOnly: boolean; networkSync: boolean };
+      safety: { localOnly: boolean; requiresExplicitReview: boolean };
       providerDiscovery: { provider: string; capabilities: { skills: { state: string; reason?: string } } }[];
       sourceInventory: { provider: string; content: string; path: string | null }[];
       enrollmentMatrix: { provider: string; cells: { rules: { enrolled: boolean } } }[];
@@ -960,7 +960,7 @@ describe('reglet CLI', () => {
     };
 
     expect(snapshot.version).toBe(2);
-    expect(snapshot.safety).toMatchObject({ localOnly: true, networkSync: false });
+    expect(snapshot.safety).toEqual({ localOnly: true, requiresExplicitReview: true });
     expect(snapshot.providerDiscovery).toHaveLength(6);
     expect(snapshot.providerDiscovery.find((provider) => provider.provider === 'windsurf')?.capabilities.skills)
       .toEqual({ state: 'unsupported', reason: 'provider has no skills directory' });
@@ -1055,7 +1055,7 @@ describe('reglet CLI', () => {
   test('manager snapshot v2 reports needs-attention cells and does not resolve MCP secret environment values', async () => {
     const { home, providerHome } = await useTempHomes();
     await mkdir(path.join(providerHome, '.claude'), { recursive: true });
-    await writeFile(path.join(providerHome, '.claude.json'), '{not-json');
+    await writeFile(path.join(providerHome, '.claude.json'), '{not-json manager-source-secret-canary}');
     await mkdir(path.join(home, 'mcp'), { recursive: true });
     await writeFile(
       path.join(home, 'mcp', 'servers.json'),
@@ -1076,6 +1076,7 @@ describe('reglet CLI', () => {
     };
 
     expect(result.stdout).not.toContain('resolved-secret-value');
+    expect(result.stdout).not.toContain('manager-source-secret-canary');
     expect(snapshot.master.mcp.sharedServers[0]).toMatchObject({
       id: 'secretServer',
       name: 'secretServer',
@@ -1099,15 +1100,27 @@ describe('reglet CLI', () => {
     await runCli(['enroll', 'claude'], home, providerHome);
 
     const result = await runCli(['manager', 'snapshot', '--json', '--contract-version', '2'], home, providerHome);
-    const snapshot = JSON.parse(result.stdout) as { state: { state: string; reasons: string[] } };
+    const snapshot = JSON.parse(result.stdout) as { state: { state: string; reasons: string[] }; problems: { code: string }[] };
 
     expect(snapshot.state).toEqual({ state: 'blocked', reasons: ['requiredMcpEnvironmentMissing'] });
+    expect(snapshot.problems).toContainEqual(expect.objectContaining({ code: 'MISSING_MCP_ENVIRONMENT' }));
   });
 
-  test('manager snapshot rejects unsupported contract versions', async () => {
+  test('manager snapshot rejects unsupported contract versions with structured redacted errors', async () => {
     const { home, providerHome } = await useTempHomes();
+    const canary = 'manager-error-secret-canary';
 
-    await expect(runCli(['manager', 'snapshot', '--json', '--contract-version', '3'], home, providerHome))
-      .rejects.toMatchObject({ code: 1 });
+    try {
+      await runCli(['manager', 'snapshot', '--json', '--contract-version', `3-${canary}`], home, providerHome);
+      throw new Error('manager snapshot unexpectedly accepted unsupported contract version');
+    } catch (error) {
+      const failure = error as { code?: number; stdout?: string; stderr?: string };
+      expect(failure.code).toBe(1);
+      expect(failure.stdout).toBe('');
+      expect(failure.stderr).not.toContain(canary);
+      const response = JSON.parse(failure.stderr ?? '') as { contract: string; error: { code: string; message: string; command: string } };
+      expect(response.contract).toBe('manager-error');
+      expect(response.error).toMatchObject({ code: 'INVALID_CONTENT', command: 'manager.snapshot' });
+    }
   });
 });

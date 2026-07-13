@@ -1,0 +1,28 @@
+{
+  "version": 2,
+  "contract": "manager-snapshot",
+  "regletHome": "/tmp/reglet-recovery",
+  "safety": { "localOnly": true, "requiresExplicitReview": true },
+  "providerDiscovery": [],
+  "sourceInventory": [],
+  "enrollmentMatrix": [],
+  "master": {
+    "rules": { "sharedDocuments": 0, "providerOverlays": { "claude": 0, "codex": 0, "cursor": 0, "gemini": 0, "windsurf": 0, "opencode": 0 } },
+    "skills": { "sharedSkills": 0, "providerScopedSkills": { "claude": 0, "codex": 0, "cursor": 0, "gemini": 0, "windsurf": 0, "opencode": 0 } },
+    "mcp": { "sharedServers": [], "providerServers": { "claude": [], "codex": [], "cursor": [], "gemini": [], "windsurf": [], "opencode": [] } }
+  },
+  "state": { "state": "draftOnly", "reasons": ["noDestinationsEnrolled"] },
+  "problems": [{ "code": "INTERRUPTED_OPERATION_RECOVERED", "severity": "info", "message": "Reglet recovered an interrupted operation before reporting Manager state.", "recoverable": true, "operationId": "operation-1" }],
+  "effectiveProviders": [],
+  "structuredPlan": { "available": false, "reason": "snapshot-read-only", "entries": [] },
+  "driftInbox": [],
+  "receipts": {
+    "list": [{ "id": "operation-1", "lifecycle": "pending", "startedAt": "2026-07-13T00:00:00.000Z", "completedAt": null, "targetCount": 1 }],
+    "details": [{
+      "id": "operation-1", "lifecycle": "pending", "startedAt": "2026-07-13T00:00:00.000Z", "completedAt": null,
+      "targets": [{ "path": "/providers/.claude/CLAUDE.md", "snapshot": "/tmp/snapshot", "snapshotKind": "file", "manifestOutputBefore": null }],
+      "recovery": { "attempted": true, "recovered": false, "message": "Recovery is available." }
+    }]
+  },
+  "legacyNetworkState": { "present": false, "paths": [] }
+}

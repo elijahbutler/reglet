@@ -4,7 +4,7 @@
   "title": "Reglet Manager snapshot v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "contract", "regletHome", "safety", "providerDiscovery", "sourceInventory", "enrollmentMatrix", "master", "state", "effectiveProviders", "structuredPlan", "driftInbox", "receipts", "legacyNetworkState"],
+  "required": ["version", "contract", "regletHome", "safety", "providerDiscovery", "sourceInventory", "enrollmentMatrix", "master", "state", "problems", "effectiveProviders", "structuredPlan", "driftInbox", "receipts", "legacyNetworkState"],
   "properties": {
     "version": { "const": 2 },
     "contract": { "const": "manager-snapshot" },
@@ -16,6 +16,7 @@
     "master": { "$ref": "#/definitions/masterSummary" },
     "masterRevision": { "type": "string" },
     "state": { "$ref": "#/definitions/derivedState" },
+    "problems": { "type": "array", "items": { "$ref": "#/definitions/managerIssue" } },
     "effectiveProviders": { "type": "array", "items": { "$ref": "#/definitions/effectiveProvider" } },
     "structuredPlan": { "$ref": "#/definitions/structuredPlan" },
     "driftInbox": { "type": "array", "items": { "$ref": "#/definitions/driftItem" } },
@@ -34,12 +35,9 @@
     "safety": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["localOnly", "networkSync", "daemon", "notifications", "requiresExplicitReview"],
+      "required": ["localOnly", "requiresExplicitReview"],
       "properties": {
         "localOnly": { "const": true },
-        "networkSync": { "const": false },
-        "daemon": { "const": false },
-        "notifications": { "const": false },
         "requiresExplicitReview": { "const": true }
       }
     },
@@ -285,6 +283,32 @@
             ]
           }
         }
+      }
+    },
+    "managerIssue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "message", "recoverable"],
+      "properties": {
+        "code": {
+          "enum": [
+            "INVALID_CONTENT",
+            "STALE_PLAN",
+            "MISSING_MCP_ENVIRONMENT",
+            "UNREADABLE_SOURCE",
+            "OPERATION_FAILED",
+            "PARTIAL_SNAPSHOT",
+            "INTERRUPTED_OPERATION"
+          ]
+        },
+        "severity": { "enum": ["info", "warning", "error"] },
+        "message": { "type": "string", "minLength": 1 },
+        "recoverable": { "type": "boolean" },
+        "provider": { "$ref": "#/definitions/providerId" },
+        "content": { "$ref": "#/definitions/content" },
+        "path": { "type": "string" },
+        "operationId": { "type": "string" },
+        "command": { "type": "string" }
       }
     },
     "effectiveProvider": {

@@ -1,0 +1,49 @@
+{
+  "version": 2,
+  "contract": "manager-snapshot",
+  "regletHome": "/tmp/reglet-partial-failure",
+  "safety": { "localOnly": true, "requiresExplicitReview": true },
+  "providerDiscovery": [{
+    "provider": "claude",
+    "displayName": "Claude Code",
+    "presence": "needs-attention",
+    "detected": true,
+    "capabilities": {
+      "rules": { "state": "supported" },
+      "skills": { "state": "supported" },
+      "mcp": { "state": "needs-attention", "reason": "A provider source could not be read." }
+    }
+  }],
+  "sourceInventory": [{
+    "provider": "claude", "content": "mcp", "path": "/providers/.claude.json", "readable": false, "exists": true, "items": [], "issue": "A provider source could not be read."
+  }],
+  "enrollmentMatrix": [{
+    "provider": "claude", "displayName": "Claude Code", "enabled": true,
+    "cells": {
+      "rules": { "provider": "claude", "content": "rules", "enrolled": true, "capability": { "state": "supported" }, "destinationPath": "/providers/.claude/CLAUDE.md" },
+      "skills": { "provider": "claude", "content": "skills", "enrolled": false, "capability": { "state": "supported" }, "destinationPath": "/providers/.claude/skills" },
+      "mcp": { "provider": "claude", "content": "mcp", "enrolled": true, "capability": { "state": "needs-attention", "reason": "A provider source could not be read." }, "destinationPath": "/providers/.claude.json" }
+    }
+  }],
+  "master": {
+    "rules": { "sharedDocuments": 1, "providerOverlays": { "claude": 0, "codex": 0, "cursor": 0, "gemini": 0, "windsurf": 0, "opencode": 0 } },
+    "skills": { "sharedSkills": 0, "providerScopedSkills": { "claude": 0, "codex": 0, "cursor": 0, "gemini": 0, "windsurf": 0, "opencode": 0 } },
+    "mcp": { "sharedServers": [], "providerServers": { "claude": [], "codex": [], "cursor": [], "gemini": [], "windsurf": [], "opencode": [] } }
+  },
+  "state": { "state": "blocked", "reasons": ["contentNeedsAttention"] },
+  "problems": [
+    { "code": "PARTIAL_SNAPSHOT", "severity": "warning", "message": "The Manager snapshot is partial because one local read failed.", "recoverable": true },
+    { "code": "UNREADABLE_SOURCE", "severity": "error", "message": "Reglet could not read one local source needed for the Manager snapshot.", "recoverable": true, "provider": "claude", "content": "mcp" }
+  ],
+  "effectiveProviders": [{
+    "provider": "claude", "displayName": "Claude Code",
+    "contents": {
+      "rules": { "enrolled": true, "destinationPath": "/providers/.claude/CLAUDE.md", "masterItems": 1, "capability": { "state": "supported" } },
+      "mcp": { "enrolled": true, "destinationPath": "/providers/.claude.json", "masterItems": 0, "capability": { "state": "needs-attention", "reason": "A provider source could not be read." }, "mcpServers": [] }
+    }
+  }],
+  "structuredPlan": { "available": false, "reason": "snapshot-read-only", "entries": [] },
+  "driftInbox": [],
+  "receipts": { "list": [], "details": [] },
+  "legacyNetworkState": { "present": false, "paths": [] }
+}

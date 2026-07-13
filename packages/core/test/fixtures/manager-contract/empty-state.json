@@ -4,9 +4,6 @@
   "regletHome": "/tmp/reglet-empty",
   "safety": {
     "localOnly": true,
-    "networkSync": false,
-    "daemon": false,
-    "notifications": false,
     "requiresExplicitReview": true
   },
   "providerDiscovery": [],
@@ -53,6 +50,7 @@
       "noDestinationsEnrolled"
     ]
   },
+  "problems": [],
   "effectiveProviders": [],
   "structuredPlan": {
     "available": false,
