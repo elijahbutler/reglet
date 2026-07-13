@@ -146,12 +146,70 @@
         "opencode": { "type": "integer", "minimum": 0 }
       }
     },
+    "providerServerArrays": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claude", "codex", "cursor", "gemini", "windsurf", "opencode"],
+      "properties": {
+        "claude": { "type": "array", "items": { "$ref": "#/definitions/mcpServerSummary" } },
+        "codex": { "type": "array", "items": { "$ref": "#/definitions/mcpServerSummary" } },
+        "cursor": { "type": "array", "items": { "$ref": "#/definitions/mcpServerSummary" } },
+        "gemini": { "type": "array", "items": { "$ref": "#/definitions/mcpServerSummary" } },
+        "windsurf": { "type": "array", "items": { "$ref": "#/definitions/mcpServerSummary" } },
+        "opencode": { "type": "array", "items": { "$ref": "#/definitions/mcpServerSummary" } }
+      }
+    },
+    "mcpScope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "shared" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "provider"],
+          "properties": {
+            "kind": { "const": "provider" },
+            "provider": { "$ref": "#/definitions/providerId" }
+          }
+        }
+      ]
+    },
+    "mcpConflictStatus": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state"],
+          "properties": { "state": { "const": "none" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "displayName", "conflictingIds"],
+          "properties": {
+            "state": { "const": "conflict" },
+            "displayName": { "type": "string" },
+            "conflictingIds": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      ]
+    },
     "mcpServerSummary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "transport", "envKeys", "issues"],
+      "required": ["id", "name", "displayName", "scope", "overrideOf", "affectedProviders", "conflictStatus", "transport", "envKeys", "issues"],
       "properties": {
+        "id": { "type": "string" },
         "name": { "type": "string" },
+        "displayName": { "type": "string" },
+        "scope": { "$ref": "#/definitions/mcpScope" },
+        "overrideOf": { "type": ["string", "null"] },
+        "affectedProviders": { "type": "array", "items": { "$ref": "#/definitions/providerId" } },
+        "conflictStatus": { "$ref": "#/definitions/mcpConflictStatus" },
         "transport": { "enum": ["command", "url", "invalid"] },
         "envKeys": { "type": "array", "items": { "type": "string" } },
         "issues": { "type": "array", "items": { "type": "string" } }
@@ -183,9 +241,10 @@
         "mcp": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["sharedServers"],
+          "required": ["sharedServers", "providerServers"],
           "properties": {
-            "sharedServers": { "type": "array", "items": { "$ref": "#/definitions/mcpServerSummary" } }
+            "sharedServers": { "type": "array", "items": { "$ref": "#/definitions/mcpServerSummary" } },
+            "providerServers": { "$ref": "#/definitions/providerServerArrays" }
           }
         }
       }
@@ -200,7 +259,8 @@
         "masterItems": { "type": "integer", "minimum": 0 },
         "capability": { "$ref": "#/definitions/capability" },
         "compositionRevision": { "type": "string" },
-        "lastAppliedCompositionRevision": { "type": "string" }
+        "lastAppliedCompositionRevision": { "type": "string" },
+        "mcpServers": { "type": "array", "items": { "$ref": "#/definitions/mcpServerSummary" } }
       }
     },
     "derivedState": {

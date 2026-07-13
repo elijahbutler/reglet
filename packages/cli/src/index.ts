@@ -16,6 +16,7 @@ import {
   deleteSkillFile,
   detectDrift,
   getAdapter,
+  effectiveMcpServerSummary,
   importDriftedMcp,
   importDriftedRules,
   importDriftedSkills,
@@ -24,6 +25,7 @@ import {
   loadManifest,
   loadMasterDir,
   listMcpServers,
+  listEffectiveMcpServers,
   listOperationReceipts,
   listManagedSkillTrees,
   listSkills,
@@ -39,6 +41,7 @@ import {
   mcpServerSummary,
   needsAttentionCapability,
   publicReleaseCapabilities,
+  providerMcpScope,
   receiptDetail,
   receiptListItem,
   deriveMasterRevisions,
@@ -55,6 +58,8 @@ import {
   revert,
   renameSkill,
   renameSkillFile,
+  renameMcpServerDisplayName,
+  readMcpServer,
   saveConfig,
   serializeMcpServers,
   type ApplyContent,
@@ -75,7 +80,9 @@ import {
   type ManagerSnapshotV2,
   type ManagerSourceInventoryItemV2,
   type ManagerStructuredPlanEntryV2,
-  resolveMcpServersEnv,
+  type McpScope,
+  resolveEffectiveMcpServersEnv,
+  sharedMcpScope,
   upsertMcpServer,
   writeSkillFile,
 } from '@reglet/core';
@@ -455,7 +462,8 @@ program
   .description('Import drifted provider content back into the master directory')
   .argument('<target>', 'provider:rules|skills|mcp', parseProviderTarget)
   .option('--json', 'print machine-readable JSON for manager apps')
-  .action(async (target: ProviderTarget, options: { json?: boolean }) => {
+  .option('--scope <scope>', 'shared or provider for MCP imports', parseMcpScope, 'shared')
+  .action(async (target: ProviderTarget, options: { json?: boolean; scope?: 'shared' | 'provider' }) => {
     if (target.content === undefined) {
       throw new InvalidArgumentError('Specify the content to import, e.g. claude:rules');
     }
@@ -485,7 +493,7 @@ program
       return;
     }
 
-    const result = await importDriftedMcp(target.provider);
+    const result = await importDriftedMcp(target.provider, regletHome(), options.scope ?? 'shared');
     if (options.json === true) {
       printJson({ version: 1, content: 'mcp', ...result });
       return;
@@ -667,24 +675,75 @@ skills
 
 const mcp = program.command('mcp').description('Read and edit master MCP definitions');
 
-mcp.command('list').option('--json').action(async (options: { json?: boolean }) => {
-  const result = await listMcpServers();
-  const servers = result.servers;
-  if (options.json === true) printJson({ version: 1, servers });
-  else for (const entry of servers) console.log(`${entry.name}\t${entry.server.url ?? entry.server.command ?? ''}`);
-});
+mcp
+  .command('list')
+  .option('--json')
+  .option('--scope <scope>', 'shared or provider', parseMcpScope, 'shared')
+  .option('--provider <provider>', 'provider for provider-scoped MCP', parseProvider)
+  .option('--effective-provider <provider>', 'list effective MCP output for provider', parseProvider)
+  .action(async (options: McpCommandOptions & { effectiveProvider?: ProviderId }) => {
+    if (options.effectiveProvider !== undefined) {
+      const servers = await listEffectiveMcpServers(options.effectiveProvider);
+      if (options.json === true) printJson({ version: 1, scope: { kind: 'provider', provider: options.effectiveProvider }, effective: true, servers });
+      else for (const entry of servers) console.log(`${entry.id}\t${entry.displayName}\t${entry.server.url ?? entry.server.command ?? ''}`);
+      return;
+    }
+    const result = await listMcpServers(mcpScope(options));
+    const servers = result.servers;
+    if (options.json === true) printJson({ version: 1, scope: result.scope, servers });
+    else for (const entry of servers) console.log(`${entry.id}\t${entry.displayName}\t${entry.server.url ?? entry.server.command ?? ''}`);
+  });
 
-mcp.command('upsert').argument('<name>').option('--json').action(async (name: string, options: { json?: boolean }) => {
-  const input = JSON.parse(await Bun.stdin.text()) as McpServerDef;
-  const server = await upsertMcpServer(name, input);
-  if (options.json === true) printJson({ version: 1, server });
-  else console.log(`mcp\tsaved\t${name}`);
-});
+mcp
+  .command('read')
+  .argument('<id>')
+  .option('--json')
+  .option('--scope <scope>', 'shared or provider', parseMcpScope, 'shared')
+  .option('--provider <provider>', 'provider for provider-scoped MCP', parseProvider)
+  .action(async (id: string, options: McpCommandOptions) => {
+    const server = await readMcpServer(id, mcpScope(options));
+    if (options.json === true) printJson({ version: 1, server });
+    else console.log(`${server.id}\t${server.displayName}\t${server.server.url ?? server.server.command ?? ''}`);
+  });
 
-mcp.command('delete').argument('<name>').action(async (name: string) => {
-  await deleteMcpServer(name);
-  console.log(`mcp\tdeleted\t${name}`);
-});
+mcp
+  .command('upsert')
+  .argument('<id>')
+  .option('--json')
+  .option('--scope <scope>', 'shared or provider', parseMcpScope, 'shared')
+  .option('--provider <provider>', 'provider for provider-scoped MCP', parseProvider)
+  .option('--display-name <name>', 'editable provider output/display name')
+  .action(async (id: string, options: McpCommandOptions) => {
+    const input = JSON.parse(await Bun.stdin.text()) as McpServerDef;
+    const server = await upsertMcpServer(id, input, mcpScope(options), undefined, options.displayName);
+    if (options.json === true) printJson({ version: 1, server });
+    else console.log(`mcp\tsaved\t${id}`);
+  });
+
+mcp
+  .command('rename-display-name')
+  .argument('<id>')
+  .argument('<display-name>')
+  .option('--json')
+  .option('--scope <scope>', 'shared or provider', parseMcpScope, 'shared')
+  .option('--provider <provider>', 'provider for provider-scoped MCP', parseProvider)
+  .action(async (id: string, displayName: string, options: McpCommandOptions) => {
+    const server = await renameMcpServerDisplayName(id, displayName, mcpScope(options));
+    if (options.json === true) printJson({ version: 1, server });
+    else console.log(`mcp\trenamed-display\t${id}\t${displayName}`);
+  });
+
+mcp
+  .command('delete')
+  .argument('<id>')
+  .option('--json')
+  .option('--scope <scope>', 'shared or provider', parseMcpScope, 'shared')
+  .option('--provider <provider>', 'provider for provider-scoped MCP', parseProvider)
+  .action(async (id: string, options: McpCommandOptions) => {
+    const server = await deleteMcpServer(id, mcpScope(options));
+    if (options.json === true) printJson({ version: 1, server });
+    else console.log(`mcp\tdeleted\t${id}`);
+  });
 
 const daemon = program.command('daemon').description('Run or manage the background daemon');
 
@@ -887,6 +946,21 @@ interface SkillCommandOptions {
   json?: boolean;
 }
 
+interface McpCommandOptions {
+  scope?: 'shared' | 'provider';
+  provider?: ProviderId;
+  json?: boolean;
+  displayName?: string;
+}
+
+function mcpScope(options: McpCommandOptions): McpScope {
+  if (options.scope === 'provider') {
+    if (options.provider === undefined) throw new InvalidArgumentError('--provider is required for provider scope');
+    return providerMcpScope(options.provider);
+  }
+  return sharedMcpScope();
+}
+
 function skillScope(options: SkillCommandOptions): SkillScope {
   if (options.scope === 'provider') {
     if (options.provider === undefined) throw new InvalidArgumentError('--provider is required for provider scope');
@@ -911,6 +985,11 @@ function safetyDefaults(): SafetyJson {
 function parseSkillScope(value: string): SkillAdoptionScope {
   if (value === 'shared' || value === 'provider') return value;
   throw new InvalidArgumentError(`Unknown skill scope: ${value}`);
+}
+
+function parseMcpScope(value: string): 'shared' | 'provider' {
+  if (value === 'shared' || value === 'provider') return value;
+  throw new InvalidArgumentError(`Unknown MCP scope: ${value}`);
 }
 
 function parseProvider(value: string): ProviderId {
@@ -1054,6 +1133,11 @@ async function buildManagerSnapshotV2(): Promise<ManagerSnapshotV2> {
     loadManifest(),
   ]);
   const revisions = await deriveMasterRevisions(master, config);
+  const providerMcpServers = Object.fromEntries(
+    await Promise.all(
+      providerIds.map(async (provider) => [provider, (await listMcpServers(providerMcpScope(provider))).servers] as const),
+    ),
+  ) as Record<ProviderId, Awaited<ReturnType<typeof listMcpServers>>['servers']>;
   const discovery: ManagerProviderDiscoveryV2[] = [];
   const sourceInventory: ManagerSourceInventoryItemV2[] = [];
   const enrollmentMatrix: ManagerEnrollmentProviderV2[] = [];
@@ -1108,10 +1192,10 @@ async function buildManagerSnapshotV2(): Promise<ManagerSnapshotV2> {
     providerDiscovery: discovery,
     sourceInventory,
     enrollmentMatrix,
-    master: masterSummary(master, mcpServers.servers),
+    master: masterSummary(master, mcpServers.servers, providerMcpServers),
     masterRevision: revisions.masterRevision,
-    state: await deriveManagerState(enrollmentMatrix, manifest, receipts, revisions.compositionRevisions, master),
-    effectiveProviders: effectiveProviders(enrollmentMatrix, master, manifest, receipts, revisions.compositionRevisions),
+    state: await deriveManagerState(enrollmentMatrix, manifest, receipts, revisions.compositionRevisions),
+    effectiveProviders: await effectiveProviders(enrollmentMatrix, master, manifest, receipts, revisions.compositionRevisions),
     structuredPlan: {
       available: false,
       reason: 'snapshot-read-only',
@@ -1211,7 +1295,11 @@ function destinationPath(inventory: ProviderInventory, content: ContentId): stri
   return inventory.mcpPath;
 }
 
-function masterSummary(master: Awaited<ReturnType<typeof loadMasterDir>>, mcpServers: Awaited<ReturnType<typeof listMcpServers>>['servers']): ManagerMasterSummaryV2 {
+function masterSummary(
+  master: Awaited<ReturnType<typeof loadMasterDir>>,
+  mcpServers: Awaited<ReturnType<typeof listMcpServers>>['servers'],
+  providerMcpServers: Record<ProviderId, Awaited<ReturnType<typeof listMcpServers>>['servers']>,
+): ManagerMasterSummaryV2 {
   return {
     rules: {
       sharedDocuments: master.rules.length,
@@ -1223,32 +1311,37 @@ function masterSummary(master: Awaited<ReturnType<typeof loadMasterDir>>, mcpSer
     },
     mcp: {
       sharedServers: mcpServers.map(mcpServerSummary),
+      providerServers: Object.fromEntries(
+        providerIds.map((provider) => [provider, providerMcpServers[provider].map(mcpServerSummary)]),
+      ) as Record<ProviderId, ReturnType<typeof mcpServerSummary>[]>,
     },
   };
 }
 
-function effectiveProviders(
+async function effectiveProviders(
   enrollmentMatrix: ManagerEnrollmentProviderV2[],
   master: Awaited<ReturnType<typeof loadMasterDir>>,
   manifest: Awaited<ReturnType<typeof loadManifest>>,
   receipts: Awaited<ReturnType<typeof listOperationReceipts>>,
   compositionRevisions: Awaited<ReturnType<typeof deriveMasterRevisions>>['compositionRevisions'],
-): ManagerEffectiveProviderCompositionV2[] {
-  return enrollmentMatrix
+): Promise<ManagerEffectiveProviderCompositionV2[]> {
+  return Promise.all(enrollmentMatrix
     .filter((provider) => Object.values(provider.cells).some((cell) => cell.enrolled))
-    .map((provider) => {
+    .map(async (provider) => {
       const contents: ManagerEffectiveProviderCompositionV2['contents'] = {};
       for (const content of contentIds) {
         const cell = provider.cells[content];
         if (!cell.enrolled || cell.destinationPath === null) continue;
         const lastAppliedCompositionRevision = findLastAppliedCompositionRevision(cell, manifest, receipts);
+        const mcpServers = content === 'mcp' ? (await listEffectiveMcpServers(provider.provider)).map(effectiveMcpServerSummary) : undefined;
         contents[content] = {
           enrolled: true,
           destinationPath: cell.destinationPath,
-          masterItems: masterItemCount(master, provider.provider, content),
+          masterItems: mcpServers === undefined ? masterItemCount(master, provider.provider, content) : mcpServers.length,
           capability: cell.capability,
           compositionRevision: compositionRevisions[provider.provider][content],
           ...(typeof lastAppliedCompositionRevision === 'string' ? { lastAppliedCompositionRevision } : {}),
+          ...(mcpServers === undefined ? {} : { mcpServers }),
         };
       }
       return {
@@ -1256,7 +1349,7 @@ function effectiveProviders(
         displayName: provider.displayName,
         contents,
       };
-    });
+    }));
 }
 
 async function deriveManagerState(
@@ -1264,7 +1357,6 @@ async function deriveManagerState(
   manifest: Awaited<ReturnType<typeof loadManifest>>,
   receipts: Awaited<ReturnType<typeof listOperationReceipts>>,
   compositionRevisions: Awaited<ReturnType<typeof deriveMasterRevisions>>['compositionRevisions'],
-  master: Awaited<ReturnType<typeof loadMasterDir>>,
 ): Promise<ManagerDerivedStateV2> {
   const enrolledCells = enrollmentMatrix.flatMap((provider) =>
     contentIds
@@ -1282,10 +1374,10 @@ async function deriveManagerState(
   if (enrolledCells.some((cell) => cell.capability.state === 'unsupported')) {
     reasons.add('contentUnsupported');
   }
-  try {
-    resolveMcpServersEnv(master.mcpServers);
-  } catch {
-    if (enrolledCells.some((cell) => cell.content === 'mcp')) {
+  for (const cell of enrolledCells.filter((enrolledCell) => enrolledCell.content === 'mcp')) {
+    try {
+      await resolveEffectiveMcpServersEnv(cell.provider);
+    } catch {
       reasons.add('requiredMcpEnvironmentMissing');
     }
   }

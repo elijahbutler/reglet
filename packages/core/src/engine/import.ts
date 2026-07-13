@@ -2,8 +2,8 @@ import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { GENERATED_HEADER, LEGACY_GENERATED_HEADER } from '../header.js';
 import { loadManifest } from '../manifest.js';
-import { loadMasterDir } from '../master.js';
-import { isCanonicalMcpServerDef, serializeMcpServers } from '../mcp.js';
+import { loadMasterDir, type McpServerDef } from '../master.js';
+import { deleteMcpServer, isCanonicalMcpServerDef, listEffectiveMcpServers, providerMcpScope, sharedMcpScope, upsertMcpServer } from '../mcp.js';
 import { regletHome } from '../paths.js';
 import { readProviderMcpServers } from '../providers/mcp-read.js';
 import type { ProviderId } from '../providers/types.js';
@@ -31,6 +31,7 @@ export interface ImportMcpResult {
   sourcePath: string;
   importedPath: string;
   importedServers: string[];
+  scope: 'shared' | 'provider';
 }
 
 export async function importDriftedRules(
@@ -96,7 +97,7 @@ export async function importDriftedSkills(provider: ProviderId, home = regletHom
  * writes them back into the master servers file. A managed key removed from
  * the provider config is removed from the master too.
  */
-export async function importDriftedMcp(provider: ProviderId, home = regletHome()): Promise<ImportMcpResult> {
+export async function importDriftedMcp(provider: ProviderId, home = regletHome(), scope: 'shared' | 'provider' = 'shared'): Promise<ImportMcpResult> {
   const manifest = await loadManifest(home);
   const match = Object.entries(manifest.outputs).find(
     ([, output]) => output.provider === provider && output.content === 'mcp',
@@ -107,28 +108,54 @@ export async function importDriftedMcp(provider: ProviderId, home = regletHome()
 
   const [sourcePath, output] = match;
   const current = await readProviderMcpServers(provider, sourcePath);
-  const master = await loadMasterDir(home);
-  const nextServers = { ...master.mcpServers };
+  const effective = await listEffectiveMcpServers(provider, home);
+  const byDisplayName = new Map(effective.map((entry) => [entry.displayName, entry]));
   const importedServers: string[] = [];
+  const validatedServers = new Map<string, McpServerDef>();
 
+  // Validate the complete import before the first mutation so a later invalid
+  // managed entry cannot leave an earlier entry partially persisted.
   for (const key of output.managedKeys ?? []) {
     const server = current[key];
     if (server !== undefined) {
       if (!isCanonicalMcpServerDef(key, server)) {
         throw new Error(`Cannot import MCP server ${key}: raw env values must be replaced with process-env references in mcp/servers.json`);
       }
-      nextServers[key] = server;
-      importedServers.push(key);
+      validatedServers.set(key, server);
     } else {
-      delete nextServers[key];
+      const existing = byDisplayName.get(key);
+      if (scope === 'provider' && existing?.scope.kind !== 'provider') {
+        throw new Error(`Cannot import removal of shared MCP server ${key} into provider scope`);
+      }
     }
   }
 
-  const importedPath = path.join(home, 'mcp', 'servers.json');
-  await mkdir(path.dirname(importedPath), { recursive: true });
-  await writeFile(importedPath, serializeMcpServers(nextServers));
+  for (const key of output.managedKeys ?? []) {
+    const server = validatedServers.get(key);
+    const existing = byDisplayName.get(key);
+    if (server !== undefined) {
+      await upsertMcpServer(
+        existing?.id ?? key,
+        server,
+        scope === 'provider' ? providerMcpScope(provider) : sharedMcpScope(),
+        home,
+        key,
+      );
+      importedServers.push(key);
+    } else {
+      await deleteMcpServer(
+        existing?.id ?? key,
+        scope === 'provider' ? providerMcpScope(provider) : sharedMcpScope(),
+        home,
+      );
+    }
+  }
 
-  return { provider, sourcePath, importedPath, importedServers };
+  const importedPath = scope === 'provider'
+    ? path.join(home, 'mcp', 'providers', provider, 'servers.json')
+    : path.join(home, 'mcp', 'servers.json');
+
+  return { provider, sourcePath, importedPath, importedServers, scope };
 }
 
 export function stripGeneratedHeader(content: string, provider: ProviderId): string {

@@ -2,9 +2,9 @@ import type { ApplyContent } from './engine/apply.js';
 import type { DriftStatus } from './engine/drift.js';
 import type { OperationReceipt } from './engine/operations.js';
 import type { ManagedContent } from './manifest.js';
-import type { McpServerEntry } from './mcp.js';
+import type { EffectiveMcpServerEntry, McpConflictStatus, McpScope, McpServerEntry } from './mcp.js';
 import type { ProviderId, ProviderInventory } from './providers/types.js';
-import type { ProviderName } from './config.js';
+import { providerNames, type ProviderName } from './config.js';
 
 export type ManagerContractVersion = 1 | 2;
 export type CapabilityState =
@@ -64,11 +64,18 @@ export interface ManagerMasterSummaryV2 {
   };
   mcp: {
     sharedServers: ManagerMcpServerSummaryV2[];
+    providerServers: Record<ProviderName, ManagerMcpServerSummaryV2[]>;
   };
 }
 
 export interface ManagerMcpServerSummaryV2 {
+  id: string;
   name: string;
+  displayName: string;
+  scope: McpScope;
+  overrideOf: string | null;
+  affectedProviders: ProviderName[];
+  conflictStatus: McpConflictStatus;
   transport: 'command' | 'url' | 'invalid';
   envKeys: string[];
   issues: string[];
@@ -87,6 +94,7 @@ export interface ManagerEffectiveContentV2 {
   capability: CapabilityState;
   compositionRevision?: string;
   lastAppliedCompositionRevision?: string;
+  mcpServers?: ManagerMcpServerSummaryV2[];
 }
 
 export type ManagerDerivedStateNameV2 = 'draftOnly' | 'changesReady' | 'upToDate' | 'driftDetected' | 'blocked';
@@ -244,7 +252,28 @@ export function receiptDetail(receipt: OperationReceipt): ManagerReceiptDetailV2
 
 export function mcpServerSummary(entry: McpServerEntry): ManagerMcpServerSummaryV2 {
   return {
+    id: entry.id,
     name: entry.name,
+    displayName: entry.displayName,
+    scope: entry.scope,
+    overrideOf: entry.overrideOf,
+    affectedProviders: entry.affectedProviders,
+    conflictStatus: entry.conflictStatus,
+    transport: entry.server.command !== undefined ? 'command' : entry.server.url !== undefined ? 'url' : 'invalid',
+    envKeys: Object.keys(entry.server.env ?? {}).sort((left, right) => left.localeCompare(right)),
+    issues: entry.issues,
+  };
+}
+
+export function effectiveMcpServerSummary(entry: EffectiveMcpServerEntry): ManagerMcpServerSummaryV2 {
+  return {
+    id: entry.id,
+    name: entry.displayName,
+    displayName: entry.displayName,
+    scope: entry.scope,
+    overrideOf: entry.overrideOf,
+    affectedProviders: entry.scope.kind === 'provider' ? [entry.scope.provider] : [...providerNames],
+    conflictStatus: entry.conflictStatus,
     transport: entry.server.command !== undefined ? 'command' : entry.server.url !== undefined ? 'url' : 'invalid',
     envKeys: Object.keys(entry.server.env ?? {}).sort((left, right) => left.localeCompare(right)),
     issues: entry.issues,
@@ -356,12 +385,19 @@ function isMasterSummaryV2(value: unknown): value is ManagerMasterSummaryV2 {
     typeof value.skills.sharedSkills === 'number' &&
     isProviderNumberRecord(value.skills.providerScopedSkills) &&
     isRecord(value.mcp) &&
-    isArrayOf(value.mcp.sharedServers, isMcpServerSummaryV2);
+    isArrayOf(value.mcp.sharedServers, isMcpServerSummaryV2) &&
+    isProviderArrayRecord(value.mcp.providerServers, isMcpServerSummaryV2);
 }
 
 function isMcpServerSummaryV2(value: unknown): value is ManagerMcpServerSummaryV2 {
   return isRecord(value) &&
+    typeof value.id === 'string' &&
     typeof value.name === 'string' &&
+    typeof value.displayName === 'string' &&
+    isMcpScope(value.scope) &&
+    (typeof value.overrideOf === 'string' || value.overrideOf === null) &&
+    isArrayOf(value.affectedProviders, isProviderId) &&
+    isMcpConflictStatus(value.conflictStatus) &&
     (value.transport === 'command' || value.transport === 'url' || value.transport === 'invalid') &&
     isArrayOf(value.envKeys, isString) &&
     isArrayOf(value.issues, isString);
@@ -381,7 +417,8 @@ function isEffectiveContentV2(value: unknown): value is ManagerEffectiveContentV
     typeof value.masterItems === 'number' &&
     isCapability(value.capability) &&
     optionalString(value.compositionRevision) &&
-    optionalString(value.lastAppliedCompositionRevision);
+    optionalString(value.lastAppliedCompositionRevision) &&
+    (value.mcpServers === undefined || isArrayOf(value.mcpServers, isMcpServerSummaryV2));
 }
 
 function isDerivedStateV2(value: unknown): value is ManagerDerivedStateV2 {
@@ -486,6 +523,10 @@ function isProviderNumberRecord(value: unknown): value is Record<ProviderName, n
   return isRecord(value) && providerIds.every((provider) => typeof value[provider] === 'number');
 }
 
+function isProviderArrayRecord<T>(value: unknown, item: (candidate: unknown) => candidate is T): value is Record<ProviderName, T[]> {
+  return isRecord(value) && providerIds.every((provider) => isArrayOf(value[provider], item));
+}
+
 function isContentRecord<T>(value: unknown, item: (candidate: unknown) => candidate is T): value is Record<ApplyContent, T> {
   return isRecord(value) && contentIds.every((content) => item(value[content]));
 }
@@ -520,6 +561,17 @@ function isContent(value: unknown): value is ApplyContent {
 
 function isProviderId(value: unknown): value is ProviderId {
   return typeof value === 'string' && providerIds.includes(value as ProviderId);
+}
+
+function isMcpScope(value: unknown): value is McpScope {
+  return isRecord(value) &&
+    (value.kind === 'shared' || (value.kind === 'provider' && isProviderId(value.provider)));
+}
+
+function isMcpConflictStatus(value: unknown): value is McpConflictStatus {
+  return isRecord(value) &&
+    (value.state === 'none' ||
+      (value.state === 'conflict' && typeof value.displayName === 'string' && isArrayOf(value.conflictingIds, isString)));
 }
 
 function isLifecycle(value: unknown): value is OperationReceipt['lifecycle'] {

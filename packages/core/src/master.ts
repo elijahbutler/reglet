@@ -2,7 +2,7 @@ import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { configPath, defaultConfig, providerNames, serializeConfig, type ProviderName } from './config.js';
 import { ensurePrivateDir } from './fsutil.js';
-import { serializeMcpServers, validateMcpServer } from './mcp.js';
+import { loadMcpDefinitions, serializeMcpServers, type McpServerDefinition } from './mcp.js';
 import { regletHome } from './paths.js';
 
 export interface McpServerDef {
@@ -49,10 +49,8 @@ export interface MasterDir {
   skills: MasterSkill[];
   providerSkills: Record<ProviderName, MasterSkill[]>;
   mcpServers: Record<string, McpServerDef>;
-}
-
-interface McpServersFile {
-  mcpServers?: Record<string, McpServerDef>;
+  mcpDefinitions: Record<string, McpServerDefinition>;
+  providerMcpDefinitions: Record<ProviderName, Record<string, McpServerDefinition>>;
 }
 
 export async function initMasterDir(home = regletHome()): Promise<void> {
@@ -74,12 +72,15 @@ export async function initMasterDir(home = regletHome()): Promise<void> {
 export async function loadMasterDir(home = regletHome()): Promise<MasterDir> {
   const loadedRules = await loadRules(path.join(home, 'rules'));
   const loadedSkills = await loadSkills(path.join(home, 'skills'));
+  const loadedMcp = await loadMcpDefinitions(home);
   return {
     rules: loadedRules.shared,
     providerRules: loadedRules.providers,
     skills: loadedSkills.shared,
     providerSkills: loadedSkills.providers,
-    mcpServers: await loadMcpServers(path.join(home, 'mcp', 'servers.json')),
+    mcpServers: Object.fromEntries(Object.entries(loadedMcp.shared).map(([id, definition]) => [id, definition.server])),
+    mcpDefinitions: loadedMcp.shared,
+    providerMcpDefinitions: loadedMcp.providers,
   };
 }
 
@@ -199,28 +200,6 @@ function isProviderName(value: string): value is ProviderName {
   return (providerNames as readonly string[]).includes(value);
 }
 
-async function loadMcpServers(serversPath: string): Promise<Record<string, McpServerDef>> {
-  try {
-    const parsed = JSON.parse(await readFile(serversPath, 'utf8')) as unknown;
-    if (!isRecord(parsed) || !isRecord((parsed as McpServersFile).mcpServers)) {
-      return {};
-    }
-
-    const servers: Record<string, McpServerDef> = {};
-    for (const [name, server] of Object.entries((parsed as McpServersFile).mcpServers ?? {})) {
-      if (isMcpServerDef(server) && validateMcpServer(name, server).ok) {
-        servers[name] = server;
-      }
-    }
-    return servers;
-  } catch (error) {
-    if (isNodeError(error) && error.code === 'ENOENT') {
-      return {};
-    }
-    throw error;
-  }
-}
-
 async function collectFiles(rootDir: string): Promise<MasterSkillFile[]> {
   const files: MasterSkillFile[] = [];
 
@@ -261,42 +240,6 @@ async function writeFileIfMissing(filePath: string, content: string): Promise<vo
     }
     throw error;
   }
-}
-
-function isMcpServerDef(value: unknown): value is McpServerDef {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  return (
-    readOptionalString(value.command) &&
-    readOptionalStringArray(value.args) &&
-    readOptionalMcpEnvRecord(value.env) &&
-    readOptionalString(value.url)
-  );
-}
-
-function readOptionalString(value: unknown): boolean {
-  return value === undefined || typeof value === 'string';
-}
-
-function readOptionalStringArray(value: unknown): boolean {
-  return value === undefined || (Array.isArray(value) && value.every((item) => typeof item === 'string'));
-}
-
-function readOptionalMcpEnvRecord(value: unknown): boolean {
-  return (
-    value === undefined ||
-    (isRecord(value) && Object.values(value).every(isMcpEnvironmentValue))
-  );
-}
-
-function isMcpEnvironmentValue(value: unknown): value is McpEnvironmentValue {
-  return isRecord(value) && value.source === 'process-env' && typeof value.name === 'string';
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function normalizeRelativePath(relativePath: string): string {

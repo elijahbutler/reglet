@@ -694,6 +694,74 @@ describe('reglet CLI', () => {
     expect(master.mcpServers.managed?.command).toBe('ruby');
   });
 
+  test('MCP JSON commands expose stable ids, provider scope, overrides, effective output, rename, and delete', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await runCli(['init'], home, providerHome);
+    await runCliWithInput(
+      ['mcp', 'upsert', 'stable', '--display-name', 'shared-name', '--json'],
+      '{"command":"node"}',
+      home,
+      providerHome,
+    );
+    const scopedUpsert = JSON.parse((await runCliWithInput(
+      ['mcp', 'upsert', 'stable', '--scope', 'provider', '--provider', 'claude', '--display-name', 'claude-name', '--json'],
+      '{"command":"ruby"}',
+      home,
+      providerHome,
+    )).stdout) as { server: { id: string; scope: { kind: string; provider: string } } };
+    expect(scopedUpsert.server).toMatchObject({
+      id: 'stable',
+      scope: { kind: 'provider', provider: 'claude' },
+    });
+
+    const scoped = JSON.parse((await runCli(
+      ['mcp', 'list', '--scope', 'provider', '--provider', 'claude', '--json'],
+      home,
+      providerHome,
+    )).stdout) as { scope: { kind: string; provider: string }; servers: { id: string; overrideOf: string | null }[] };
+    expect(scoped.scope).toEqual({ kind: 'provider', provider: 'claude' });
+    expect(scoped.servers[0]).toMatchObject({ id: 'stable', overrideOf: 'stable' });
+
+    const effective = JSON.parse((await runCli(
+      ['mcp', 'list', '--effective-provider', 'claude', '--json'],
+      home,
+      providerHome,
+    )).stdout) as { effective: boolean; servers: { id: string; displayName: string }[] };
+    expect(effective).toMatchObject({ effective: true, servers: [{ id: 'stable', displayName: 'claude-name' }] });
+
+    await runCli(
+      ['mcp', 'rename-display-name', 'stable', 'renamed', '--scope', 'provider', '--provider', 'claude', '--json'],
+      home,
+      providerHome,
+    );
+    const read = JSON.parse((await runCli(
+      ['mcp', 'read', 'stable', '--scope', 'provider', '--provider', 'claude', '--json'],
+      home,
+      providerHome,
+    )).stdout) as { server: { id: string; displayName: string } };
+    expect(read.server).toMatchObject({ id: 'stable', displayName: 'renamed' });
+
+    await runCli(
+      ['mcp', 'delete', 'stable', '--scope', 'provider', '--provider', 'claude', '--json'],
+      home,
+      providerHome,
+    );
+    const afterDelete = JSON.parse((await runCli(
+      ['mcp', 'list', '--effective-provider', 'claude', '--json'],
+      home,
+      providerHome,
+    )).stdout) as { servers: { id: string; displayName: string }[] };
+    expect(afterDelete.servers).toEqual([{
+      id: 'stable',
+      displayName: 'shared-name',
+      server: { command: 'node' },
+      scope: { kind: 'shared' },
+      overrideOf: null,
+      issues: [],
+      conflictStatus: { state: 'none' },
+    }]);
+  });
+
   test('enroll and unenroll update provider config', async () => {
     const { home, providerHome } = await useTempHomes();
 
@@ -1004,11 +1072,18 @@ describe('reglet CLI', () => {
     const snapshot = JSON.parse(result.stdout) as {
       providerDiscovery: { provider: string; capabilities: { mcp: { state: string; reason?: string } } }[];
       enrollmentMatrix: { provider: string; cells: { mcp: { enrolled: boolean; capability: { state: string } } } }[];
-      master: { mcp: { sharedServers: { name: string; envKeys: string[] }[] } };
+      master: { mcp: { sharedServers: { id: string; name: string; displayName: string; scope: { kind: string }; envKeys: string[]; conflictStatus: { state: string } }[] } };
     };
 
     expect(result.stdout).not.toContain('resolved-secret-value');
-    expect(snapshot.master.mcp.sharedServers).toEqual([{ name: 'secretServer', transport: 'command', envKeys: ['TOKEN'], issues: [] }]);
+    expect(snapshot.master.mcp.sharedServers[0]).toMatchObject({
+      id: 'secretServer',
+      name: 'secretServer',
+      displayName: 'secretServer',
+      scope: { kind: 'shared' },
+      envKeys: ['TOKEN'],
+      conflictStatus: { state: 'none' },
+    });
     expect(snapshot.providerDiscovery.find((provider) => provider.provider === 'claude')?.capabilities.mcp.state)
       .toBe('needs-attention');
     expect(snapshot.enrollmentMatrix.find((provider) => provider.provider === 'claude')?.cells.mcp.enrolled).toBe(true);

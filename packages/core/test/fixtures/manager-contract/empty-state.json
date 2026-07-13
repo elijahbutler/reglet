@@ -15,15 +15,44 @@
   "master": {
     "rules": {
       "sharedDocuments": 0,
-      "providerOverlays": { "claude": 0, "codex": 0, "cursor": 0, "gemini": 0, "windsurf": 0, "opencode": 0 }
+      "providerOverlays": {
+        "claude": 0,
+        "codex": 0,
+        "cursor": 0,
+        "gemini": 0,
+        "windsurf": 0,
+        "opencode": 0
+      }
     },
     "skills": {
       "sharedSkills": 0,
-      "providerScopedSkills": { "claude": 0, "codex": 0, "cursor": 0, "gemini": 0, "windsurf": 0, "opencode": 0 }
+      "providerScopedSkills": {
+        "claude": 0,
+        "codex": 0,
+        "cursor": 0,
+        "gemini": 0,
+        "windsurf": 0,
+        "opencode": 0
+      }
     },
-    "mcp": { "sharedServers": [] }
+    "mcp": {
+      "sharedServers": [],
+      "providerServers": {
+        "claude": [],
+        "codex": [],
+        "cursor": [],
+        "gemini": [],
+        "windsurf": [],
+        "opencode": []
+      }
+    }
   },
-  "state": { "state": "draftOnly", "reasons": ["noDestinationsEnrolled"] },
+  "state": {
+    "state": "draftOnly",
+    "reasons": [
+      "noDestinationsEnrolled"
+    ]
+  },
   "effectiveProviders": [],
   "structuredPlan": {
     "available": false,
@@ -31,6 +60,12 @@
     "entries": []
   },
   "driftInbox": [],
-  "receipts": { "list": [], "details": [] },
-  "legacyNetworkState": { "present": false, "paths": [] }
+  "receipts": {
+    "list": [],
+    "details": []
+  },
+  "legacyNetworkState": {
+    "present": false,
+    "paths": []
+  }
 }

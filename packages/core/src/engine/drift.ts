@@ -3,8 +3,8 @@ import path from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import { assertPrivateFile, writePrivateJson, sha256File, sha256String } from '../fsutil.js';
 import { loadManifest, type ManagedContent } from '../manifest.js';
-import { loadMasterDir, type McpServerDef, type ResolvedMcpServerDef } from '../master.js';
-import { resolveMcpServersEnv } from '../mcp.js';
+import type { ResolvedMcpServerDef } from '../master.js';
+import { resolveEffectiveMcpServersEnv } from '../mcp.js';
 import { regletHome } from '../paths.js';
 import { isNodeError, isRecord } from '../providers/common.js';
 import type { ProviderId } from '../providers/types.js';
@@ -29,7 +29,6 @@ export interface DriftQueue {
 
 export async function detectDrift(home = regletHome()): Promise<DriftRecord[]> {
   const manifest = await loadManifest(home);
-  const master = await loadMasterDir(home);
   const records: DriftRecord[] = [];
 
   for (const [outputPath, output] of Object.entries(manifest.outputs)) {
@@ -46,7 +45,7 @@ export async function detectDrift(home = regletHome()): Promise<DriftRecord[]> {
 
     const status =
       output.content === 'mcp' && isProviderId(output.provider)
-        ? await detectMcpStatus(outputPath, output.provider, output.managedKeys ?? [], master.mcpServers)
+        ? await detectMcpStatus(outputPath, output.provider, output.managedKeys ?? [], home)
         : ((await currentOutputHash(outputPath)) === output.hash ? 'clean' : 'modified');
 
     records.push({
@@ -108,11 +107,12 @@ async function detectMcpStatus(
   outputPath: string,
   provider: ProviderId,
   managedKeys: string[],
-  masterServers: Record<string, McpServerDef>,
+  home: string,
 ): Promise<DriftStatus> {
   const current = await readProviderMcpServers(outputPath, provider);
+  const resolvedServers = await resolveEffectiveMcpServersEnv(provider, home);
   for (const key of managedKeys) {
-    const resolved = masterServers[key] === undefined ? undefined : resolveMcpServersEnv({ [key]: masterServers[key] })[key];
+    const resolved = resolvedServers[key];
     const expected = resolved === undefined ? undefined : convertMcpServer(provider, resolved);
     if (!deepEqual(current[key], expected)) {
       return 'modified';

@@ -44,6 +44,23 @@ Each completed operation has an immutable receipt with affected paths, snapshot 
 
 ## MCP data contract
 
+Shared MCP definitions live in `mcp/servers.json`. Provider-scoped definitions live in `mcp/providers/<provider>/servers.json`, matching the existing provider directory pattern used by scoped skills. Existing `mcp/servers.json` entries keep loading unchanged: the map key is the stable server id and also the default display/output name.
+
+A new definition may use an envelope when the editable display name differs from the stable id:
+
+```json
+{
+  "mcpServers": {
+    "stable-id": {
+      "displayName": "provider-output-name",
+      "server": { "command": "node" }
+    }
+  }
+}
+```
+
+Effective provider output is resolved as shared definitions in stable-id order, with matching provider-scoped ids overriding those definitions, followed by provider-only definitions. If two distinct stable ids resolve to the same display/output name, preview and apply report a machine-readable conflict and do not write that provider output.
+
 MCP environment values use only process-environment references:
 
 ```json
