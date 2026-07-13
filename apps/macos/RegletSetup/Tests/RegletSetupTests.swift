@@ -1,8 +1,30 @@
 import Foundation
+import SwiftUI
 import XCTest
 @testable import RegletSetup
 
 final class RegletSetupTests: XCTestCase {
+  private typealias T = Theme
+
+  func testHexColorInitializerProducesExpectedComponents() {
+    assertColor(Color(hex: 0x040506), red: 4 / 255, green: 5 / 255, blue: 6 / 255, alpha: 1)
+    assertColor(T.Colors.coral, red: 1, green: 99 / 255, blue: 99 / 255, alpha: 1)
+  }
+
+  func testThemeConstantsUseExpectedValues() {
+    XCTAssertEqual(T.Radius.badge, 6)
+    XCTAssertEqual(T.Radius.control, 8)
+    XCTAssertEqual(T.Radius.card, 16)
+    XCTAssertEqual(T.Radius.largeCard, 20)
+
+    XCTAssertEqual(T.Spacing.xs, 8)
+    XCTAssertEqual(T.Spacing.sm, 16)
+    XCTAssertEqual(T.Spacing.md, 24)
+    XCTAssertEqual(T.Spacing.lg, 32)
+    XCTAssertEqual(T.Spacing.xl, 40)
+    XCTAssertEqual(T.Spacing.xxl, 48)
+  }
+
   func testOnboardingRouteSkipsOnlyUnavailableSteps() {
     XCTAssertEqual(OnboardingRoute(includesPrompts: true, includesSkills: true).next(after: .selection), .prompts)
     XCTAssertEqual(OnboardingRoute(includesPrompts: false, includesSkills: true).next(after: .selection), .skills)
@@ -119,6 +141,32 @@ final class RegletSetupTests: XCTestCase {
     XCTAssertTrue(commands.contains("init --provider claude --content rules --no-apply"))
     XCTAssertTrue(commands.contains("apply-structured preview --content rules --provider claude"))
     XCTAssertFalse(commands.contains("apply --content rules"))
+  }
+
+  private func assertColor(
+    _ color: Color,
+    red expectedRed: CGFloat,
+    green expectedGreen: CGFloat,
+    blue expectedBlue: CGFloat,
+    alpha expectedAlpha: CGFloat,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    guard let nsColor = NSColor(color).usingColorSpace(.sRGB) else {
+      XCTFail("Expected color to resolve to sRGB", file: file, line: line)
+      return
+    }
+
+    var red: CGFloat = 0
+    var green: CGFloat = 0
+    var blue: CGFloat = 0
+    var alpha: CGFloat = 0
+    nsColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+
+    XCTAssertEqual(red, expectedRed, accuracy: 0.001, file: file, line: line)
+    XCTAssertEqual(green, expectedGreen, accuracy: 0.001, file: file, line: line)
+    XCTAssertEqual(blue, expectedBlue, accuracy: 0.001, file: file, line: line)
+    XCTAssertEqual(alpha, expectedAlpha, accuracy: 0.001, file: file, line: line)
   }
 
   private func makeExecutable(_ contents: String, directory: URL? = nil) throws -> String {

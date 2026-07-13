@@ -4,6 +4,10 @@ import SwiftUI
 struct RegletSetupApp: App {
   @StateObject private var model = SetupModel()
 
+  init() {
+    Theme.FontRegistrar.register()
+  }
+
   var body: some Scene {
     WindowGroup {
       ContentView()

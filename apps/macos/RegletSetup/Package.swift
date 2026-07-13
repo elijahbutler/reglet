@@ -12,7 +12,8 @@ let package = Package(
   targets: [
     .executableTarget(
       name: "RegletSetup",
-      path: "Sources"
+      path: "Sources",
+      resources: [.copy("Resources/Fonts")]
     ),
     .testTarget(
       name: "RegletSetupTests",
