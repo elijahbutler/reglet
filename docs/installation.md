@@ -2,36 +2,52 @@
 
 ## Requirements
 
-Public V1 is macOS-only and supports macOS Sonoma (14) or later. The graphical manager is distributed as a signed and notarized `Reglet.app` archive and installer package. The CLI is available through the matching Homebrew formula or release binary.
+Public V1 is CLI-only. Public artifacts are macOS arm64, macOS x64, and Windows x64 binaries. The macOS manager source remains in the repository, but `Reglet.app`, installer packages, and Homebrew casks are not distributed public release artifacts.
 
 ## Homebrew
 
 ```bash
 brew tap elijahbutler/reglet
-brew install --cask elijahbutler/reglet/reglet
+brew install elijahbutler/reglet/reglet
 ```
 
-The cask preserves macOS quarantine. Do not bypass Gatekeeper: use only the signed, notarized release it downloads. It installs `Reglet.app` in `/Applications` and makes its bundled `reglet` executable available.
+The Homebrew formula installs the CLI on macOS and is updated for every public release before the GitHub Release is published.
 
-For CLI automation only:
+## Direct binaries
+
+Download the matching CLI artifact from the GitHub Release:
+
+- `reglet-darwin-arm64`
+- `reglet-darwin-x64`
+- `reglet-windows-x64.exe`
+
+On macOS, make the downloaded architecture-specific binary executable before running it:
 
 ```bash
-brew install --formula elijahbutler/reglet/reglet
+chmod +x reglet-darwin-arm64
+./reglet-darwin-arm64 --version
+```
+
+On Windows PowerShell, run the executable directly:
+
+```powershell
+.\reglet-windows-x64.exe --version
 ```
 
 ## Verify a release
 
-Each release contains `SHA256SUMS.txt`, `provenance.txt`, the app archives, installer packages, and CLI binaries. After downloading an artifact, verify its checksum:
+Each release contains `SHA256SUMS.txt`, `provenance.txt`, and the three CLI binaries. After downloading an artifact, verify its checksum:
 
 ```bash
 shasum -a 256 -c SHA256SUMS.txt
 ```
 
-macOS verifies the notarization ticket when the app or package is opened. You can inspect it explicitly:
+GitHub also publishes build provenance attestation for the release artifacts.
 
-```bash
-spctl --assess --type execute --verbose=4 /Applications/Reglet.app
-pkgutil --check-signature reglet-macos-arm64.pkg
+On Windows, compare the PowerShell hash against the matching entry in `SHA256SUMS.txt`:
+
+```powershell
+Get-FileHash .\reglet-windows-x64.exe -Algorithm SHA256
 ```
 
 ## Source checkout
@@ -45,4 +61,4 @@ bun install --frozen-lockfile
 bun packages/cli/src/index.ts scan
 ```
 
-Source builds are for development. The release scripts intentionally refuse to produce a public installer without Developer ID and notary credentials.
+Source builds are for development. Public release automation builds only CLI artifacts and does not package or distribute the macOS app.

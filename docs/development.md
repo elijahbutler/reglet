@@ -18,6 +18,7 @@ Outputs:
 
 - `dist/reglet-darwin-arm64`
 - `dist/reglet-darwin-x64`
+- `dist/reglet-windows-x64.exe`
 
 Public release packaging additionally runs:
 
@@ -25,7 +26,7 @@ Public release packaging additionally runs:
 swift test --package-path apps/macos/RegletSetup
 ```
 
-`scripts/build-macos-installer.sh` intentionally requires Developer ID signing and notary credentials. It does not create an unsigned or ad-hoc public artifact.
+The Swift test is a source-level guard for the retained macOS manager. Public release automation does not build or publish `Reglet.app`, installer packages, or a Homebrew cask.
 
 ## Test Safety
 

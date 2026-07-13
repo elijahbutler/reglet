@@ -1,8 +1,8 @@
 # Public V1 release notes
 
-## Local-only macOS V1
+## Local-only CLI V1
 
-This release establishes Reglet as a local-only macOS manager for rules, skills, and MCP configuration across Claude Code, Codex CLI, Cursor, Gemini CLI, Windsurf, and OpenCode.
+This release establishes Reglet as a local-only CLI for rules, skills, and MCP configuration across Claude Code, Codex CLI, Cursor, Gemini CLI, Windsurf, and OpenCode.
 
 ### Trust and recovery
 
@@ -18,8 +18,8 @@ This release establishes Reglet as a local-only macOS manager for rules, skills,
 
 ### Product boundary
 
-- The manager and CLI are local-only. Legacy network state is inert until explicitly cleared.
-- Automatic update checks are disabled by default; manual update checks remain available.
-- Public artifacts are macOS-only and require Developer ID signing, notarization, stapling, checksums, and provenance.
+- The CLI and retained manager source are local-only. Legacy network state is inert until explicitly cleared.
+- Automatic update checks in the retained macOS manager source are disabled by default; manual update checks remain available in source builds.
+- Public artifacts are CLI-only for macOS arm64, macOS x64, and Windows x64 with checksums, provenance, and mandatory Homebrew formula publication before release publishing.
 
 See [Release integrity and V1 certification](release.md) before distributing a tagged build.
