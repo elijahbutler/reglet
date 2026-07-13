@@ -61,7 +61,7 @@ struct McpManagerView: View {
         }
       }
       .background(Theme.Colors.voidBlack)
-      .frame(minWidth: 220)
+      .frame(minWidth: 170, idealWidth: 240, maxWidth: 340)
       ScrollView {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
           SectionHeader(title: "Server Definition")
@@ -126,9 +126,11 @@ struct McpManagerView: View {
       }
       .scrollContentBackground(.hidden)
       .background(Theme.Colors.voidBlack)
-      .frame(minWidth: 500)
+      .frame(minWidth: 0, maxWidth: .infinity)
     }
     .background(Theme.Colors.voidBlack)
+    .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+    .clipped()
     .safeAreaInset(edge: .bottom) {
       StatusStrip {
         HStack {
