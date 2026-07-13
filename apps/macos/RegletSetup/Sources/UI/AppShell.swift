@@ -178,6 +178,7 @@ private struct ManagerSidebar: View {
       .padding(.bottom, 14)
     }
     .frame(minWidth: 220, idealWidth: 240, maxWidth: 280)
+    .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 280)
     .background(Theme.Colors.voidBlack)
     .overlay(alignment: .trailing) {
       Rectangle()
@@ -339,6 +340,8 @@ struct ManagerDetail: View {
       }
     }
     .navigationTitle(section.title)
+    .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+    .clipped()
     .toolbar {
       ToolbarItem {
         Button {

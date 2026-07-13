@@ -25,7 +25,7 @@ struct RulesManagerView: View {
       .listStyle(.sidebar)
       .scrollContentBackground(.hidden)
       .background(Theme.Colors.voidBlack)
-      .frame(minWidth: 190, idealWidth: 230)
+      .frame(minWidth: 150, idealWidth: 220, maxWidth: 320)
 
       VStack(spacing: 0) {
         if let selectedPath {
@@ -75,9 +75,11 @@ struct RulesManagerView: View {
         }
       }
       .background(Theme.Colors.voidBlack)
-      .frame(minWidth: 440)
+      .frame(minWidth: 0, maxWidth: .infinity)
     }
     .background(Theme.Colors.voidBlack)
+    .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+    .clipped()
     .onChange(of: selectedPath) { oldPath, newPath in
       if hasUnsavedChanges, oldPath != nil, newPath != oldPath {
         pendingPath = newPath
