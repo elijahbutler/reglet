@@ -79,6 +79,7 @@ struct OnboardingView: View {
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background(Theme.Colors.voidBlack)
     }
     .overlay(alignment: .bottom) {
       if model.isWorking {
@@ -249,6 +250,7 @@ struct SafetyView: View {
     }
     .padding(40)
     .frame(maxWidth: .infinity, alignment: .leading)
+    .background(Theme.Colors.voidBlack)
   }
 }
 
@@ -282,6 +284,7 @@ struct SelectionView: View {
       }
       .padding(24)
       .frame(minWidth: 320)
+      .background(Theme.Colors.ink)
 
       VStack(alignment: .leading, spacing: 18) {
         Label("Content", systemImage: "checklist")
@@ -316,7 +319,9 @@ struct SelectionView: View {
       }
       .padding(24)
       .frame(minWidth: 420)
+      .background(Theme.Colors.ink)
     }
+    .background(Theme.Colors.voidBlack)
   }
 
   private func providerBinding(_ provider: String) -> Binding<Bool> {
@@ -450,24 +455,27 @@ struct PromptHandlingStepView: View {
         }
       }
       .formStyle(.grouped)
+      .scrollContentBackground(.hidden)
+      .background(Theme.Colors.voidBlack)
       Divider()
-      HStack {
-        Button("Back", action: back)
-          .buttonStyle(.regletGhost)
-          .keyboardShortcut(.cancelAction)
-        Spacer()
-        Button {
-          continueAction()
-        } label: {
-          Label("Continue", systemImage: "arrow.right")
+      StatusStrip {
+        HStack {
+          Button("Back", action: back)
+            .buttonStyle(.regletGhost)
+            .keyboardShortcut(.cancelAction)
+          Spacer()
+          Button {
+            continueAction()
+          } label: {
+            Label("Continue", systemImage: "arrow.right")
+          }
+          .buttonStyle(.regletPrimary)
+          .keyboardShortcut(.defaultAction)
+          .disabled(!canContinue)
         }
-        .buttonStyle(.regletPrimary)
-        .keyboardShortcut(.defaultAction)
-        .disabled(!canContinue)
       }
-      .padding(20)
-      .background(Theme.Colors.ink)
     }
+    .background(Theme.Colors.voidBlack)
   }
 
   private func mergeSourceBinding(_ provider: String) -> Binding<Bool> {
@@ -501,24 +509,27 @@ struct SkillsStepView: View {
         }
       }
       .listStyle(.inset)
+      .scrollContentBackground(.hidden)
+      .background(Theme.Colors.voidBlack)
       Divider()
-      HStack {
-        Button("Back", action: back)
-          .buttonStyle(.regletGhost)
-          .keyboardShortcut(.cancelAction)
-        Spacer()
-        Button {
-          continueAction()
-        } label: {
-          Label("Preview Files", systemImage: "doc.text.magnifyingglass")
+      StatusStrip {
+        HStack {
+          Button("Back", action: back)
+            .buttonStyle(.regletGhost)
+            .keyboardShortcut(.cancelAction)
+          Spacer()
+          Button {
+            continueAction()
+          } label: {
+            Label("Preview Files", systemImage: "doc.text.magnifyingglass")
+          }
+          .buttonStyle(.regletPrimary)
+          .keyboardShortcut(.defaultAction)
+          .disabled(model.isWorking)
         }
-        .buttonStyle(.regletPrimary)
-        .keyboardShortcut(.defaultAction)
-        .disabled(model.isWorking)
       }
-      .padding(20)
-      .background(Theme.Colors.ink)
     }
+    .background(Theme.Colors.voidBlack)
   }
 }
 
@@ -647,27 +658,30 @@ struct PreviewView: View {
         }
       }
       .listStyle(.inset)
+      .scrollContentBackground(.hidden)
+      .background(Theme.Colors.voidBlack)
       Divider()
-      HStack {
-        Button("Back", action: back)
-          .buttonStyle(.regletGhost)
-          .keyboardShortcut(.cancelAction)
-        Spacer()
-        Text(statusMessage)
-          .foregroundStyle(Theme.Colors.ash)
-        Button {
-          review()
-        } label: {
-          Label("Review Exact Changes", systemImage: "doc.text.magnifyingglass")
+      StatusStrip {
+        HStack {
+          Button("Back", action: back)
+            .buttonStyle(.regletGhost)
+            .keyboardShortcut(.cancelAction)
+          Spacer()
+          Text(statusMessage)
+            .foregroundStyle(Theme.Colors.ash)
+          Button {
+            review()
+          } label: {
+            Label("Review Exact Changes", systemImage: "doc.text.magnifyingglass")
+          }
+          .buttonStyle(.regletPrimary)
+          .keyboardShortcut(.defaultAction)
+          .accessibilityHint("Stages the local master content, then opens the digest-backed provider review")
+          .disabled(model.isWorking || hasBlockedAdoption || hasBlockedUnifiedDraft)
         }
-        .buttonStyle(.regletPrimary)
-        .keyboardShortcut(.defaultAction)
-        .accessibilityHint("Stages the local master content, then opens the digest-backed provider review")
-        .disabled(model.isWorking || hasBlockedAdoption || hasBlockedUnifiedDraft)
       }
-      .padding(20)
-      .background(Theme.Colors.ink)
     }
+    .background(Theme.Colors.voidBlack)
   }
 
   private var statusMessage: String {
@@ -906,12 +920,16 @@ struct StatusView: View {
         .padding(.vertical, 4)
       }
       .listStyle(.inset)
+      .scrollContentBackground(.hidden)
+      .background(Theme.Colors.voidBlack)
 
       HStack {
         Button("Review Another Selection", action: startOver)
+          .buttonStyle(.regletSecondary)
         Spacer()
       }
     }
     .padding(32)
+    .background(Theme.Colors.voidBlack)
   }
 }
