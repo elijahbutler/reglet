@@ -617,39 +617,22 @@ struct SkillsStepView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HSplitView {
-        List {
-          Section {
-            UnmanagedSkillsGroups(
-              skills: model.selectedProviderUnmanagedSkills,
-              onPreview: { previewedSkill = $0 }
-            )
-          } header: {
-            Text("Choose where each provider-local skill belongs")
-          } footer: {
-            Text("Leaving a skill provider-local makes no changes. Other choices stage a copy for the file review on the next step.")
-          }
+      List {
+        Section {
+          UnmanagedSkillsGroups(
+            skills: model.selectedProviderUnmanagedSkills,
+            onPreview: { previewedSkill = $0 }
+          )
+        } header: {
+          Text("Choose where each provider-local skill belongs")
+        } footer: {
+          Text("Leaving a skill provider-local makes no changes. Other choices stage a copy for the file review on the next step.")
         }
-        .listStyle(.inset)
-        .scrollContentBackground(.hidden)
-        .background(Theme.Colors.voidBlack)
-        .padding(.leading, Theme.Spacing.sm)
-        .frame(minWidth: 560)
-
-        Group {
-          if let previewedSkill {
-            UnmanagedSkillPreview(skill: previewedSkill)
-          } else {
-            ContentUnavailableView(
-              "Preview a skill",
-              systemImage: "doc.text.magnifyingglass",
-              description: Text("Choose Preview beside a skill to inspect its source files before deciding where it belongs.")
-            )
-          }
-        }
-        .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.Colors.ink)
       }
+      .listStyle(.inset)
+      .scrollContentBackground(.hidden)
+      .background(Theme.Colors.voidBlack)
+      .padding(.horizontal, Theme.Spacing.sm)
       Divider()
       StatusStrip {
         HStack {
@@ -660,7 +643,7 @@ struct SkillsStepView: View {
           Button {
             continueAction()
           } label: {
-            Label("Preview Files", systemImage: "doc.text.magnifyingglass")
+            Label("Review Setup", systemImage: "arrow.right")
           }
           .buttonStyle(.regletPrimary)
           .keyboardShortcut(.defaultAction)
@@ -669,16 +652,16 @@ struct SkillsStepView: View {
       }
     }
     .background(Theme.Colors.voidBlack)
-    .onAppear {
-      if previewedSkill == nil {
-        previewedSkill = model.selectedProviderUnmanagedSkills.first
-      }
+    .sheet(item: $previewedSkill) { skill in
+      UnmanagedSkillPreview(skill: skill)
+        .environmentObject(model)
     }
   }
 }
 
 private struct UnmanagedSkillPreview: View {
   @EnvironmentObject private var model: SetupModel
+  @Environment(\.dismiss) private var dismiss
   let skill: UnmanagedSkill
   @State private var tree: ManagedSkillTree?
   @State private var selectedPath: String?
@@ -699,6 +682,9 @@ private struct UnmanagedSkillPreview: View {
             .foregroundStyle(Theme.Colors.mist)
           Spacer()
           StatusBadge(text: model.providerDisplayName(skill.provider), kind: .info)
+          Button("Done") { dismiss() }
+            .buttonStyle(.regletSecondary)
+            .keyboardShortcut(.cancelAction)
         }
         Text(skill.sourcePath)
           .font(Theme.Fonts.mono(size: 11))
@@ -731,7 +717,7 @@ private struct UnmanagedSkillPreview: View {
           .listStyle(.sidebar)
           .scrollContentBackground(.hidden)
           .background(Theme.Colors.graphite)
-          .frame(minWidth: 165, idealWidth: 210)
+          .frame(minWidth: 210, idealWidth: 240)
 
           Group {
             if isLoadingFile {
@@ -755,13 +741,15 @@ private struct UnmanagedSkillPreview: View {
               }
             }
           }
-          .frame(minWidth: 260, maxWidth: .infinity, maxHeight: .infinity)
+          .frame(minWidth: 500, maxWidth: .infinity, maxHeight: .infinity)
           .background(Theme.Colors.ink)
         }
       } else {
         ContentUnavailableView("Preview unavailable", systemImage: "exclamationmark.triangle")
       }
     }
+    .frame(minWidth: 760, idealWidth: 880, minHeight: 520, idealHeight: 600)
+    .background(Theme.Colors.voidBlack)
     .task(id: skill.id) {
       isLoadingTree = true
       tree = await model.loadUnmanagedSkillTree(skill)
