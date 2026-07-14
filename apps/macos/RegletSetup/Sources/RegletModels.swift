@@ -391,6 +391,14 @@ enum SkillAdoptionScope: String {
   case provider
 }
 
+enum SkillAdoptionChoice: String, CaseIterable, Identifiable {
+  case local
+  case provider
+  case shared
+
+  var id: String { rawValue }
+}
+
 enum OnboardingStep: Int, CaseIterable {
   case safety, selection, prompts, skills, preview, done
 }

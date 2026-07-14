@@ -943,6 +943,30 @@ describe('reglet CLI', () => {
     );
   });
 
+  test('previews unmanaged skill files through the read-only inspect command', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const source = path.join(providerHome, '.claude', 'skills', 'local-preview');
+    await mkdir(path.join(source, 'references'), { recursive: true });
+    await writeFile(path.join(source, 'SKILL.md'), '# Local preview\n');
+    await writeFile(path.join(source, 'references', 'notes.md'), 'hello preview\n');
+
+    const tree = JSON.parse(
+      (await runCli(['skills', 'inspect', 'claude', 'local-preview', '--json'], home, providerHome)).stdout,
+    ) as { tree: { scope: { kind: string; provider: string }; files: { path: string }[] } };
+    const document = JSON.parse(
+      (await runCli(
+        ['skills', 'inspect', 'claude', 'local-preview', 'references/notes.md', '--json'],
+        home,
+        providerHome,
+      )).stdout,
+    ) as { document: { content: string } };
+
+    expect(tree.tree.scope).toEqual({ kind: 'unmanaged', provider: 'claude' });
+    expect(tree.tree.files.map((file) => file.path)).toEqual(['references/notes.md', 'SKILL.md']);
+    expect(document.document.content).toBe('hello preview\n');
+    expect(await Bun.file(path.join(home, 'skills', 'local-preview')).exists()).toBe(false);
+  });
+
   test('skills list prints managed and unmanaged skills as tab-separated text', async () => {
     const { home, providerHome } = await useTempHomes();
     const shared = path.join(home, 'skills', 'shared-alpha');

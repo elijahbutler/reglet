@@ -84,6 +84,30 @@ final class SetupModel: ObservableObject {
     skillScopes[key] ?? .shared
   }
 
+  func skillAdoptionChoice(_ skill: UnmanagedSkill) -> SkillAdoptionChoice {
+    guard checkedSkills.contains(skill.id) else { return .local }
+    return skillScope(skill.id) == .provider ? .provider : .shared
+  }
+
+  func setSkillAdoptionChoice(_ choice: SkillAdoptionChoice, for skill: UnmanagedSkill) {
+    switch choice {
+    case .local:
+      checkedSkills.remove(skill.id)
+      skillScopes.removeValue(forKey: skill.id)
+      overwriteFlags.remove(skill.id)
+    case .provider, .shared:
+      let scope: SkillAdoptionScope = choice == .provider ? .provider : .shared
+      let conflict = scope == .provider ? skill.providerConflict : skill.sharedConflict
+      checkedSkills.insert(skill.id)
+      skillScopes[skill.id] = scope
+      if conflict == "destination-exists" {
+        overwriteFlags.insert(skill.id)
+      } else {
+        overwriteFlags.remove(skill.id)
+      }
+    }
+  }
+
   /// Whether the skill's chosen scope has a clear destination (or overwrite is set).
   func canAdopt(_ skill: UnmanagedSkill) -> Bool {
     let conflict = skillScope(skill.id) == .shared ? skill.sharedConflict : skill.providerConflict
@@ -312,6 +336,18 @@ final class SetupModel: ObservableObject {
   func loadSkillFile(name: String, provider: String?, path: String) async -> String? {
     var content: String?
     await runWork { content = try await self.command.readSkillFile(name: name, provider: provider, path: path).document.content }
+    return content
+  }
+
+  func loadUnmanagedSkillTree(_ skill: UnmanagedSkill) async -> ManagedSkillTree? {
+    var tree: ManagedSkillTree?
+    await runWork { tree = try await self.command.inspectUnmanagedSkill(skill).tree }
+    return tree
+  }
+
+  func loadUnmanagedSkillFile(_ skill: UnmanagedSkill, path: String) async -> String? {
+    var content: String?
+    await runWork { content = try await self.command.readUnmanagedSkillFile(skill, path: path).document.content }
     return content
   }
 

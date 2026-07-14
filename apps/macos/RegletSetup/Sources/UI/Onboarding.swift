@@ -611,23 +611,45 @@ private struct AiDraftConsentView: View {
 
 struct SkillsStepView: View {
   @EnvironmentObject private var model: SetupModel
+  @State private var previewedSkill: UnmanagedSkill?
   let back: () -> Void
   let continueAction: () -> Void
 
   var body: some View {
     VStack(spacing: 0) {
-      List {
-        Section {
-          UnmanagedSkillsGroups(skills: model.selectedProviderUnmanagedSkills)
-        } header: {
-          Text("Adopt provider-local skills into your unified library")
-        } footer: {
-          Text("Unchecked skills stay local and untouched. Adoption runs after you confirm on the next step.")
+      HSplitView {
+        List {
+          Section {
+            UnmanagedSkillsGroups(
+              skills: model.selectedProviderUnmanagedSkills,
+              onPreview: { previewedSkill = $0 }
+            )
+          } header: {
+            Text("Choose where each provider-local skill belongs")
+          } footer: {
+            Text("Leaving a skill provider-local makes no changes. Other choices stage a copy for the file review on the next step.")
+          }
         }
+        .listStyle(.inset)
+        .scrollContentBackground(.hidden)
+        .background(Theme.Colors.voidBlack)
+        .padding(.leading, Theme.Spacing.sm)
+        .frame(minWidth: 560)
+
+        Group {
+          if let previewedSkill {
+            UnmanagedSkillPreview(skill: previewedSkill)
+          } else {
+            ContentUnavailableView(
+              "Preview a skill",
+              systemImage: "doc.text.magnifyingglass",
+              description: Text("Choose Preview beside a skill to inspect its source files before deciding where it belongs.")
+            )
+          }
+        }
+        .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.Colors.ink)
       }
-      .listStyle(.inset)
-      .scrollContentBackground(.hidden)
-      .background(Theme.Colors.voidBlack)
       Divider()
       StatusStrip {
         HStack {
@@ -647,6 +669,115 @@ struct SkillsStepView: View {
       }
     }
     .background(Theme.Colors.voidBlack)
+    .onAppear {
+      if previewedSkill == nil {
+        previewedSkill = model.selectedProviderUnmanagedSkills.first
+      }
+    }
+  }
+}
+
+private struct UnmanagedSkillPreview: View {
+  @EnvironmentObject private var model: SetupModel
+  let skill: UnmanagedSkill
+  @State private var tree: ManagedSkillTree?
+  @State private var selectedPath: String?
+  @State private var content = ""
+  @State private var isLoadingTree = false
+  @State private var isLoadingFile = false
+
+  private var selectedFile: ManagedSkillTree.File? {
+    tree?.files.first { $0.path == selectedPath }
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      VStack(alignment: .leading, spacing: 5) {
+        HStack {
+          Label(skill.name, systemImage: "hammer")
+            .font(Theme.Fonts.subheading)
+            .foregroundStyle(Theme.Colors.mist)
+          Spacer()
+          StatusBadge(text: model.providerDisplayName(skill.provider), kind: .info)
+        }
+        Text(skill.sourcePath)
+          .font(Theme.Fonts.mono(size: 11))
+          .foregroundStyle(Theme.Colors.ash)
+          .textSelection(.enabled)
+          .lineLimit(2)
+          .truncationMode(.middle)
+      }
+      .padding(Theme.Spacing.sm)
+
+      Divider()
+
+      if isLoadingTree {
+        ProgressView("Loading files…")
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else if let tree, tree.files.isEmpty {
+        ContentUnavailableView("No files", systemImage: "doc", description: Text("This skill directory is empty."))
+      } else if tree != nil {
+        HSplitView {
+          List(tree?.files ?? [], selection: $selectedPath) { file in
+            VStack(alignment: .leading, spacing: 2) {
+              Label(file.path, systemImage: "doc")
+                .lineLimit(1)
+              Text(ByteCountFormatter.string(fromByteCount: Int64(file.bytes), countStyle: .file))
+                .font(Theme.Fonts.eyebrow)
+                .foregroundStyle(Theme.Colors.ash)
+            }
+            .tag(file.path)
+          }
+          .listStyle(.sidebar)
+          .scrollContentBackground(.hidden)
+          .background(Theme.Colors.graphite)
+          .frame(minWidth: 165, idealWidth: 210)
+
+          Group {
+            if isLoadingFile {
+              ProgressView("Loading preview…")
+            } else if selectedPath == nil {
+              ContentUnavailableView("Select a file", systemImage: "doc.text")
+            } else if let selectedFile, selectedFile.bytes > 1_000_000 {
+              ContentUnavailableView(
+                "File too large to preview",
+                systemImage: "doc.badge.ellipsis",
+                description: Text("The file remains included if you adopt this skill.")
+              )
+            } else {
+              ScrollView([.horizontal, .vertical]) {
+                Text(content.isEmpty ? "(empty file)" : content)
+                  .font(Theme.Fonts.mono(size: 12))
+                  .foregroundStyle(Theme.Colors.mist)
+                  .textSelection(.enabled)
+                  .frame(maxWidth: .infinity, alignment: .topLeading)
+                  .padding(Theme.Spacing.sm)
+              }
+            }
+          }
+          .frame(minWidth: 260, maxWidth: .infinity, maxHeight: .infinity)
+          .background(Theme.Colors.ink)
+        }
+      } else {
+        ContentUnavailableView("Preview unavailable", systemImage: "exclamationmark.triangle")
+      }
+    }
+    .task(id: skill.id) {
+      isLoadingTree = true
+      tree = await model.loadUnmanagedSkillTree(skill)
+      selectedPath = tree?.files.first(where: { $0.path == "SKILL.md" })?.path ?? tree?.files.first?.path
+      isLoadingTree = false
+    }
+    .task(id: selectedPath) {
+      guard let selectedPath else { return }
+      guard let file = tree?.files.first(where: { $0.path == selectedPath }), file.bytes <= 1_000_000 else {
+        content = ""
+        return
+      }
+      isLoadingFile = true
+      content = await model.loadUnmanagedSkillFile(skill, path: selectedPath) ?? ""
+      isLoadingFile = false
+    }
   }
 }
 

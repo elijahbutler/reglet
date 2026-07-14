@@ -16,6 +16,7 @@ import {
   deleteSkill,
   deleteSkillFile,
   detectDrift,
+  describeUnmanagedSkill,
   getAdapter,
   effectiveMcpServerSummary,
   importDriftedMcp,
@@ -36,6 +37,7 @@ import {
   PROVIDER_RULES_MARKER,
   readProviderMcpServers,
   readSkillFile,
+  readUnmanagedSkillFile,
   regletHome,
   isCanonicalMcpServerDef,
   inventoryItems,
@@ -559,6 +561,25 @@ skills
     for (const skill of unmanaged) {
       console.log(`${skill.provider}\t${skill.name}\t${skill.sourcePath}`);
     }
+  });
+
+skills
+  .command('inspect')
+  .description('Preview files in a provider-local skill without adopting it')
+  .argument('<provider>', 'provider containing the local skill', parseProvider)
+  .argument('<name>', 'skill directory name')
+  .argument('[path]', 'relative file path to read')
+  .option('--json', 'print machine-readable JSON for manager apps')
+  .action(async (provider: ProviderId, name: string, relativePath: string | undefined, options: { json?: boolean }) => {
+    if (relativePath === undefined) {
+      const tree = await describeUnmanagedSkill(provider, name);
+      if (options.json === true) printJson({ version: 1, tree });
+      else tree.files.forEach((file) => console.log(file.path));
+      return;
+    }
+    const document = await readUnmanagedSkillFile(provider, name, relativePath);
+    if (options.json === true) printJson({ version: 1, document });
+    else process.stdout.write(document.content);
   });
 
 skills

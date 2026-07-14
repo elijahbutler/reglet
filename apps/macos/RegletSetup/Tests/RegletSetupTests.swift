@@ -33,21 +33,69 @@ final class RegletSetupTests: XCTestCase {
   }
 
   @MainActor
-  func testSkillAdoptionChoicesRequireExplicitOverwriteForChosenScope() {
+  func testSkillDestinationChoiceOwnsSelectionScopeAndOverwriteIntent() {
     let skill = UnmanagedSkill(
       provider: "claude", name: "review", sourcePath: "/local/review",
       sharedDestination: "/master/skills/review", providerDestination: "/master/skills/claude/review",
       sharedConflict: "destination-exists", providerConflict: "none", affectedProviders: ["claude", "codex"]
     )
     let model = SetupModel()
-    XCTAssertFalse(model.canAdopt(skill))
-    model.overwriteFlags.insert(skill.id)
+    XCTAssertEqual(model.skillAdoptionChoice(skill), .local)
+
+    model.setSkillAdoptionChoice(.shared, for: skill)
+    XCTAssertEqual(model.skillAdoptionChoice(skill), .shared)
+    XCTAssertTrue(model.checkedSkills.contains(skill.id))
+    XCTAssertTrue(model.overwriteFlags.contains(skill.id))
     XCTAssertTrue(model.canAdopt(skill))
-    model.overwriteFlags.remove(skill.id)
-    model.skillScopes[skill.id] = .provider
+
+    model.setSkillAdoptionChoice(.provider, for: skill)
+    XCTAssertEqual(model.skillAdoptionChoice(skill), .provider)
+    XCTAssertFalse(model.overwriteFlags.contains(skill.id))
     XCTAssertTrue(model.canAdopt(skill))
-    XCTAssertEqual(model.skillScope(skill.id), .provider)
+
+    model.setSkillAdoptionChoice(.local, for: skill)
+    XCTAssertEqual(model.skillAdoptionChoice(skill), .local)
+    XCTAssertFalse(model.checkedSkills.contains(skill.id))
+    XCTAssertNil(model.skillScopes[skill.id])
     XCTAssertEqual(skill.affectedProviders, ["claude", "codex"])
+  }
+
+  func testUnmanagedSkillPreviewUsesReadOnlyInspectCommands() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+    let log = directory.appendingPathComponent("commands.log").path
+    let tree = #"{"version":1,"tree":{"scope":{"kind":"unmanaged","provider":"claude"},"name":"review","path":"/tmp/review","hasSkillMd":true,"frontmatterIssues":[],"files":[{"path":"SKILL.md","bytes":9}],"shadowsShared":false,"shadowedBy":[]}}"#
+    let document = #"""
+    {"version":1,"document":{"scope":{"kind":"unmanaged","provider":"claude"},"name":"review","path":"SKILL.md","content":"# Review\n"}}
+    """#
+    let script = """
+    #!/bin/sh
+    printf '%s\n' "$*" >> '\(log)'
+    if [ "$5" = "SKILL.md" ]; then
+      printf '%s' '\(document)'
+    else
+      printf '%s' '\(tree)'
+    fi
+    """
+    let executable = try makeExecutable(script, directory: directory)
+    let command = RegletCommand(executable: executable)
+    let skill = UnmanagedSkill(
+      provider: "claude", name: "review", sourcePath: "/tmp/review",
+      sharedDestination: "/tmp/shared/review", providerDestination: "/tmp/provider/review",
+      sharedConflict: "none", providerConflict: "none", affectedProviders: ["claude"]
+    )
+
+    let inspected = try await command.inspectUnmanagedSkill(skill)
+    let read = try await command.readUnmanagedSkillFile(skill, path: "SKILL.md")
+
+    XCTAssertEqual(inspected.tree.scope.kind, "unmanaged")
+    XCTAssertEqual(inspected.tree.files.first?.path, "SKILL.md")
+    XCTAssertEqual(read.document.content, "# Review\n")
+    let commands = try String(contentsOfFile: log, encoding: .utf8)
+    XCTAssertTrue(commands.contains("skills inspect claude review --json"))
+    XCTAssertTrue(commands.contains("skills inspect claude review SKILL.md --json"))
+    XCTAssertFalse(commands.contains("adopt"))
   }
 
   func testCommandReportsExitFailureAndMalformedJSON() async throws {

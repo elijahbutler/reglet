@@ -160,6 +160,18 @@ struct RegletCommand {
     return try decode(SkillFileResponse.self, from: result.stdout, command: "reglet \(arguments.joined(separator: " "))")
   }
 
+  func inspectUnmanagedSkill(_ skill: UnmanagedSkill) async throws -> SkillTreeResponse {
+    let arguments = ["skills", "inspect", skill.provider, skill.name, "--json"]
+    let result = try await run(arguments)
+    return try decode(SkillTreeResponse.self, from: result.stdout, command: "reglet \(arguments.joined(separator: " "))")
+  }
+
+  func readUnmanagedSkillFile(_ skill: UnmanagedSkill, path: String) async throws -> SkillFileResponse {
+    let arguments = ["skills", "inspect", skill.provider, skill.name, path, "--json"]
+    let result = try await run(arguments)
+    return try decode(SkillFileResponse.self, from: result.stdout, command: "reglet \(arguments.joined(separator: " "))")
+  }
+
   func writeSkillFile(name: String, provider: String?, path: String, content: String) async throws {
     var arguments = ["skills", "write", name, path, "--scope", provider == nil ? "shared" : "provider"]
     if let provider { arguments += ["--provider", provider] }

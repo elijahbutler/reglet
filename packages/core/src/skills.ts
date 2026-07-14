@@ -1,4 +1,4 @@
-import { cp, mkdir, lstat, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, lstat, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { loadConfig } from './config.js';
 import { loadManifest } from './manifest.js';
@@ -83,6 +83,14 @@ export interface SkillFileRead {
   name: string;
   path: string;
   content: string;
+}
+
+export interface UnmanagedSkillDetail extends Omit<ManagedSkillDetail, 'scope'> {
+  scope: { kind: 'unmanaged'; provider: ProviderId };
+}
+
+export interface UnmanagedSkillFileRead extends Omit<SkillFileRead, 'scope'> {
+  scope: { kind: 'unmanaged'; provider: ProviderId };
 }
 
 export interface SkillMutationResult {
@@ -294,6 +302,40 @@ export async function listUnmanagedSkills(home = regletHome()): Promise<Unmanage
   );
 }
 
+export async function describeUnmanagedSkill(provider: ProviderId, name: string): Promise<UnmanagedSkillDetail> {
+  const root = await existingUnmanagedSkillRoot(provider, name);
+  const files = await collectSkillFiles(root);
+  const skillMd = await readOptionalFile(path.join(root, 'SKILL.md'));
+  const validation = skillMd === null ? { ok: true, issues: [] } : hasValidSkillFrontmatter(skillMd);
+  return {
+    scope: { kind: 'unmanaged', provider },
+    name,
+    path: root,
+    hasSkillMd: skillMd !== null,
+    frontmatterIssues: validation.issues,
+    files,
+    shadowsShared: false,
+    shadowedBy: [],
+  };
+}
+
+export async function readUnmanagedSkillFile(
+  provider: ProviderId,
+  name: string,
+  filePath: string,
+): Promise<UnmanagedSkillFileRead> {
+  const root = await existingUnmanagedSkillRoot(provider, name);
+  const target = await safeSkillPath(root, filePath, { mustExist: true });
+  const stats = await lstat(target);
+  if (!stats.isFile()) throw new Error(`Skill path is not a file: ${filePath}`);
+  return {
+    scope: { kind: 'unmanaged', provider },
+    name,
+    path: normalizeRelativePath(filePath),
+    content: await readFile(target, 'utf8'),
+  };
+}
+
 export async function adoptSkill(options: AdoptSkillOptions): Promise<AdoptedSkill> {
   const home = options.home ?? regletHome();
   const adapter = getAdapter(options.provider);
@@ -389,6 +431,39 @@ async function describeSkill(
     shadowsShared,
     shadowedBy,
   };
+}
+
+async function existingUnmanagedSkillRoot(provider: ProviderId, name: string): Promise<string> {
+  if (!isSkillName(name)) throw new Error(`Invalid skill name: ${name}`);
+  const skillsDir = getAdapter(provider).skillsDir();
+  if (skillsDir === null) throw new Error(`${provider} does not support skills`);
+  const root = path.join(skillsDir, name);
+  const skillsReal = await realpath(skillsDir);
+  const rootReal = await realpath(root);
+  if (!isInside(rootReal, skillsReal)) throw new Error(`Skill path escapes provider skills root: ${name}`);
+  return root;
+}
+
+async function collectSkillFiles(root: string): Promise<SkillTreeFile[]> {
+  const files: SkillTreeFile[] = [];
+
+  async function visit(directory: string): Promise<void> {
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      const absolutePath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(absolutePath);
+      } else if (entry.isFile()) {
+        files.push({
+          path: normalizeRelativePath(path.relative(root, absolutePath)),
+          bytes: (await stat(absolutePath)).size,
+        });
+      }
+    }
+  }
+
+  await visit(root);
+  return files.sort((left, right) => left.path.localeCompare(right.path));
 }
 
 function skillRoot(scope: SkillScope, name: string, home: string): string {

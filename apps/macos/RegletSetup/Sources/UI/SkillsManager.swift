@@ -399,12 +399,18 @@ struct NewSkillView: View {
   }
 }
 
-/// Reusable grouped checkbox/scope-picker rows for unmanaged skills.
-/// Emits a per-provider header (with select-all) followed by one row per skill.
+/// Reusable grouped destination-picker rows for unmanaged skills.
+/// Emits a per-provider header followed by one row per skill.
 /// Used by both the onboarding Skills step and the Skills manager.
 struct UnmanagedSkillsGroups: View {
   @EnvironmentObject private var model: SetupModel
   let skills: [UnmanagedSkill]
+  let onPreview: ((UnmanagedSkill) -> Void)?
+
+  init(skills: [UnmanagedSkill], onPreview: ((UnmanagedSkill) -> Void)? = nil) {
+    self.skills = skills
+    self.onPreview = onPreview
+  }
 
   private var byProvider: [(provider: String, skills: [UnmanagedSkill])] {
     Dictionary(grouping: skills, by: \.provider)
@@ -419,34 +425,22 @@ struct UnmanagedSkillsGroups: View {
           .font(Theme.Fonts.subheading)
           .foregroundStyle(Theme.Colors.mist)
         Spacer()
-        Button(allSelected(group.skills) ? "Deselect All" : "Select All") {
-          toggleAll(group.skills)
+        Menu("Set All") {
+          Button("Leave All Provider-Local") { setAll(group.skills, to: .local) }
+          Button("Keep All for This Provider") { setAll(group.skills, to: .provider) }
+          Button("Share All with Providers") { setAll(group.skills, to: .shared) }
         }
-        .buttonStyle(.regletGhost)
-        .disabled(selectable(in: group.skills).isEmpty)
+        .menuStyle(.borderlessButton)
+        .fixedSize()
       }
       ForEach(group.skills) { skill in
-        SkillSelectionRow(skill: skill)
+        SkillSelectionRow(skill: skill, onPreview: onPreview)
       }
     }
   }
 
-  private func selectable(in skills: [UnmanagedSkill]) -> [UnmanagedSkill] {
-    skills.filter(model.canAdopt)
-  }
-
-  private func allSelected(_ skills: [UnmanagedSkill]) -> Bool {
-    let candidates = selectable(in: skills)
-    return !candidates.isEmpty && candidates.allSatisfy { model.checkedSkills.contains($0.id) }
-  }
-
-  private func toggleAll(_ skills: [UnmanagedSkill]) {
-    let candidates = selectable(in: skills)
-    if allSelected(skills) {
-      for skill in candidates { model.checkedSkills.remove(skill.id) }
-    } else {
-      for skill in candidates { model.checkedSkills.insert(skill.id) }
-    }
+  private func setAll(_ skills: [UnmanagedSkill], to choice: SkillAdoptionChoice) {
+    for skill in skills { model.setSkillAdoptionChoice(choice, for: skill) }
   }
 }
 
@@ -454,44 +448,57 @@ struct SkillSelectionRow: View {
   @EnvironmentObject private var model: SetupModel
   @Environment(\.colorSchemeContrast) private var contrast
   let skill: UnmanagedSkill
+  let onPreview: ((UnmanagedSkill) -> Void)?
 
-  private var scope: SkillAdoptionScope { model.skillScope(skill.id) }
-  private var overwrite: Bool { model.overwriteFlags.contains(skill.id) }
-  private var conflicts: Bool {
-    let field = scope == .shared ? skill.sharedConflict : skill.providerConflict
-    return field == "destination-exists"
+  private var choice: SkillAdoptionChoice { model.skillAdoptionChoice(skill) }
+  private var destination: String {
+    switch choice {
+    case .local: skill.sourcePath
+    case .provider: skill.providerDestination
+    case .shared: skill.sharedDestination
+    }
   }
 
   var body: some View {
     HStack(spacing: 12) {
-      Toggle(isOn: checkedBinding) {
-        VStack(alignment: .leading, spacing: 2) {
+      VStack(alignment: .leading, spacing: 2) {
+        HStack(spacing: 7) {
           Text(skill.name)
             .foregroundStyle(Theme.Colors.mist)
-          Text(scope == .shared ? skill.sharedDestination : skill.providerDestination)
-            .font(Theme.Fonts.mono())
-            .foregroundStyle(secondaryText)
+          if choice != .local && model.overwriteFlags.contains(skill.id) {
+            Label("Replaces existing", systemImage: "exclamationmark.triangle.fill")
+              .font(Theme.Fonts.eyebrow)
+              .foregroundStyle(Theme.Colors.warning)
+          }
         }
+        Text(destination)
+          .font(Theme.Fonts.mono())
+          .foregroundStyle(secondaryText)
+          .lineLimit(1)
+          .truncationMode(.middle)
       }
-      .toggleStyle(.checkbox)
-      .disabled(conflicts && !overwrite)
 
       Spacer()
 
-      Picker("Scope", selection: scopeBinding) {
-        Text("Share with all").tag(SkillAdoptionScope.shared)
-        Text("This provider only").tag(SkillAdoptionScope.provider)
+      if let onPreview {
+        Button {
+          onPreview(skill)
+        } label: {
+          Label("Preview", systemImage: "doc.text.magnifyingglass")
+        }
+        .buttonStyle(.regletGhost)
+      }
+
+      Picker("Destination", selection: choiceBinding) {
+        Text("Leave provider-local").tag(SkillAdoptionChoice.local)
+        Text(skill.providerConflict == "destination-exists" ? "Replace provider-only copy" : "This provider only")
+          .tag(SkillAdoptionChoice.provider)
+        Text(skill.sharedConflict == "destination-exists" ? "Replace shared copy" : "Share with providers")
+          .tag(SkillAdoptionChoice.shared)
       }
       .labelsHidden()
-      .frame(width: 190)
-
-      if conflicts {
-        Image(systemName: "exclamationmark.triangle.fill")
-          .foregroundStyle(Theme.Colors.warning)
-          .accessibilityLabel("Destination already exists")
-        Toggle("Overwrite", isOn: overwriteBinding)
-          .toggleStyle(.checkbox)
-      }
+      .frame(width: 210)
+      .accessibilityLabel("Destination for \(skill.name)")
     }
     .padding(.vertical, 2)
   }
@@ -500,43 +507,10 @@ struct SkillSelectionRow: View {
     contrast == .increased ? Theme.Colors.mist : Theme.Colors.ash
   }
 
-  private var checkedBinding: Binding<Bool> {
+  private var choiceBinding: Binding<SkillAdoptionChoice> {
     Binding(
-      get: { model.checkedSkills.contains(skill.id) },
-      set: { on in
-        if on {
-          model.checkedSkills.insert(skill.id)
-        } else {
-          model.checkedSkills.remove(skill.id)
-        }
-      }
-    )
-  }
-
-  private var scopeBinding: Binding<SkillAdoptionScope> {
-    Binding(
-      get: { model.skillScope(skill.id) },
-      set: { newScope in
-        model.skillScopes[skill.id] = newScope
-        // A checked row must not silently point at a conflicting destination.
-        if !model.canAdopt(skill) {
-          model.checkedSkills.remove(skill.id)
-        }
-      }
-    )
-  }
-
-  private var overwriteBinding: Binding<Bool> {
-    Binding(
-      get: { model.overwriteFlags.contains(skill.id) },
-      set: { on in
-        if on {
-          model.overwriteFlags.insert(skill.id)
-        } else {
-          model.overwriteFlags.remove(skill.id)
-          if conflicts { model.checkedSkills.remove(skill.id) }
-        }
-      }
+      get: { model.skillAdoptionChoice(skill) },
+      set: { model.setSkillAdoptionChoice($0, for: skill) }
     )
   }
 }

@@ -2,7 +2,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { adoptSkill, listSkills, listUnmanagedSkills, recordOutput } from '../src/index.js';
+import {
+  adoptSkill, describeUnmanagedSkill, listSkills, listUnmanagedSkills, readUnmanagedSkillFile, recordOutput,
+} from '../src/index.js';
 
 let home: string | undefined;
 let providerHome: string | undefined;
@@ -72,6 +74,26 @@ describe('provider-local skill adoption', () => {
     ).rejects.toThrow('destination already exists');
     const provider = await adoptSkill({ provider: 'claude', name: 'alpha', scope: 'provider', home: paths.home });
     expect(provider.destination).toBe(path.join(paths.home, 'skills', 'claude', 'alpha'));
+  });
+
+  test('previews provider-local skill files without adopting or following symlinks', async () => {
+    const paths = await setup();
+    const source = path.join(paths.providerHome, '.claude', 'skills', 'preview-me');
+    await mkdir(path.join(source, 'references'), { recursive: true });
+    await writeFile(path.join(source, 'SKILL.md'), '# Preview\n');
+    await writeFile(path.join(source, 'references', 'notes.md'), 'read only\n');
+
+    const tree = await describeUnmanagedSkill('claude', 'preview-me');
+    const document = await readUnmanagedSkillFile('claude', 'preview-me', 'references/notes.md');
+
+    expect(tree.files).toEqual([
+      { path: 'references/notes.md', bytes: 10 },
+      { path: 'SKILL.md', bytes: 10 },
+    ]);
+    expect(tree.scope).toEqual({ kind: 'unmanaged', provider: 'claude' });
+    expect(document.content).toBe('read only\n');
+    await expect(readUnmanagedSkillFile('claude', 'preview-me', '../outside')).rejects.toThrow('Traversal');
+    expect(await Bun.file(path.join(paths.home, 'skills', 'preview-me')).exists()).toBe(false);
   });
 });
 
