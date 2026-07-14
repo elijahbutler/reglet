@@ -38,4 +38,4 @@ bun run macos:install
 
 Both commands install the matching CLI at `~/.local/bin/reglet`. Override `REGLET_CLI_INSTALL_DIR` or `REGLET_APP_INSTALL_DIR` to use different destinations; set `REGLET_NO_OPEN=1` to install without launching the app.
 
-The macOS manager remains absent from public release artifacts. `macos:install` is a source-checkout convenience that creates an ad-hoc-signed local app, not a notarized public distribution.
+Tagged releases include architecture-specific app archives built with the same ad-hoc signing model. They are not signed with an Apple Developer ID or notarized; `macos:install` remains the source-checkout installation path.

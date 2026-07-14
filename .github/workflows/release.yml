@@ -6,7 +6,7 @@ on:
       - "v*"
 
 jobs:
-  publish-cli-v1:
+  publish-release:
     runs-on: macos-latest
     permissions:
       contents: write
@@ -23,6 +23,10 @@ jobs:
       - run: bun test
       - run: swift test --package-path apps/macos/RegletSetup
       - run: bun run build:binaries
+      - name: Build unnotarized macOS app archives
+        run: |
+          REGLET_ARCH=arm64 bun run build:macos-release
+          REGLET_ARCH=x86_64 bun run build:macos-release
       - name: Create checksums and release provenance
         shell: bash
         run: |
@@ -32,11 +36,13 @@ jobs:
             shasum -a 256 \
               reglet-darwin-arm64 \
               reglet-darwin-x64 \
-              reglet-windows-x64.exe > SHA256SUMS.txt
+              reglet-windows-x64.exe \
+              reglet-macos-arm64.app.zip \
+              reglet-macos-x86_64.app.zip > SHA256SUMS.txt
           )
           {
             printf 'commit=%s\nref=%s\nrun=%s\n' "$GITHUB_SHA" "$GITHUB_REF_NAME" "$GITHUB_RUN_ID"
-            printf 'artifacts=%s\n' "reglet-darwin-arm64,reglet-darwin-x64,reglet-windows-x64.exe"
+            printf 'artifacts=%s\n' "reglet-darwin-arm64,reglet-darwin-x64,reglet-windows-x64.exe,reglet-macos-arm64.app.zip,reglet-macos-x86_64.app.zip"
           } > dist/provenance.txt
       - run: bun run build:homebrew-formula
       - name: Attest release artifacts
@@ -46,6 +52,8 @@ jobs:
             dist/reglet-darwin-arm64
             dist/reglet-darwin-x64
             dist/reglet-windows-x64.exe
+            dist/reglet-macos-arm64.app.zip
+            dist/reglet-macos-x86_64.app.zip
             dist/SHA256SUMS.txt
       - name: Create or reuse draft GitHub release
         env:
@@ -62,13 +70,18 @@ jobs:
             gh release create "$GITHUB_REF_NAME" \
               --draft \
               --title "$GITHUB_REF_NAME" \
-              --notes "CLI-only public release." \
-              dist/reglet-darwin-arm64 \
-              dist/reglet-darwin-x64 \
-              dist/reglet-windows-x64.exe \
-              dist/SHA256SUMS.txt \
-              dist/provenance.txt
+              --fail-on-no-commits \
+              --generate-notes \
+              --notes "Includes CLI binaries plus ad-hoc-signed, unnotarized macOS app archives. The app archives are not signed with an Apple Developer ID and may require manual Gatekeeper approval."
           fi
+          gh release upload "$GITHUB_REF_NAME" --clobber \
+            dist/reglet-darwin-arm64 \
+            dist/reglet-darwin-x64 \
+            dist/reglet-windows-x64.exe \
+            dist/reglet-macos-arm64.app.zip \
+            dist/reglet-macos-x86_64.app.zip \
+            dist/SHA256SUMS.txt \
+            dist/provenance.txt
       - name: Update Homebrew tap
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

@@ -26,7 +26,7 @@ Public release packaging additionally runs:
 swift test --package-path apps/macos/RegletSetup
 ```
 
-The Swift test is a source-level guard for the retained macOS manager. Public release automation does not build or publish `Reglet.app`, installer packages, or a Homebrew cask.
+The Swift test guards the macOS manager. Public release automation publishes ad-hoc-signed, unnotarized `Reglet.app` archives for Apple silicon and Intel Macs; it does not publish installer packages or a Homebrew cask.
 
 ## Run or install the macOS app locally
 
@@ -35,7 +35,7 @@ bun run macos:local
 bun run macos:install
 ```
 
-`macos:local` installs the native CLI and launches the app from source. `macos:install` creates an ad-hoc-signed `~/Applications/Reglet.app` with the same CLI bundled inside it. Set `REGLET_NO_OPEN=1` for unattended installation tests, or override `REGLET_CLI_INSTALL_DIR` and `REGLET_APP_INSTALL_DIR` to keep outputs in a temporary directory.
+`macos:local` installs the native CLI and launches the app from source. `macos:install` creates an ad-hoc-signed `~/Applications/Reglet.app` with the same CLI bundled inside it. `build:macos-release` creates the architecture-specific release archive after `build:binaries`. Set `REGLET_NO_OPEN=1` for unattended installation tests, or override `REGLET_CLI_INSTALL_DIR` and `REGLET_APP_INSTALL_DIR` to keep outputs in a temporary directory.
 
 ## Test Safety
 

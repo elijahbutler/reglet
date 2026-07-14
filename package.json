@@ -4,6 +4,7 @@
   "workspaces": ["packages/*"],
   "scripts": {
     "build:binaries": "bash scripts/build-binaries.sh",
+    "build:macos-release": "bash scripts/build-macos-release.sh",
     "build:homebrew-formula": "bash scripts/generate-homebrew-formula.sh",
     "macos:local": "bash scripts/macos-local.sh run",
     "macos:install": "bash scripts/macos-local.sh install",

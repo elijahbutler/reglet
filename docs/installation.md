@@ -2,7 +2,7 @@
 
 ## Requirements
 
-Public V1 is CLI-only. Public artifacts are macOS arm64, macOS x64, and Windows x64 binaries. The macOS manager source remains in the repository, but `Reglet.app`, installer packages, and Homebrew casks are not distributed public release artifacts.
+Public releases include macOS arm64, macOS x64, and Windows x64 CLI binaries plus Apple silicon and Intel `Reglet.app` archives. App archives are ad-hoc signed, not signed with an Apple Developer ID, and not notarized. Installer packages and updated Homebrew casks are not distributed.
 
 ## Homebrew
 
@@ -80,4 +80,4 @@ On macOS, install a local build of both the current-architecture CLI and app fro
 bun run macos:install
 ```
 
-This installs the CLI to `~/.local/bin/reglet` and an ad-hoc-signed app to `~/Applications/Reglet.app`. Use `bun run macos:local` instead to install the CLI and run the Swift app directly from source. These are development conveniences; public release automation still builds only CLI artifacts and does not distribute or notarize the macOS app.
+This installs the CLI to `~/.local/bin/reglet` and an ad-hoc-signed app to `~/Applications/Reglet.app`. Use `bun run macos:local` instead to install the CLI and run the Swift app directly from source. Public app archives use the same ad-hoc signing model and are not notarized.

@@ -20,6 +20,6 @@ This release establishes Reglet as a local-only CLI for rules, skills, and MCP c
 
 - The CLI and retained manager source are local-only. Legacy network state is inert until explicitly cleared.
 - Automatic update checks in the retained macOS manager source are disabled by default; manual update checks remain available in source builds.
-- Public artifacts are CLI-only for macOS arm64, macOS x64, and Windows x64 with checksums, provenance, and mandatory Homebrew formula publication before release publishing.
+- Public artifacts include CLI binaries plus ad-hoc-signed, unnotarized macOS app archives for Apple silicon and Intel Macs, with checksums, provenance, and mandatory Homebrew formula publication before release publishing.
 
 See [Release integrity and V1 certification](release.md) before distributing a tagged build.
