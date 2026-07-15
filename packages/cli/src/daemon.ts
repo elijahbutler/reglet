@@ -69,9 +69,12 @@ export async function runDaemon(options: DaemonRunOptions = {}): Promise<void> {
     { ignoreInitial: true },
   );
   watcher.on('add', scheduleApply).on('change', scheduleApply).on('unlink', scheduleApply);
+  const watcherReady = new Promise<void>((resolve) => watcher.once('ready', resolve));
 
   const providerWatcher = watch(providerPaths, { ignoreInitial: true });
   providerWatcher.on('add', scheduleDrift).on('change', scheduleDrift).on('unlink', scheduleDrift);
+  const providerWatcherReady = new Promise<void>((resolve) => providerWatcher.once('ready', resolve));
+  await Promise.all([watcherReady, providerWatcherReady]);
   await logDaemon('reglet daemon watching');
 
   await new Promise<void>((resolve) => {
