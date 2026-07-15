@@ -20,6 +20,7 @@ export interface ManagerBridge {
   snapshot(): Promise<ManagerSnapshotV2>;
   checkForUpdates(): Promise<UpdateCheckResult>;
   openRelease(): Promise<void>;
+  openFileLocation(path: string): Promise<void>;
 }
 
 export interface UpdateCheckResult {
@@ -49,6 +50,9 @@ export const tauriBridge: ManagerBridge = {
   },
   async openRelease() {
     await invoke('open_release');
+  },
+  async openFileLocation(path) {
+    await invoke('open_file_location', { path });
   },
 };
 

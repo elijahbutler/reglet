@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::Path;
 use tauri::{
     menu::{MenuBuilder, SubmenuBuilder},
     AppHandle,
@@ -168,6 +169,21 @@ fn open_release(app: AppHandle) -> Result<(), ManagerRpcError> {
     })
 }
 
+#[tauri::command]
+fn open_file_location(app: AppHandle, path: String) -> Result<(), ManagerRpcError> {
+    let target = Path::new(&path);
+    let location = target.parent().unwrap_or(target);
+    #[allow(deprecated)]
+    app.shell()
+        .open(location.to_string_lossy(), None)
+        .map_err(|_| {
+            update_error(
+                "OPEN_FILE_LOCATION_FAILED",
+                "Reglet could not open the file location.",
+            )
+        })
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -206,7 +222,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             manager_rpc,
             check_for_updates,
-            open_release
+            open_release,
+            open_file_location
         ])
         .run(tauri::generate_context!())
         .expect("error while running Reglet desktop");
