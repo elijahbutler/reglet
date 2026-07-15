@@ -18,7 +18,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run desktop:test
-      - run: bun run build:binaries
+      - run: bun run build:binaries -- windows-x64
       - run: bash scripts/stage-tauri-sidecars.sh x86_64-pc-windows-msvc
       - run: bash scripts/build-tauri-desktop.sh x86_64-pc-windows-msvc nsis
       - name: Collect Windows desktop artifacts
