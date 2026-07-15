@@ -6,7 +6,6 @@ import {
   FileText,
   Folder,
   Plug,
-  ShieldCheck,
   Sparkles,
   Wrench,
   X,
@@ -21,6 +20,7 @@ import type {
   ManagerSnapshotV2,
 } from '@reglet/manager-protocol';
 import { jsonObject, type ManagerBridge } from '../managerBridge.js';
+import { BrandMark } from './BrandMark.js';
 
 type WizardStep = 'welcome' | 'choose' | 'instructions' | 'skills' | 'preview' | 'changes' | 'done';
 type ChangeKind = 'New' | 'Updated' | 'Removed';
@@ -287,9 +287,12 @@ export function OnboardingWizard({ bridge, snapshot, onClose, onStateChanged }: 
     <div className="onboarding-backdrop" role="presentation">
       <section ref={shellRef} className="onboarding-shell" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
         <header className="onboarding-header">
-          <div>
-            <p className="text-sm font-semibold text-reglet-text">Reglet setup</p>
-            <p className="text-xs text-reglet-muted">One source of truth for local agent configuration</p>
+          <div className="flex items-center gap-3">
+            <BrandMark />
+            <div>
+              <p className="text-sm font-semibold text-reglet-text">Reglet setup</p>
+              <p className="text-xs text-reglet-muted">One source of truth for local agent configuration</p>
+            </div>
           </div>
           <StepRail currentIndex={currentIndex} />
           {step !== 'done' && (
@@ -385,8 +388,8 @@ function StepRail({ currentIndex }: { currentIndex: number }) {
     <ol className="onboarding-rail" aria-label={`Setup step ${currentIndex + 1} of ${steps.length}`}>
       {steps.map((step, index) => (
         <li key={step.id} className={index === currentIndex ? 'onboarding-step-active' : index < currentIndex ? 'onboarding-step-complete' : ''}>
-          {index < currentIndex && <Check size={12} aria-hidden="true" />}
-          <span>{step.label}</span>
+          <span className="onboarding-step-marker">{index < currentIndex ? <Check size={12} aria-hidden="true" /> : index + 1}</span>
+          <span className="onboarding-step-label">{step.label}</span>
         </li>
       ))}
     </ol>
@@ -396,11 +399,11 @@ function StepRail({ currentIndex }: { currentIndex: number }) {
 function WelcomeStep({ onContinue }: { onContinue: () => void }) {
   return (
     <div className="onboarding-centered">
-      <div className="onboarding-hero-icon"><ShieldCheck size={28} aria-hidden="true" /></div>
+      <div className="onboarding-hero-icon"><BrandMark /></div>
       <p className="onboarding-eyebrow">LOCAL AND REVIEWED</p>
       <h1 id="onboarding-title" className="onboarding-title">Set up Reglet without surprises.</h1>
       <p className="onboarding-lede">Reglet will collect your local instructions and skills into one source, then show every provider change before writing it.</p>
-      <div className="onboarding-safety-grid">
+      <div className="onboarding-safety-ledger">
         <SafetyItem title="Nothing runs in the background" body="Setup does not start a daemon or notifications." />
         <SafetyItem title="AI is always opt-in" body="Drafting only runs after per-use consent." />
         <SafetyItem title="Every write is reviewed" body="Provider files are backed up before apply." />
@@ -645,7 +648,7 @@ function ChangesStep(props: {
 function DoneStep({ providers, onDone }: { providers: ManagerProviderId[]; onDone: () => void }) {
   return (
     <div className="onboarding-centered">
-      <div className="onboarding-hero-icon"><Check size={28} aria-hidden="true" /></div>
+      <div className="onboarding-hero-icon onboarding-complete-icon"><Check size={24} aria-hidden="true" /></div>
       <p className="onboarding-eyebrow">SETUP COMPLETE</p>
       <h1 id="onboarding-title" className="onboarding-title">Reglet is ready.</h1>
       <p className="onboarding-lede">Your unified configuration is now managed across {providers.length} provider{providers.length === 1 ? '' : 's'}.</p>

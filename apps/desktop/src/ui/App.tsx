@@ -23,6 +23,7 @@ import type {
   ManagerSnapshotV2,
 } from '@reglet/manager-protocol';
 import { jsonObject, type ManagerBridge, type UpdateCheckResult } from '../managerBridge.js';
+import { BrandMark } from './BrandMark.js';
 import { OnboardingWizard } from './OnboardingWizard.js';
 
 const sections = ['Providers', 'Rules', 'Skills', 'MCP', 'Activity & Drift', 'Recovery'] as const;
@@ -426,9 +427,12 @@ export function App({ bridge }: AppProps) {
     <main className="min-h-screen bg-reglet-bg text-reglet-text">
       <header className="border-b border-reglet-line bg-reglet-panel/95 px-6 py-4">
         <div className="flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-xl font-semibold tracking-normal">Reglet</h1>
-            <p className="text-sm text-reglet-muted">Local manager for rules, skills, and MCP configuration.</p>
+          <div className="flex items-center gap-3">
+            <BrandMark />
+            <div>
+              <h1 className="text-xl font-semibold tracking-normal">Reglet</h1>
+              <p className="text-sm text-reglet-muted">Local manager for rules, skills, and MCP configuration.</p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <StatusBadge state={stateTone} />
@@ -929,7 +933,7 @@ function SelectionToolbar({ selectedContents, onSelectedContents }: { selectedCo
 
 function Panel({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
   return (
-    <section className="rounded-md border border-reglet-line bg-reglet-panel p-4">
+    <section className="card-surface p-4">
       <div className="mb-4 flex items-center justify-between gap-3">
         <h2 className="text-lg font-semibold">{title}</h2>
         {action}
@@ -944,7 +948,7 @@ function Banner({ tone, text, onDismiss }: { tone: 'error' | 'info'; text: strin
 }
 
 function LoadingState() {
-  return <div className="rounded-md border border-reglet-line bg-reglet-panel p-8 text-reglet-muted" role="status">Loading Manager snapshot...</div>;
+  return <div className="card-surface p-8 text-reglet-muted" role="status">Loading Manager snapshot...</div>;
 }
 
 function EmptyState({ title, body }: { title: string; body: string }) {
@@ -952,7 +956,7 @@ function EmptyState({ title, body }: { title: string; body: string }) {
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-md border border-reglet-line bg-reglet-panel p-3"><p className="text-xs uppercase text-reglet-muted">{label}</p><p className="mt-1 truncate font-medium">{value}</p></div>;
+  return <div className="card-surface p-3"><p className="text-xs uppercase tracking-wider text-reglet-muted">{label}</p><p className="mt-1 truncate font-medium">{value}</p></div>;
 }
 
 function StatusBadge({ state }: { state: string }) {
