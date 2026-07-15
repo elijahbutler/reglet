@@ -32,6 +32,42 @@ final class RegletSetupTests: XCTestCase {
     XCTAssertEqual(OnboardingRoute(includesPrompts: false, includesSkills: false).next(after: .selection), .preview)
   }
 
+  func testApplyPreviewCondensesChangedFilesByProvider() {
+    let entries = [
+      previewEntry(
+        provider: "claude", content: "rules", operation: "write",
+        path: "/Users/test/.claude/CLAUDE.md", before: nil, after: "rules-v1"
+      ),
+      previewEntry(
+        provider: "claude", content: "skills", operation: "write",
+        path: "/Users/test/.claude/skills/review", before: "skill-v1", after: "skill-v2"
+      ),
+      previewEntry(
+        provider: "claude", content: "skills", operation: "remove",
+        path: "/Users/test/.claude/skills/retired", before: "skill-v1", after: nil
+      ),
+      previewEntry(
+        provider: "codex", content: "rules", operation: "write",
+        path: "/Users/test/.codex/AGENTS.md", before: "same", after: "same"
+      ),
+      previewEntry(
+        provider: "codex", content: "skills", operation: "remove",
+        path: "/Users/test/.agents/skills/already-missing", before: nil, after: nil
+      ),
+    ]
+
+    let groups = ProviderPreviewGroup.make(entries: entries, providers: ["claude", "codex"])
+
+    XCTAssertEqual(groups.map(\.id), ["claude", "codex"])
+    XCTAssertEqual(groups[0].entries.map(\.friendlyName), ["AGENT.md → CLAUDE.md", "retired", "review"])
+    XCTAssertEqual(groups[0].entries.compactMap(\.changeKind), [.created, .removed, .updated])
+    XCTAssertEqual(groups[0].summary, "1 new · 1 updated · 1 removed")
+    XCTAssertTrue(groups[1].entries.isEmpty)
+    XCTAssertEqual(groups[1].summary, "Up to date")
+    XCTAssertEqual(previewProviderName("claude", fallback: "Claude Code"), "Claude")
+    XCTAssertEqual(previewProviderName("custom", fallback: "Custom Provider"), "Custom Provider")
+  }
+
   @MainActor
   func testSkillDestinationChoiceOwnsSelectionScopeAndOverwriteIntent() {
     let skill = UnmanagedSkill(
@@ -250,6 +286,28 @@ final class RegletSetupTests: XCTestCase {
     XCTAssertTrue(commands.contains("init --provider claude --content rules --no-apply"))
     XCTAssertTrue(commands.contains("apply-structured preview --content rules --provider claude"))
     XCTAssertFalse(commands.contains("apply --content rules"))
+  }
+
+  private func previewEntry(
+    provider: String,
+    content: String,
+    operation: String,
+    path: String,
+    before: String?,
+    after: String?
+  ) -> StructuredApplyPreview.Entry {
+    StructuredApplyPreview.Entry(
+      provider: provider,
+      content: content,
+      operation: operation,
+      path: path,
+      diff: before == after ? "" : "changed",
+      expectedTargetHash: before,
+      resultingTargetHash: after,
+      driftStatus: "clean",
+      snapshot: StructuredApplyPreview.Snapshot(behavior: "none", location: nil),
+      backup: StructuredApplyPreview.Backup(behavior: "none", location: nil)
+    )
   }
 
   private func assertColor(

@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 struct OnboardingView: View {
@@ -788,34 +789,11 @@ struct PreviewView: View {
     return Set(counts.compactMap { $0.value > 1 ? $0.key : nil })
   }
 
-  private var selectedSharedSkillNames: Set<String> {
-    Set(selectedAdoptions.compactMap { model.skillScope($0.id) == .shared ? $0.name : nil })
-  }
-
   private var hasBlockedAdoption: Bool {
     selectedAdoptions.contains { skill in
       let destination = model.skillScope(skill.id) == .shared ? skill.sharedDestination : skill.providerDestination
       return !model.canAdopt(skill) || duplicateAdoptionDestinations.contains(destination)
     }
-  }
-
-  private var displayedWrites: [PlannedFile] {
-    var writes = model.plan?.writes ?? []
-    if model.rulePromptMode == .unified && model.selectedContents.contains(.rules) {
-      writes = writes.filter { !($0.content == "rules" && $0.scope == "master" && $0.path.contains("/imported-")) }
-      writes.insert(
-        PlannedFile(
-          provider: "reglet",
-          content: "rules",
-          path: "\(model.scan?.regletHome ?? "~/.reglet")/rules/00-general.md",
-          scope: "master",
-          operation: "write",
-          reason: "save unified prompt draft"
-        ),
-        at: 0
-      )
-    }
-    return writes
   }
 
   private var hasBlockedUnifiedDraft: Bool {
@@ -824,73 +802,45 @@ struct PreviewView: View {
       && model.editableRuleMergeDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
+  private var providerSummaries: [OnboardingProviderSummary] {
+    (model.scan?.providers ?? [])
+      .filter { model.selectedProviders.contains($0.id) }
+      .map { provider in
+        OnboardingProviderSummary(
+          id: provider.id,
+          displayName: previewProviderName(provider.id, fallback: provider.displayName),
+          ruleFileName: model.selectedContents.contains(.rules)
+            ? provider.inventory.rulesPath.map { ($0 as NSString).lastPathComponent }
+            : nil,
+          skillNames: model.selectedContents.contains(.skills) && provider.inventory.skillsDir != nil
+            ? skillNames(for: provider.id)
+            : [],
+          includesMcp: model.selectedContents.contains(.mcp) && provider.inventory.mcpPath != nil
+        )
+      }
+      .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+  }
+
+  private var unifiedSkillCount: Int {
+    Set(providerSummaries.flatMap(\.skillNames)).count
+  }
+
   var body: some View {
     VStack(spacing: 0) {
       List {
-        Section("Files Reglet will read") {
-          FileRows(files: model.plan?.reads ?? [])
-        }
-
-        Section("Files Reglet will write after confirmation") {
-          FileRows(files: displayedWrites)
-        }
-
         Section {
-          let rules = model.plan?.reconciliation.rules ?? []
-          if rules.isEmpty {
-            Text("No provider rule files were selected for reconciliation.")
-              .foregroundStyle(Theme.Colors.ash)
-          } else {
-            ScrollView(.horizontal) {
-              HStack(alignment: .top, spacing: 0) {
-                ForEach(rules) { comparison in
-                  RuleComparisonRow(comparison: comparison)
-                    .frame(width: 340, alignment: .topLeading)
-                    .padding(.horizontal, 12)
-                  if comparison.id != rules.last?.id { Divider() }
-                }
-              }
-            }
-            .accessibilityLabel("Discovered provider rule sources")
-          }
-        } header: {
-          Text("Provider rule reconciliation")
-        } footer: {
-          Text(model.rulePromptMode == .unified
-            ? "The unified draft is saved as one master prompt. Provider-specific source prompts are not imported as separate master documents in this mode."
-            : "Different provider rules are preserved as separate master documents, then composed into generated provider outputs during apply.")
-        }
-
-        if model.selectedContents.contains(.rules) {
-          Section("System prompt decision") {
-            if model.rulePromptMode == .unified {
-              Label("Unified prompt draft will be saved to 00-general.md", systemImage: "doc.text")
-              Text(model.editableRuleMergeDraft.isEmpty ? "No draft yet." : model.editableRuleMergeDraft)
-                .font(Theme.Fonts.mono(size: 11))
-                .lineLimit(8)
-                .textSelection(.enabled)
-            } else {
-              Label("Provider-specific prompt documents will be preserved", systemImage: "rectangle.stack")
-            }
-          }
-        }
-
-        Section {
-          SkillInventoryPreview(
-            selectedAdoptions: selectedAdoptions,
-            duplicateDestinations: duplicateAdoptionDestinations,
-            selectedSharedSkillNames: selectedSharedSkillNames
+          UnifiedSourceSummary(
+            contents: model.selectedContents,
+            skillCount: unifiedSkillCount
           )
         } header: {
-          Text("Projected skill inventory")
-        } footer: {
-          Text("Unchecked provider-local skills stay local. Conflicting checked adoptions are blocked unless Overwrite is enabled in the Skills step.")
+          Text("Reglet")
         }
 
-        Section("Safety") {
-          Label("Daemon remains off", systemImage: "checkmark.shield")
-          Label("No network service is configured", systemImage: "network.slash")
-          Label("Notifications remain off", systemImage: "bell.slash")
+        Section("Provider destinations") {
+          ForEach(providerSummaries) { provider in
+            OnboardingProviderSyncDisclosure(provider: provider)
+          }
         }
       }
       .listStyle(.inset)
@@ -908,7 +858,7 @@ struct PreviewView: View {
           Button {
             review()
           } label: {
-            Label("Review Exact Changes", systemImage: "doc.text.magnifyingglass")
+            Label("Review Changes", systemImage: "doc.text.magnifyingglass")
           }
           .buttonStyle(.regletPrimary)
           .keyboardShortcut(.defaultAction)
@@ -929,201 +879,101 @@ struct PreviewView: View {
     }
     return "Daemon and notifications remain off; Reglet is local-only."
   }
+
+  private func skillNames(for provider: String) -> [String] {
+    var names = Set(model.skillsOverview?.shared.map(\.name) ?? [])
+    names.formUnion(
+      model.skillsOverview?.providerScoped
+        .filter { $0.provider == provider }
+        .map(\.name) ?? []
+    )
+
+    for skill in selectedAdoptions {
+      if model.skillScope(skill.id) == .shared || skill.provider == provider {
+        names.insert(skill.name)
+      }
+    }
+    return names.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+  }
 }
 
-struct RuleComparisonRow: View {
-  @EnvironmentObject private var model: SetupModel
-  let comparison: RuleComparison
+private struct OnboardingProviderSummary: Identifiable {
+  let id: String
+  let displayName: String
+  let ruleFileName: String?
+  let skillNames: [String]
+  let includesMcp: Bool
 
-  private var status: (String, String, StatusBadge.Kind) {
-    switch comparison.state {
-    case "new":
-      ("doc.badge.plus", "New master rule document", .info)
-    case "matching":
-      ("checkmark.circle", "Matches existing master document", .success)
-    default:
-      ("exclamationmark.triangle", "Different from existing master document", .warning)
-    }
+  var summary: String {
+    var parts: [String] = []
+    if let ruleFileName { parts.append(ruleFileName) }
+    if !skillNames.isEmpty { parts.append("\(skillNames.count) skill\(skillNames.count == 1 ? "" : "s")") }
+    if includesMcp { parts.append("MCP") }
+    return parts.isEmpty ? "Nothing to sync" : parts.joined(separator: " · ")
   }
+}
 
-  private var statusColor: Color {
-    switch status.2 {
-    case .info:
-      Theme.Colors.info
-    case .success:
-      Theme.Colors.success
-    case .warning:
-      Theme.Colors.warning
-    default:
-      Theme.Colors.ash
-    }
-  }
+private struct OnboardingProviderSyncDisclosure: View {
+  let provider: OnboardingProviderSummary
+  @State private var isExpanded = false
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      HStack(spacing: 8) {
-        Image(systemName: status.0)
-          .foregroundStyle(statusColor)
-          .accessibilityLabel(status.1)
-        Text(model.providerDisplayName(comparison.provider))
-          .font(Theme.Fonts.subheading)
-          .foregroundStyle(Theme.Colors.mist)
-        StatusBadge(text: status.1, kind: status.2)
+    DisclosureGroup(isExpanded: $isExpanded) {
+      VStack(spacing: 0) {
+        if let ruleFileName = provider.ruleFileName {
+          OnboardingSyncRow(icon: "doc.text", name: "AGENT.md → \(ruleFileName)", detail: "Unified instructions")
+        }
+        ForEach(provider.skillNames, id: \.self) { name in
+          OnboardingSyncRow(icon: "hammer", name: name, detail: "Skill")
+        }
+        if provider.includesMcp {
+          OnboardingSyncRow(icon: "server.rack", name: "MCP settings", detail: "Provider configuration")
+        }
+        if provider.ruleFileName == nil && provider.skillNames.isEmpty && !provider.includesMcp {
+          Label("No supported content selected", systemImage: "minus.circle")
+            .font(Theme.Fonts.body)
+            .foregroundStyle(Theme.Colors.ash)
+            .padding(.vertical, 8)
+        }
       }
-      PathSummary(label: "Source", value: comparison.sourcePath)
-      PathSummary(label: "Destination", value: comparison.destinationPath)
-      Text(comparison.preview.isEmpty ? "(empty file)" : comparison.preview)
-        .font(Theme.Fonts.mono(size: 11))
-        .textSelection(.enabled)
-        .lineLimit(6)
-      if comparison.truncated {
-        Label("Preview truncated", systemImage: "scissors")
+      .padding(.leading, 4)
+    } label: {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(provider.displayName)
+          .font(Theme.Fonts.bodyLg)
+          .foregroundStyle(Theme.Colors.mist)
+        Text(provider.summary)
           .font(Theme.Fonts.eyebrow)
           .foregroundStyle(Theme.Colors.ash)
       }
     }
     .padding(.vertical, 6)
+    .listRowBackground(Theme.Colors.voidBlack)
+    .listRowSeparatorTint(Theme.Colors.white.opacity(0.10))
   }
 }
 
-struct SkillInventoryPreview: View {
-  @EnvironmentObject private var model: SetupModel
-  let selectedAdoptions: [UnmanagedSkill]
-  let duplicateDestinations: Set<String>
-  let selectedSharedSkillNames: Set<String>
-
-  private var overview: SkillsOverviewResponse? { model.skillsOverview }
+private struct OnboardingSyncRow: View {
+  let icon: String
+  let name: String
+  let detail: String
 
   var body: some View {
-    if overview == nil && selectedAdoptions.isEmpty {
-      Text("Skill inventory unavailable.")
+    HStack(spacing: 10) {
+      Image(systemName: icon)
         .foregroundStyle(Theme.Colors.ash)
-    } else {
-      ForEach(overview?.shared ?? []) { skill in
-        VStack(alignment: .leading, spacing: 4) {
-          Label(skill.name, systemImage: "hammer")
-          Text(skill.path)
-            .font(Theme.Fonts.mono(size: 11))
-            .foregroundStyle(Theme.Colors.ash)
-            .textSelection(.enabled)
-          if !skill.shadowedBy.isEmpty {
-            Text("Shadowed by \(skill.shadowedBy.map { model.providerDisplayName($0) }.joined(separator: ", "))")
-              .font(Theme.Fonts.eyebrow)
-              .foregroundStyle(Theme.Colors.ash)
-          }
-        }
-        .padding(.vertical, 3)
-      }
-
-      ForEach(overview?.providerScoped ?? []) { skill in
-        VStack(alignment: .leading, spacing: 4) {
-          Label("\(skill.name) (\(model.providerDisplayName(skill.provider)))", systemImage: "hammer.circle")
-          Text(skill.path)
-            .font(Theme.Fonts.mono(size: 11))
-            .foregroundStyle(Theme.Colors.ash)
-            .textSelection(.enabled)
-          if skill.shadowsShared {
-            Text("Shadows a shared skill for this provider.")
-              .font(Theme.Fonts.eyebrow)
-              .foregroundStyle(Theme.Colors.ash)
-          }
-        }
-        .padding(.vertical, 3)
-      }
-
-      if selectedAdoptions.isEmpty {
-        Text("No provider-local skills are selected for adoption.")
-          .foregroundStyle(Theme.Colors.ash)
-      } else {
-        ForEach(selectedAdoptions) { skill in
-          SkillProjectionRow(
-            skill: skill,
-            hasSelectionCollision: duplicateDestinations.contains(
-              model.skillScope(skill.id) == .shared ? skill.sharedDestination : skill.providerDestination
-            ),
-            selectedSharedSkillNames: selectedSharedSkillNames
-          )
-        }
-      }
-    }
-  }
-}
-
-struct SkillProjectionRow: View {
-  @EnvironmentObject private var model: SetupModel
-  let skill: UnmanagedSkill
-  let hasSelectionCollision: Bool
-  let selectedSharedSkillNames: Set<String>
-
-  private var scope: SkillAdoptionScope { model.skillScope(skill.id) }
-  private var destination: String {
-    scope == .shared ? skill.sharedDestination : skill.providerDestination
-  }
-  private var conflict: Bool {
-    (scope == .shared ? skill.sharedConflict : skill.providerConflict) == "destination-exists"
-  }
-  private var overwrite: Bool { model.overwriteFlags.contains(skill.id) }
-  private var blocked: Bool { hasSelectionCollision || (conflict && !overwrite) }
-  private var statusText: String {
-    if hasSelectionCollision { return "Blocked: another selection uses this destination" }
-    if blocked { return "Blocked: destination exists" }
-    if conflict && overwrite { return "Will overwrite existing destination" }
-    return scope == .shared ? "Will become shared" : "Will become provider-scoped"
-  }
-  private var statusSymbol: String {
-    if blocked { return "xmark.octagon" }
-    if conflict && overwrite { return "exclamationmark.triangle" }
-    return "square.and.arrow.down"
-  }
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      HStack(spacing: 8) {
-        Image(systemName: statusSymbol)
-          .foregroundStyle(statusColor)
-          .accessibilityLabel(statusText)
-        Text(skill.name)
-          .font(Theme.Fonts.subheading)
+        .frame(width: 22)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(name)
+          .font(Theme.Fonts.body)
           .foregroundStyle(Theme.Colors.mist)
-        Text(model.providerDisplayName(skill.provider))
-          .foregroundStyle(Theme.Colors.ash)
-        StatusBadge(text: statusText, kind: statusKind)
-      }
-      PathSummary(label: "Source", value: skill.sourcePath)
-      PathSummary(label: "Destination", value: destination)
-      Text("Affected providers: \(affectedProviders.map { model.providerDisplayName($0) }.joined(separator: ", "))")
-        .font(Theme.Fonts.eyebrow)
-        .foregroundStyle(Theme.Colors.ash)
-      if scope == .provider && ((model.skillsOverview?.shared.contains { $0.name == skill.name } ?? false) || selectedSharedSkillNames.contains(skill.name)) {
-        Text("This provider-scoped skill will shadow the shared skill for \(model.providerDisplayName(skill.provider)).")
+        Text(detail)
           .font(Theme.Fonts.eyebrow)
           .foregroundStyle(Theme.Colors.ash)
       }
+      Spacer()
     }
-    .padding(.vertical, 6)
-  }
-
-  private var affectedProviders: [String] {
-    scope == .provider ? [skill.provider] : skill.affectedProviders
-  }
-
-  private var statusKind: StatusBadge.Kind {
-    if blocked { return .error }
-    if conflict && overwrite { return .warning }
-    return .info
-  }
-
-  private var statusColor: Color {
-    switch statusKind {
-    case .error:
-      Theme.Colors.errorText
-    case .warning:
-      Theme.Colors.warning
-    case .info:
-      Theme.Colors.info
-    default:
-      Theme.Colors.ash
-    }
+    .padding(.vertical, 8)
   }
 }
 
