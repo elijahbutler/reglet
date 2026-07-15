@@ -1947,7 +1947,7 @@ function fallbackCommandPaths(command: string): string[] {
 }
 
 function commandPathCandidates(dir: string, command: string): string[] {
-  const extensions = process.platform === 'win32' ? ['', '.exe', '.cmd', '.bat'] : [''];
+  const extensions = process.platform === 'win32' ? ['.exe', '.cmd', '.bat'] : [''];
   return extensions.map((extension) => path.join(dir, `${command}${extension}`));
 }
 

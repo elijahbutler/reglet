@@ -33,6 +33,10 @@ async function useTempHomes(): Promise<{ home: string; providerHome: string }> {
   return { home: currentHome, providerHome: currentProviderHome };
 }
 
+function fakeExecutablePath(bin: string, command: string): string {
+  return path.join(bin, process.platform === 'win32' ? `${command}.cmd` : command);
+}
+
 async function runCli(
   args: string[],
   home: string,
@@ -408,10 +412,14 @@ describe('reglet CLI', () => {
     const fakeHome = await mkdtemp(path.join(tmpdir(), 'reglet-cli-runner-home-'));
     currentExtraHomes.push(fakeHome);
     const marker = path.join(fakeHome, 'invoked');
-    const fakeCodex = path.join(fakeHome, '.local', 'bin', 'codex');
+    const fakeCodex = fakeExecutablePath(path.join(fakeHome, '.local', 'bin'), 'codex');
     await mkdir(path.dirname(fakeCodex), { recursive: true });
-    await writeFile(fakeCodex, `#!/bin/sh\ntouch '${marker}'\n`);
-    await chmod(fakeCodex, 0o755);
+    if (process.platform === 'win32') {
+      await writeFile(fakeCodex, `@echo off\r\ntype nul > "${marker}"\r\n`);
+    } else {
+      await writeFile(fakeCodex, `#!/bin/sh\ntouch '${marker}'\n`);
+      await chmod(fakeCodex, 0o755);
+    }
 
     const result = await runCli(['rules', 'merge-runners', '--json'], home, providerHome, {
       HOME: fakeHome,
@@ -443,10 +451,17 @@ describe('reglet CLI', () => {
     currentExtraHomes.push(fakeHome);
     const bin = path.join(fakeHome, '.local', 'bin');
     await mkdir(bin, { recursive: true });
-    await writeFile(path.join(bin, 'codex'), '#!/bin/sh\necho "Used codex."\n');
-    await writeFile(path.join(bin, 'claude'), '#!/bin/sh\necho "Used claude."\n');
-    await chmod(path.join(bin, 'codex'), 0o755);
-    await chmod(path.join(bin, 'claude'), 0o755);
+    const fakeCodex = fakeExecutablePath(bin, 'codex');
+    const fakeClaude = fakeExecutablePath(bin, 'claude');
+    if (process.platform === 'win32') {
+      await writeFile(fakeCodex, '@echo off\r\necho Used codex.\r\n');
+      await writeFile(fakeClaude, '@echo off\r\necho Used claude.\r\n');
+    } else {
+      await writeFile(fakeCodex, '#!/bin/sh\necho "Used codex."\n');
+      await writeFile(fakeClaude, '#!/bin/sh\necho "Used claude."\n');
+      await chmod(fakeCodex, 0o755);
+      await chmod(fakeClaude, 0o755);
+    }
 
     const result = await runCli(
       ['rules', 'merge-draft', '--provider', 'claude,codex', '--runner', 'claude', '--json'],
@@ -477,17 +492,29 @@ describe('reglet CLI', () => {
     const argsLog = path.join(fakeHome, 'args');
     const stdinLog = path.join(fakeHome, 'stdin');
     const cwdLog = path.join(fakeHome, 'cwd');
-    const fakeCodex = path.join(fakeHome, '.local', 'bin', 'codex');
+    const fakeCodex = fakeExecutablePath(path.join(fakeHome, '.local', 'bin'), 'codex');
     await mkdir(path.dirname(fakeCodex), { recursive: true });
-    await writeFile(fakeCodex, [
-      '#!/bin/sh',
-      `printf '%s\\n' "$@" > '${argsLog}'`,
-      `pwd > '${cwdLog}'`,
-      `cat > '${stdinLog}'`,
-      'echo "Merged securely."',
-      '',
-    ].join('\n'));
-    await chmod(fakeCodex, 0o755);
+    if (process.platform === 'win32') {
+      const scriptPath = path.join(fakeHome, 'fake-codex.ts');
+      await writeFile(scriptPath, [
+        `await Bun.write(${JSON.stringify(argsLog)}, process.argv.slice(2).join('\\n') + '\\n');`,
+        `await Bun.write(${JSON.stringify(cwdLog)}, process.cwd() + '\\n');`,
+        `await Bun.write(${JSON.stringify(stdinLog)}, await Bun.stdin.text());`,
+        'console.log("Merged securely.");',
+        '',
+      ].join('\n'));
+      await writeFile(fakeCodex, `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`);
+    } else {
+      await writeFile(fakeCodex, [
+        '#!/bin/sh',
+        `printf '%s\\n' "$@" > '${argsLog}'`,
+        `pwd > '${cwdLog}'`,
+        `cat > '${stdinLog}'`,
+        'echo "Merged securely."',
+        '',
+      ].join('\n'));
+      await chmod(fakeCodex, 0o755);
+    }
 
     await runCli(
       ['rules', 'merge-draft', '--provider', 'claude,codex', '--runner', 'codex', '--json'],
