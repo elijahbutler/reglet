@@ -29,6 +29,7 @@ type Section = (typeof sections)[number];
 type Dialog =
   | { kind: 'destructive'; title: string; body: string; actionLabel: string; run: () => Promise<void> }
   | { kind: 'ai-consent'; providers: ManagerProviderId[]; runner: string; run: () => Promise<void> }
+  | { kind: 'onboarding'; detectedProviders: number; run: () => void }
   | { kind: 'unsaved'; run: () => void };
 
 interface RuleDocument {
@@ -131,6 +132,7 @@ export function App({ bridge }: AppProps) {
   const [selectedSkill, setSelectedSkill] = useState<SkillSummary | null>(null);
   const [mcpServers, setMcpServers] = useState<McpServerSummary[]>([]);
   const [onboardingPlan, setOnboardingPlan] = useState<OnboardingPlan | null>(null);
+  const promptedForOnboarding = useRef(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -139,11 +141,22 @@ export function App({ bridge }: AppProps) {
       const nextSnapshot = await bridge.snapshot();
       setSnapshot(nextSnapshot);
       setSelectedProviders((current) => {
-        const available = new Set(nextSnapshot.providerDiscovery.map((provider) => provider.provider));
+        const detected = nextSnapshot.providerDiscovery.filter((provider) => provider.detected).map((provider) => provider.provider);
+        const available = new Set(detected);
         const retained = current.filter((provider) => available.has(provider));
         if (retained.length > 0) return retained;
-        return nextSnapshot.enrollmentMatrix.filter((provider) => provider.enabled).map((provider) => provider.provider);
+        const enrolled = nextSnapshot.enrollmentMatrix.filter((provider) => provider.enabled).map((provider) => provider.provider);
+        return enrolled.length > 0 ? enrolled : detected;
       });
+      if (!promptedForOnboarding.current && needsOnboarding(nextSnapshot)) {
+        promptedForOnboarding.current = true;
+        const detectedProviders = nextSnapshot.providerDiscovery.filter((provider) => provider.detected).length;
+        setDialog({
+          kind: 'onboarding',
+          detectedProviders,
+          run: () => setSection('Providers'),
+        });
+      }
     } catch (refreshError) {
       setError(errorMessage(refreshError));
     } finally {
@@ -904,23 +917,33 @@ function ConfirmDialog({ dialog, onClose }: { dialog: Dialog; onClose: () => voi
   };
   const title = dialog.kind === 'ai-consent'
     ? 'Allow AI runner'
+    : dialog.kind === 'onboarding'
+      ? 'Set up Reglet'
     : dialog.kind === 'unsaved'
       ? 'Discard unsaved edits'
       : dialog.title;
   const body = dialog.kind === 'ai-consent'
     ? `${dialog.runner} will read local rule files for ${dialog.providers.join(', ')} and return an editable draft. Nothing is merged until you save and review.`
+    : dialog.kind === 'onboarding'
+      ? `Reglet found ${dialog.detectedProviders} local AI tools. Choose what to import and manage, then review every file before Reglet writes anything.`
     : dialog.kind === 'unsaved'
       ? 'Discard unsaved edits and continue?'
       : dialog.body;
-  const label = dialog.kind === 'ai-consent' ? 'Allow runner' : dialog.kind === 'unsaved' ? 'Discard edits' : dialog.actionLabel;
+  const label = dialog.kind === 'ai-consent'
+    ? 'Allow runner'
+    : dialog.kind === 'onboarding'
+      ? 'Begin onboarding'
+      : dialog.kind === 'unsaved'
+        ? 'Discard edits'
+        : dialog.actionLabel;
   return (
     <div className="modal-backdrop" role="presentation">
       <div ref={modalRef} className="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-body">
         <h2 id="confirm-title" className="text-lg font-semibold">{title}</h2>
         <p id="confirm-body" className="mt-2 text-sm text-reglet-muted">{body}</p>
         <div className="mt-5 flex justify-end gap-2">
-          <button ref={cancelRef} className="secondary-button" onClick={onClose} disabled={working}>Cancel</button>
-          <button className={dialog.kind === 'ai-consent' ? 'primary-button' : 'danger-button'} onClick={() => void confirm()} disabled={working}>{label}</button>
+          <button ref={cancelRef} className="secondary-button" onClick={onClose} disabled={working}>{dialog.kind === 'onboarding' ? 'Not now' : 'Cancel'}</button>
+          <button className={dialog.kind === 'ai-consent' || dialog.kind === 'onboarding' ? 'primary-button' : 'danger-button'} onClick={() => void confirm()} disabled={working}>{label}</button>
         </div>
       </div>
     </div>
@@ -1006,6 +1029,11 @@ function sectionIcon(section: Section) {
 function toggle<T>(items: T[], item: T, checked: boolean): T[] {
   if (checked) return items.includes(item) ? items : [...items, item];
   return items.filter((candidate) => candidate !== item);
+}
+
+function needsOnboarding(snapshot: ManagerSnapshotV2): boolean {
+  return snapshot.state.reasons.includes('noDestinationsEnrolled') &&
+    snapshot.enrollmentMatrix.every((provider) => contentIds.every((content) => !provider.cells[content].enrolled));
 }
 
 function updateDraft<Key extends keyof DraftState>(
