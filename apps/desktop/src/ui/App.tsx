@@ -23,13 +23,13 @@ import type {
   ManagerSnapshotV2,
 } from '@reglet/manager-protocol';
 import { jsonObject, type ManagerBridge, type UpdateCheckResult } from '../managerBridge.js';
+import { OnboardingWizard } from './OnboardingWizard.js';
 
 const sections = ['Providers', 'Rules', 'Skills', 'MCP', 'Activity & Drift', 'Recovery'] as const;
 type Section = (typeof sections)[number];
 type Dialog =
   | { kind: 'destructive'; title: string; body: string; actionLabel: string; run: () => Promise<void> }
   | { kind: 'ai-consent'; providers: ManagerProviderId[]; runner: string; run: () => Promise<void> }
-  | { kind: 'onboarding'; detectedProviders: number; run: () => void }
   | { kind: 'unsaved'; run: () => void };
 
 interface RuleDocument {
@@ -60,12 +60,6 @@ interface McpServerSummary {
   displayName: string;
   server: JsonObject;
   issues: string[];
-}
-
-interface OnboardingPlan {
-  reads: JsonObject[];
-  writes: JsonObject[];
-  comparisons: JsonObject[];
 }
 
 const contentIds: ManagerContentId[] = ['rules', 'skills', 'mcp'];
@@ -124,14 +118,14 @@ export function App({ bridge }: AppProps) {
   const [update, setUpdate] = useState<UpdateCheckResult | null>(null);
   const [review, setReview] = useState<{ digest: string; entries: JsonObject[] } | null>(null);
   const [selectedProviders, setSelectedProviders] = useState<ManagerProviderId[]>([]);
-  const [selectedContents, setSelectedContents] = useState<ManagerContentId[]>(['rules']);
+  const [selectedContents, setSelectedContents] = useState<ManagerContentId[]>(['rules', 'skills', 'mcp']);
   const [ruleDocuments, setRuleDocuments] = useState<RuleDocument[]>([]);
   const [mergeRunners, setMergeRunners] = useState<MergeRunner[]>([]);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [skillFiles, setSkillFiles] = useState<SkillFile[]>([]);
   const [selectedSkill, setSelectedSkill] = useState<SkillSummary | null>(null);
   const [mcpServers, setMcpServers] = useState<McpServerSummary[]>([]);
-  const [onboardingPlan, setOnboardingPlan] = useState<OnboardingPlan | null>(null);
+  const [showsOnboarding, setShowsOnboarding] = useState(false);
   const promptedForOnboarding = useRef(false);
 
   const refresh = useCallback(async () => {
@@ -150,12 +144,7 @@ export function App({ bridge }: AppProps) {
       });
       if (!promptedForOnboarding.current && needsOnboarding(nextSnapshot)) {
         promptedForOnboarding.current = true;
-        const detectedProviders = nextSnapshot.providerDiscovery.filter((provider) => provider.detected).length;
-        setDialog({
-          kind: 'onboarding',
-          detectedProviders,
-          run: () => setSection('Providers'),
-        });
+        setShowsOnboarding(true);
       }
     } catch (refreshError) {
       setError(errorMessage(refreshError));
@@ -274,25 +263,6 @@ export function App({ bridge }: AppProps) {
       actionLabel: 'Apply reviewed',
       run: applyReview,
     });
-  };
-
-  const loadOnboardingPlan = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const result = jsonObject(await bridge.rpc('plan', { providers: activeProviders, contents: selectedContents }));
-      const reconciliation = objectFromUnknown(result.reconciliation);
-      setOnboardingPlan({
-        reads: objectArray(result.reads),
-        writes: objectArray(result.writes),
-        comparisons: objectArray(reconciliation?.rules),
-      });
-      setNotice('Onboarding preview is ready. Review every read and write before staging.');
-    } catch (planError) {
-      setError(errorMessage(planError));
-    } finally {
-      setBusy(false);
-    }
   };
 
   const loadRules = async () => {
@@ -519,13 +489,9 @@ export function App({ bridge }: AppProps) {
               {section === 'Providers' && (
                 <ProvidersView
                   snapshot={snapshot}
-                  onboardingPlan={onboardingPlan}
                   selectedProviders={selectedProviders}
-                  selectedContents={selectedContents}
                   onSelectedProviders={setSelectedProviders}
-                  onSelectedContents={setSelectedContents}
-                  onReview={() => void loadOnboardingPlan()}
-                  onStage={() => setDialog({ kind: 'destructive', title: 'Stage onboarding', body: `Import the reviewed configuration from ${activeProviders.length} providers into Reglet without writing provider outputs?`, actionLabel: 'Stage onboarding', run: () => mutate('onboard', { providers: activeProviders, contents: selectedContents, stageOnly: true }, 'Onboarding staged.') })}
+                  onSetup={() => setShowsOnboarding(true)}
                   onEnrollment={(operation, input, success) => {
                     if (operation === 'unenroll') {
                       setDialog({ kind: 'destructive', title: 'Stop managing content', body: 'Detach Reglet ownership while preserving the provider content currently on disk?', actionLabel: 'Stop managing', run: () => mutate(operation, input, success) });
@@ -615,6 +581,14 @@ export function App({ bridge }: AppProps) {
         </section>
       </div>
       {dialog !== null && <ConfirmDialog dialog={dialog} onClose={() => setDialog(null)} />}
+      {showsOnboarding && snapshot !== null && (
+        <OnboardingWizard
+          bridge={bridge}
+          snapshot={snapshot}
+          onClose={() => setShowsOnboarding(false)}
+          onStateChanged={refresh}
+        />
+      )}
     </main>
   );
 }
@@ -637,19 +611,15 @@ function writeAutoUpdatePreference(enabled: boolean): void {
 
 function ProvidersView(props: {
   snapshot: ManagerSnapshotV2;
-  onboardingPlan: OnboardingPlan | null;
   selectedProviders: ManagerProviderId[];
-  selectedContents: ManagerContentId[];
   onSelectedProviders: (providers: ManagerProviderId[]) => void;
-  onSelectedContents: (contents: ManagerContentId[]) => void;
-  onReview: () => void;
-  onStage: () => void;
+  onSetup: () => void;
   onEnrollment: (operation: 'enroll' | 'unenroll', input: JsonObject, success: string) => void;
   busy: boolean;
 }) {
   return (
-    <Panel title="Providers" action={<div className="flex gap-2"><button className="secondary-button" disabled={props.busy} onClick={props.onReview}>Review onboarding</button><button className="primary-button" disabled={props.busy || props.onboardingPlan === null} onClick={props.onStage}>Stage reviewed</button></div>}>
-      <SelectionToolbar selectedContents={props.selectedContents} onSelectedContents={props.onSelectedContents} />
+    <Panel title="Providers" action={<button className="primary-button" disabled={props.busy} onClick={props.onSetup}>Set up providers</button>}>
+      <p className="text-sm text-reglet-muted">Choose providers for reviews and manage each content enrollment below.</p>
       <div className="data-grid mt-4">
         {props.snapshot.enrollmentMatrix.map((provider) => (
           <article key={provider.provider} className="row-card">
@@ -684,17 +654,6 @@ function ProvidersView(props: {
           </article>
         ))}
       </div>
-      {props.onboardingPlan !== null && (
-        <div className="mt-4 rounded-md border border-reglet-line bg-reglet-panel2 p-4" aria-label="Onboarding file preview">
-          <p className="font-medium">Exact onboarding file plan</p>
-          <p className="mt-1 text-sm text-reglet-muted">{props.onboardingPlan.reads.length} reads · {props.onboardingPlan.writes.length} writes · {props.onboardingPlan.comparisons.length} rule comparisons</p>
-          <FilePlan title="Reads" entries={props.onboardingPlan.reads} />
-          <FilePlan title="Writes" entries={props.onboardingPlan.writes} />
-          {props.onboardingPlan.comparisons.map((comparison, index) => (
-            <pre className="review-entry mt-2 whitespace-pre-wrap" key={index}>{jsonPreview(comparison)}</pre>
-          ))}
-        </div>
-      )}
     </Panel>
   );
 }
@@ -917,23 +876,17 @@ function ConfirmDialog({ dialog, onClose }: { dialog: Dialog; onClose: () => voi
   };
   const title = dialog.kind === 'ai-consent'
     ? 'Allow AI runner'
-    : dialog.kind === 'onboarding'
-      ? 'Set up Reglet'
     : dialog.kind === 'unsaved'
       ? 'Discard unsaved edits'
       : dialog.title;
   const body = dialog.kind === 'ai-consent'
     ? `${dialog.runner} will read local rule files for ${dialog.providers.join(', ')} and return an editable draft. Nothing is merged until you save and review.`
-    : dialog.kind === 'onboarding'
-      ? `Reglet found ${dialog.detectedProviders} local AI tools. Choose what to import and manage, then review every file before Reglet writes anything.`
     : dialog.kind === 'unsaved'
       ? 'Discard unsaved edits and continue?'
       : dialog.body;
   const label = dialog.kind === 'ai-consent'
     ? 'Allow runner'
-    : dialog.kind === 'onboarding'
-      ? 'Begin onboarding'
-      : dialog.kind === 'unsaved'
+    : dialog.kind === 'unsaved'
         ? 'Discard edits'
         : dialog.actionLabel;
   return (
@@ -942,8 +895,8 @@ function ConfirmDialog({ dialog, onClose }: { dialog: Dialog; onClose: () => voi
         <h2 id="confirm-title" className="text-lg font-semibold">{title}</h2>
         <p id="confirm-body" className="mt-2 text-sm text-reglet-muted">{body}</p>
         <div className="mt-5 flex justify-end gap-2">
-          <button ref={cancelRef} className="secondary-button" onClick={onClose} disabled={working}>{dialog.kind === 'onboarding' ? 'Not now' : 'Cancel'}</button>
-          <button className={dialog.kind === 'ai-consent' || dialog.kind === 'onboarding' ? 'primary-button' : 'danger-button'} onClick={() => void confirm()} disabled={working}>{label}</button>
+          <button ref={cancelRef} className="secondary-button" onClick={onClose} disabled={working}>Cancel</button>
+          <button className={dialog.kind === 'ai-consent' ? 'primary-button' : 'danger-button'} onClick={() => void confirm()} disabled={working}>{label}</button>
         </div>
       </div>
     </div>
@@ -972,11 +925,6 @@ function SelectionToolbar({ selectedContents, onSelectedContents }: { selectedCo
       ))}
     </div>
   );
-}
-
-function FilePlan({ title, entries }: { title: string; entries: JsonObject[] }) {
-  if (entries.length === 0) return null;
-  return <div className="mt-3"><p className="text-sm font-medium">{title}</p><ul className="mt-1 grid gap-1 text-xs text-reglet-muted">{entries.map((entry, index) => <li className="break-all" key={index}>{String(entry.provider)} · {String(entry.content)} · {String(entry.path)}</li>)}</ul></div>;
 }
 
 function Panel({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {

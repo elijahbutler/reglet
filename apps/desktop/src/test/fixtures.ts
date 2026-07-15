@@ -41,10 +41,11 @@ function caps(state: 'supported' | 'needs-attention') {
 }
 
 function cells(provider: 'claude' | 'codex') {
+  const rulesPath = provider === 'claude' ? '/tmp/.claude/CLAUDE.md' : '/tmp/.codex/AGENTS.md';
   return {
-    rules: { provider, content: 'rules', enrolled: true, capability: { state: 'supported' }, destinationPath: '/tmp/rules' },
-    skills: { provider, content: 'skills', enrolled: false, capability: { state: 'supported' }, destinationPath: '/tmp/skills' },
-    mcp: { provider, content: 'mcp', enrolled: false, capability: { state: 'supported' }, destinationPath: '/tmp/mcp' },
+    rules: { provider, content: 'rules', enrolled: true, capability: { state: 'supported' }, destinationPath: rulesPath },
+    skills: { provider, content: 'skills', enrolled: false, capability: { state: 'supported' }, destinationPath: `/tmp/.${provider}/skills` },
+    mcp: { provider, content: 'mcp', enrolled: false, capability: { state: 'supported' }, destinationPath: `/tmp/.${provider}/config.json` },
   } as const;
 }
 

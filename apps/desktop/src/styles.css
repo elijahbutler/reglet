@@ -134,4 +134,247 @@
   .modal {
     @apply w-full max-w-lg rounded-md border border-reglet-line bg-reglet-panel p-5 shadow-2xl;
   }
+
+  .onboarding-backdrop {
+    @apply fixed inset-0 z-40 grid place-items-center bg-black/75 p-4;
+  }
+
+  .onboarding-shell {
+    @apply flex h-[min(760px,calc(100vh-2rem))] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-reglet-line bg-reglet-bg shadow-2xl;
+  }
+
+  .onboarding-header {
+    @apply grid grid-cols-[minmax(180px,1fr)_minmax(480px,2fr)_auto] items-center gap-5 border-b border-reglet-line bg-reglet-panel px-5 py-4;
+  }
+
+  .onboarding-content {
+    @apply min-h-0 flex-1 overflow-auto;
+  }
+
+  .onboarding-rail {
+    @apply grid grid-cols-7 gap-1;
+  }
+
+  .onboarding-rail li {
+    @apply flex min-w-0 items-center justify-center gap-1 rounded-full bg-reglet-panel2 px-2 py-1.5 text-[11px] font-medium text-reglet-muted;
+  }
+
+  .onboarding-rail .onboarding-step-active {
+    @apply bg-reglet-text text-reglet-bg;
+  }
+
+  .onboarding-rail .onboarding-step-complete {
+    @apply text-reglet-text;
+  }
+
+  .onboarding-centered {
+    @apply mx-auto flex min-h-full max-w-4xl flex-col items-center justify-center px-8 py-12 text-center;
+  }
+
+  .onboarding-hero-icon {
+    @apply mb-5 grid h-14 w-14 place-items-center rounded-2xl bg-reglet-accent text-black;
+  }
+
+  .onboarding-eyebrow {
+    @apply text-xs font-semibold tracking-[0.18em] text-reglet-accent;
+  }
+
+  .onboarding-title {
+    @apply mt-3 text-3xl font-semibold tracking-tight;
+  }
+
+  .onboarding-lede {
+    @apply mt-3 max-w-2xl text-base leading-7 text-reglet-muted;
+  }
+
+  .onboarding-safety-grid {
+    @apply mt-8 grid w-full grid-cols-3 gap-3 text-left;
+  }
+
+  .onboarding-safety-grid > div {
+    @apply grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-lg border border-reglet-line bg-reglet-panel p-4;
+  }
+
+  .onboarding-safety-grid svg {
+    @apply row-span-2 mt-0.5 text-reglet-green;
+  }
+
+  .onboarding-safety-grid strong {
+    @apply text-sm;
+  }
+
+  .onboarding-safety-grid span {
+    @apply text-xs leading-5 text-reglet-muted;
+  }
+
+  .onboarding-step-layout {
+    @apply flex min-h-full flex-col;
+  }
+
+  .onboarding-step-body {
+    @apply mx-auto w-full max-w-4xl flex-1 px-8 py-8;
+  }
+
+  .onboarding-footer {
+    @apply sticky bottom-0 mt-auto border-t border-reglet-line bg-reglet-panel/95 px-8 py-4 backdrop-blur;
+  }
+
+  .onboarding-footer > * {
+    @apply mx-auto max-w-4xl;
+  }
+
+  .onboarding-two-column {
+    @apply grid grid-cols-2 gap-8;
+  }
+
+  .onboarding-section-title {
+    @apply mb-3 text-xs font-semibold uppercase tracking-wider text-reglet-muted;
+  }
+
+  .onboarding-choice-list {
+    @apply grid gap-2;
+  }
+
+  .onboarding-choice {
+    @apply flex cursor-pointer items-center gap-3 rounded-lg border border-reglet-line bg-reglet-panel px-4 py-3 transition hover:border-reglet-muted;
+  }
+
+  .onboarding-choice:has(input:checked) {
+    @apply border-reglet-accent/70 bg-reglet-accent/5;
+  }
+
+  .onboarding-choice input {
+    @apply accent-reglet-accent;
+  }
+
+  .onboarding-choice > span {
+    @apply grid gap-0.5;
+  }
+
+  .onboarding-choice strong {
+    @apply text-sm font-medium;
+  }
+
+  .onboarding-choice small {
+    @apply text-xs text-reglet-muted;
+  }
+
+  .onboarding-editor-card {
+    @apply rounded-lg border border-reglet-line bg-reglet-panel p-4;
+  }
+
+  .onboarding-editor {
+    @apply my-4 min-h-72 w-full resize-y rounded-md border border-reglet-line bg-reglet-bg p-4 font-mono text-sm leading-6 text-reglet-text;
+  }
+
+  .unified-source-card {
+    @apply rounded-lg border border-reglet-accent/40 bg-reglet-panel p-4;
+  }
+
+  .unified-badge {
+    @apply rounded-full bg-reglet-accent/15 px-3 py-1 text-xs font-medium text-reglet-accent;
+  }
+
+  .unified-source-item {
+    @apply flex items-center gap-3 rounded-md bg-reglet-panel2 px-3 py-3;
+  }
+
+  .unified-source-item > span:first-child {
+    @apply text-reglet-accent;
+  }
+
+  .unified-source-item > span:last-child,
+  .sync-row > span:nth-child(2) {
+    @apply grid gap-0.5;
+  }
+
+  .unified-source-item strong,
+  .sync-row strong {
+    @apply text-sm font-medium;
+  }
+
+  .unified-source-item small,
+  .sync-row small {
+    @apply text-xs text-reglet-muted;
+  }
+
+  .onboarding-disclosures {
+    @apply overflow-hidden rounded-lg border border-reglet-line bg-reglet-panel;
+  }
+
+  .provider-disclosure + .provider-disclosure {
+    @apply border-t border-reglet-line;
+  }
+
+  .provider-disclosure summary {
+    @apply cursor-pointer px-4 py-3 marker:text-reglet-muted;
+  }
+
+  .provider-disclosure summary > span {
+    @apply ml-2 inline-grid gap-0.5 align-middle;
+  }
+
+  .provider-disclosure summary strong {
+    @apply text-sm font-medium;
+  }
+
+  .provider-disclosure summary small {
+    @apply text-xs text-reglet-muted;
+  }
+
+  .provider-disclosure-body {
+    @apply border-t border-reglet-line bg-reglet-bg/40 px-4 py-1;
+  }
+
+  .sync-row {
+    @apply flex items-center gap-3 py-3;
+  }
+
+  .sync-row + .sync-row {
+    @apply border-t border-reglet-line/70;
+  }
+
+  .sync-row > svg,
+  .sync-row > span:first-child {
+    @apply text-reglet-muted;
+  }
+
+  .sync-row > span:nth-child(2) {
+    @apply min-w-0 flex-1;
+  }
+
+  .change-badge {
+    @apply ml-auto rounded-full px-2.5 py-1 text-[11px] font-semibold;
+  }
+
+  .change-new {
+    @apply bg-blue-400/15 text-blue-300;
+  }
+
+  .change-updated {
+    @apply bg-reglet-accent/15 text-reglet-accent;
+  }
+
+  .change-removed {
+    @apply bg-reglet-red/15 text-reglet-red;
+  }
+
+  @media (max-width: 900px) {
+    .onboarding-header {
+      @apply grid-cols-[1fr_auto];
+    }
+
+    .onboarding-rail {
+      @apply order-3 col-span-2;
+    }
+
+    .onboarding-rail li span {
+      @apply sr-only;
+    }
+
+    .onboarding-two-column,
+    .onboarding-safety-grid {
+      @apply grid-cols-1;
+    }
+  }
 }
