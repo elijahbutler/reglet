@@ -39,10 +39,10 @@ List installed local AI tools without running them, then explicitly choose one t
 
 ```bash
 reglet rules merge-runners --json
-reglet rules merge-draft --provider claude,codex --runner codex --json
+reglet rules merge-draft --provider claude,codex --runner codex --steer "Keep team conventions; exclude personal notes." --json
 ```
 
-The merge command sends the selected rule-file contents to the chosen external CLI under that tool provider's privacy terms. It prints a proposal but does not write master or provider files. The macOS onboarding flow shows the executable and exact source paths and requires consent for every invocation.
+The merge command sends the selected rule-file contents and optional steering prompt to the chosen external CLI under that tool provider's privacy terms. It prints a proposal but does not write master or provider files. The desktop onboarding flow shows the selected tool and provider filenames and requires consent for every invocation.
 
 ## MCP environment references
 

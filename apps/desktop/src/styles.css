@@ -321,8 +321,91 @@
     box-shadow: inset 0 1px rgb(255 255 255 / 0.06), inset 0 -1px rgb(0 0 0 / 0.55);
   }
 
+  .provider-source-list {
+    @apply overflow-hidden rounded-xl border border-reglet-line bg-reglet-bg/50;
+  }
+
+  .provider-source-disclosure + .provider-source-disclosure {
+    @apply border-t border-reglet-line;
+  }
+
+  .provider-source-disclosure summary {
+    @apply flex min-h-14 cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 transition-colors hover:bg-reglet-panel2;
+  }
+
+  .provider-source-disclosure summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .provider-source-disclosure summary > span:first-child {
+    @apply grid gap-0.5;
+  }
+
+  .provider-source-disclosure summary strong {
+    @apply text-sm font-medium;
+  }
+
+  .provider-source-disclosure summary small,
+  .provider-source-open-label,
+  .provider-source-close-label {
+    @apply text-xs text-reglet-muted;
+  }
+
+  .provider-source-close-label {
+    @apply hidden;
+  }
+
+  .provider-source-disclosure[open] .provider-source-open-label {
+    @apply hidden;
+  }
+
+  .provider-source-disclosure[open] .provider-source-close-label {
+    @apply block text-reglet-info;
+  }
+
+  .provider-source-body {
+    @apply border-t border-reglet-line bg-reglet-bg p-3;
+  }
+
+  .provider-source-loading,
+  .provider-source-empty {
+    @apply mt-4 rounded-lg border border-dashed border-reglet-line px-4 py-5 text-center text-sm text-reglet-muted;
+  }
+
+  .provider-source-loading {
+    @apply m-0;
+  }
+
+  .provider-source-preview {
+    @apply min-h-40 w-full resize-y rounded-lg border border-reglet-line bg-reglet-bg p-3 font-mono text-[13px] leading-5 text-reglet-text;
+  }
+
+  .provider-source-actions {
+    @apply mt-3 flex flex-wrap items-center gap-2;
+  }
+
+  .onboarding-editor-heading {
+    @apply mt-6 border-t border-reglet-line pt-6;
+  }
+
   .onboarding-editor {
     @apply my-4 min-h-72 w-full resize-y rounded-md border border-reglet-line bg-reglet-bg p-4 font-mono text-sm leading-6 text-reglet-text;
+  }
+
+  .onboarding-ai-draft {
+    @apply mb-4 border-t border-reglet-line pt-5;
+  }
+
+  .optional-label {
+    @apply ml-1.5 text-xs font-normal text-reglet-muted;
+  }
+
+  .draft-steering-input {
+    @apply mt-3 min-h-24 w-full resize-y rounded-lg border border-reglet-line bg-reglet-bg px-3 py-2 text-sm leading-5 text-reglet-text placeholder:text-reglet-muted;
+  }
+
+  .ai-draft-actions {
+    @apply mt-3 flex flex-wrap items-center justify-between gap-3;
   }
 
   .unified-source-card {
@@ -443,6 +526,18 @@
     .onboarding-safety-ledger span {
       @apply col-start-2;
     }
+
+    .ai-draft-actions {
+      @apply items-start;
+    }
+  }
+
+  @media (max-width: 620px) {
+    .provider-source-actions > button,
+    .ai-draft-actions > div,
+    .ai-draft-actions > div > * {
+      @apply w-full;
+    }
   }
 }
 
@@ -467,6 +562,8 @@
   .onboarding-shell,
   .onboarding-choice,
   .onboarding-disclosures,
+  .provider-source-list,
+  .provider-source-preview,
   .unified-source-card {
     border-color: #9c9c9d;
   }

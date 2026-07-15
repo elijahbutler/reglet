@@ -20,6 +20,7 @@ export const managerProtocolOperations = [
   'rules.list',
   'rules.read',
   'rules.write',
+  'rules.source-read',
   'rules.merge-runners',
   'rules.merge-draft',
   'skills.list',
@@ -98,6 +99,11 @@ export type WriteTextInput = PathInput & {
 export type RulesMergeDraftInput = JsonObject & {
   providers: ManagerProviderId[];
   runner?: ManagerMergeRunnerId;
+  steeringPrompt?: string;
+};
+
+export type ProviderInput = JsonObject & {
+  provider: ManagerProviderId;
 };
 
 export type ScopedInput = JsonObject & {
@@ -176,6 +182,7 @@ export interface ManagerRpcInputs {
   'rules.list': JsonObject;
   'rules.read': PathInput;
   'rules.write': WriteTextInput;
+  'rules.source-read': ProviderInput;
   'rules.merge-runners': JsonObject;
   'rules.merge-draft': RulesMergeDraftInput;
   'skills.list': JsonObject;
@@ -306,8 +313,13 @@ export const operationInputSchemas: Record<ManagerProtocolOperation, JsonObject>
   'rules.list': objectSchema({}),
   'rules.read': objectSchema({ path: { type: 'string' } }, ['path']),
   'rules.write': objectSchema({ path: { type: 'string' }, content: { type: 'string' } }, ['path', 'content']),
+  'rules.source-read': objectSchema({ provider: { enum: providerIds } }, ['provider']),
   'rules.merge-runners': objectSchema({}),
-  'rules.merge-draft': objectSchema({ providers: { type: 'array', items: { enum: providerIds } }, runner: { enum: ['codex', 'claude', 'gemini'] } }, ['providers']),
+  'rules.merge-draft': objectSchema({
+    providers: { type: 'array', items: { enum: providerIds } },
+    runner: { enum: ['codex', 'claude', 'gemini'] },
+    steeringPrompt: { type: 'string' },
+  }, ['providers']),
   'skills.list': objectSchema({}),
   'skills.tree': objectSchema({ ...scopedProperties, name: { type: 'string' } }, ['name']),
   'skills.read': objectSchema({ ...scopedProperties, name: { type: 'string' }, path: { type: 'string' } }, ['name', 'path']),
@@ -494,9 +506,12 @@ function isOperationInput(operation: ManagerProtocolOperation, input: JsonObject
       return exact(input, ['path']) && typeof input.path === 'string';
     case 'rules.write':
       return exact(input, ['path', 'content']) && typeof input.path === 'string' && typeof input.content === 'string';
+    case 'rules.source-read':
+      return exact(input, ['provider']) && isProvider(input.provider);
     case 'rules.merge-draft':
-      return exact(input, ['providers', 'runner']) && isProviderArray(input.providers) &&
-        (input.runner === undefined || input.runner === 'codex' || input.runner === 'claude' || input.runner === 'gemini');
+      return exact(input, ['providers', 'runner', 'steeringPrompt']) && isProviderArray(input.providers) &&
+        (input.runner === undefined || input.runner === 'codex' || input.runner === 'claude' || input.runner === 'gemini') &&
+        optionalString(input.steeringPrompt);
     case 'skills.tree':
     case 'skills.delete':
       return isSkillBase(input, []);
