@@ -65,6 +65,7 @@ describe('Reglet desktop app', () => {
       snapshot: vi.fn().mockRejectedValue(new Error('invalid RPC envelope')),
       checkForUpdates: vi.fn(),
       openRelease: vi.fn(),
+      openFileLocation: vi.fn(),
     };
     render(<App bridge={failing} />);
     expect(await screen.findByText('invalid RPC envelope')).toBeInTheDocument();
@@ -190,17 +191,29 @@ describe('Reglet desktop app', () => {
   });
 
   test('browses rule documents and only offers discovered AI runners', async () => {
+    const openFileLocation = vi.fn().mockResolvedValue(undefined);
     const rpc = vi.fn<ManagerBridge['rpc']>().mockImplementation(async (operation): Promise<JsonValue> => {
-      if (operation === 'rules.list') return { version: 1, documents: [{ path: 'team.md', scope: { kind: 'shared' } }] };
+      if (operation === 'rules.list') return {
+        version: 1,
+        documents: [
+          { path: 'team.md', scope: { kind: 'shared' } },
+          { path: 'claude/00-imported.md', scope: { kind: 'provider', provider: 'claude' } },
+        ],
+      };
       if (operation === 'rules.merge-runners') return { version: 1, runners: [{ id: 'codex', displayName: 'Codex CLI' }] };
       if (operation === 'rules.read') return { version: 1, path: 'team.md', content: '# Team rules' };
       return { version: 1 };
     });
-    render(<App bridge={bridge(snapshotFixture(), rpc)} />);
+    const testBridge = bridge(snapshotFixture(), rpc);
+    testBridge.openFileLocation = openFileLocation;
+    render(<App bridge={testBridge} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Rules' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Load documents' }));
-    fireEvent.click(await screen.findByRole('button', { name: /shared · team.md/ }));
     await waitFor(() => expect(screen.getByLabelText('Rule content')).toHaveValue('# Team rules'));
+    expect(screen.getByLabelText('Agent markdown')).toHaveValue('shared:shared:team.md');
+    expect(screen.getByRole('button', { name: /Edit Claude rules/ })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Rule path')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Open file location for Claude rules/ }));
+    expect(openFileLocation).toHaveBeenCalledWith('/tmp/reglet/rules/claude/00-imported.md');
     fireEvent.click(screen.getByRole('button', { name: 'Merge with Codex CLI' }));
     expect(screen.getByRole('dialog')).toHaveTextContent('will read local rule files');
     expect(screen.queryByRole('button', { name: /Gemini/ })).not.toBeInTheDocument();
@@ -281,6 +294,7 @@ function bridge(snapshot: ManagerSnapshotV2, rpc: ManagerBridge['rpc'] = default
     snapshot: vi.fn().mockResolvedValue(snapshot),
     checkForUpdates: vi.fn().mockResolvedValue({ currentVersion: '0.1.0', latestVersion: '0.1.0', available: false, releaseUrl: 'https://github.com/elijahbutler/reglet/releases/latest' }),
     openRelease: vi.fn().mockResolvedValue(undefined),
+    openFileLocation: vi.fn().mockResolvedValue(undefined),
   };
 }
 

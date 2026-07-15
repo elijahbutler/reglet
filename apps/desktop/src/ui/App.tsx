@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   Download,
   FileText,
+  FolderOpen,
   GitCompare,
   History,
   Plug,
@@ -33,10 +34,9 @@ type Dialog =
   | { kind: 'ai-consent'; providers: ManagerProviderId[]; runner: string; run: () => Promise<void> }
   | { kind: 'unsaved'; run: () => void };
 
-interface RuleDocument {
-  path: string;
-  scope: { kind: 'shared' | 'provider'; provider?: ManagerProviderId };
-}
+type RuleDocument =
+  | { path: string; scope: { kind: 'shared' } }
+  | { path: string; scope: { kind: 'provider'; provider: ManagerProviderId } };
 
 interface MergeRunner {
   id: ManagerMergeRunnerId;
@@ -121,6 +121,7 @@ export function App({ bridge }: AppProps) {
   const [selectedProviders, setSelectedProviders] = useState<ManagerProviderId[]>([]);
   const [selectedContents, setSelectedContents] = useState<ManagerContentId[]>(['rules', 'skills', 'mcp']);
   const [ruleDocuments, setRuleDocuments] = useState<RuleDocument[]>([]);
+  const [selectedRuleDocument, setSelectedRuleDocument] = useState<RuleDocument | null>(null);
   const [mergeRunners, setMergeRunners] = useState<MergeRunner[]>([]);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [skillFiles, setSkillFiles] = useState<SkillFile[]>([]);
@@ -176,6 +177,12 @@ export function App({ bridge }: AppProps) {
   useEffect(() => {
     if (autoUpdates) void checkForUpdates(true);
   }, [autoUpdates, checkForUpdates]);
+
+  useEffect(() => {
+    if (section === 'Rules' && snapshot !== null && ruleDocuments.length === 0 && !busy) {
+      void loadRules();
+    }
+  }, [section, snapshot]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -278,6 +285,17 @@ export function App({ bridge }: AppProps) {
       const runners = objectArray(jsonObject(runnersResult).runners).map(mergeRunnerFromJson).filter(isDefined);
       setRuleDocuments(documents);
       setMergeRunners(runners);
+      const nextDocument = preferredRuleDocument(documents, selectedRuleDocument?.path ?? drafts.rulesPath);
+      setSelectedRuleDocument(nextDocument);
+      if (nextDocument !== null) {
+        const result = jsonObject(await bridge.rpc('rules.read', { path: nextDocument.path }));
+        setDrafts((current) => ({
+          ...current,
+          rulesPath: nextDocument.path,
+          rulesText: String(result.content ?? ''),
+        }));
+        setDirty(false);
+      }
       setNotice(`Loaded ${documents.length} rule documents.`);
     } catch (listError) {
       setError(errorMessage(listError));
@@ -287,8 +305,10 @@ export function App({ bridge }: AppProps) {
   };
 
   const selectRule = async (document: RuleDocument) => {
+    setSelectedRuleDocument(document);
     setDrafts((current) => ({ ...current, rulesPath: document.path }));
     setBusy(true);
+    setError(null);
     try {
       const result = jsonObject(await bridge.rpc('rules.read', { path: document.path }));
       setDrafts((current) => ({ ...current, rulesText: String(result.content ?? '') }));
@@ -297,6 +317,15 @@ export function App({ bridge }: AppProps) {
       setError(errorMessage(readError));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const openRuleLocation = async (path: string) => {
+    setError(null);
+    try {
+      await bridge.openFileLocation(path);
+    } catch (openError) {
+      setError(errorMessage(openError));
     }
   };
 
@@ -406,14 +435,14 @@ export function App({ bridge }: AppProps) {
     }
   };
 
-  const readRule = async () => {
+  const refreshSelectedRule = async () => {
     setBusy(true);
     setError(null);
     try {
       const result = jsonObject(await bridge.rpc('rules.read', { path: drafts.rulesPath }));
       setDrafts((current) => ({ ...current, rulesText: String(result.content ?? '') }));
       setDirty(false);
-      setNotice('Rule loaded.');
+      setNotice('Rule refreshed.');
     } catch (readError) {
       setError(errorMessage(readError));
     } finally {
@@ -508,15 +537,18 @@ export function App({ bridge }: AppProps) {
               )}
               {section === 'Rules' && (
                 <RulesView
+                  regletHome={snapshot.regletHome}
                   drafts={drafts}
                   setDrafts={setDrafts}
                   setDirty={setDirty}
                   documents={ruleDocuments}
+                  selectedDocument={selectedRuleDocument}
                   runners={mergeRunners}
                   onLoad={() => void loadRules()}
                   onSelect={(document) => void selectRule(document)}
-                  onRead={() => void readRule()}
+                  onRefresh={() => void refreshSelectedRule()}
                   onSave={() => void mutate('rules.write', { path: drafts.rulesPath, content: drafts.rulesText }, 'Rule saved.')}
+                  onOpenLocation={(path) => void openRuleLocation(path)}
                   onMerge={mergeRulesWithAi}
                   busy={busy}
                 />
@@ -663,27 +695,71 @@ function ProvidersView(props: {
 }
 
 function RulesView(props: {
+  regletHome: string;
   drafts: DraftState;
   setDrafts: (drafts: DraftState | ((current: DraftState) => DraftState)) => void;
   setDirty: (dirty: boolean) => void;
   documents: RuleDocument[];
+  selectedDocument: RuleDocument | null;
   runners: MergeRunner[];
   onLoad: () => void;
   onSelect: (document: RuleDocument) => void;
-  onRead: () => void;
+  onRefresh: () => void;
   onSave: () => void;
+  onOpenLocation: (path: string) => void;
   onMerge: (runner: ManagerMergeRunnerId) => void;
   busy: boolean;
 }) {
+  const selectedKey = props.selectedDocument === null ? '' : ruleDocumentKey(props.selectedDocument);
+  const selectedLabel = props.selectedDocument === null
+    ? 'No rule document selected'
+    : ruleDocumentLabel(props.selectedDocument);
   return (
-    <Panel title="Rules" action={<div className="flex gap-2"><button className="secondary-button" onClick={props.onLoad} disabled={props.busy}>Load documents</button><button className="secondary-button" onClick={props.onRead} disabled={props.busy}>Read path</button><button className="primary-button" onClick={props.onSave} disabled={props.busy}>Save rule</button></div>}>
-      {props.documents.length > 0 && <div className="mb-4 flex flex-wrap gap-2" aria-label="Rule documents">{props.documents.map((document) => <button className="secondary-button" key={`${document.scope.kind}-${document.scope.provider ?? 'shared'}-${document.path}`} onClick={() => props.onSelect(document)}>{document.scope.provider ?? 'shared'} · {document.path}</button>)}</div>}
+    <Panel title="Rules" action={<div className="flex flex-wrap gap-2"><button className="secondary-button" onClick={props.onLoad} disabled={props.busy}>Refresh</button><button className="primary-button" onClick={props.onSave} disabled={props.busy || props.selectedDocument === null}>Save</button>{props.selectedDocument !== null && <button className="secondary-button" onClick={() => props.onOpenLocation(resolveRulePath(props.regletHome, props.selectedDocument?.path ?? ''))} disabled={props.busy}><FolderOpen size={16} aria-hidden="true" /> Open file location</button>}</div>}>
+      <div className="mb-4 grid gap-3">
+        <label className="field-label">
+          Agent markdown
+          <select
+            className="text-input"
+            value={selectedKey}
+            disabled={props.documents.length === 0 || props.busy}
+            onChange={(event) => {
+              const document = props.documents.find((candidate) => ruleDocumentKey(candidate) === event.currentTarget.value);
+              if (document !== undefined) props.onSelect(document);
+            }}
+          >
+            {props.documents.length === 0 && <option value="">Refresh to load markdown files</option>}
+            {props.documents.map((document) => (
+              <option key={ruleDocumentKey(document)} value={ruleDocumentKey(document)}>
+                {ruleDocumentLabel(document)}
+              </option>
+            ))}
+          </select>
+        </label>
+        {props.documents.length > 0 && (
+          <div className="grid grid-cols-2 gap-2" aria-label="Agent markdown files">
+            {props.documents.map((document) => (
+              <div key={ruleDocumentKey(document)} className="row-card flex items-center justify-between gap-3">
+                <button className="min-w-0 flex-1 text-left" onClick={() => props.onSelect(document)} disabled={props.busy} aria-label={`Edit ${ruleDocumentLabel(document)}`}>
+                  <strong className="block truncate">{ruleDocumentTitle(document)}</strong>
+                  <span className="block truncate text-xs text-reglet-muted">{document.path}</span>
+                </button>
+                <button className="icon-button" onClick={() => props.onOpenLocation(resolveRulePath(props.regletHome, document.path))} disabled={props.busy} aria-label={`Open file location for ${ruleDocumentLabel(document)}`}>
+                  <FolderOpen size={16} aria-hidden="true" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
       <div className="grid gap-3">
-        <label className="field-label">Rule path<input className="text-input" value={props.drafts.rulesPath} onChange={(event) => { updateDraft(props.setDrafts, 'rulesPath', event.currentTarget.value); props.setDirty(true); }} /></label>
-        <label className="field-label">Rule content<textarea className="editor" value={props.drafts.rulesText} onChange={(event) => { updateDraft(props.setDrafts, 'rulesText', event.currentTarget.value); props.setDirty(true); }} /></label>
+        <label className="field-label">{selectedLabel}<textarea className="editor" aria-label="Rule content" value={props.drafts.rulesText} onChange={(event) => { updateDraft(props.setDrafts, 'rulesText', event.currentTarget.value); props.setDirty(true); }} /></label>
+        <div className="flex flex-wrap gap-2">
+          <button className="secondary-button" onClick={props.onRefresh} disabled={props.busy || props.selectedDocument === null}>Refresh content</button>
+        </div>
         <div className="flex gap-2">
           {props.runners.map((runner) => <button key={runner.id} className="secondary-button" onClick={() => props.onMerge(runner.id)}><Sparkles size={16} aria-hidden="true" /> Merge with {runner.displayName}</button>)}
-          {props.runners.length === 0 && <span className="text-sm text-reglet-muted">Load documents to discover installed AI runners.</span>}
+          {props.runners.length === 0 && <span className="text-sm text-reglet-muted">Refresh to discover installed AI runners.</span>}
         </div>
       </div>
     </Panel>
@@ -1062,6 +1138,48 @@ function ruleDocumentFromJson(value: JsonObject): RuleDocument | undefined {
     return { path: value.path, scope: { kind: 'provider', provider } };
   }
   return { path: value.path, scope: { kind: 'shared' } };
+}
+
+function preferredRuleDocument(documents: RuleDocument[], currentPath: string): RuleDocument | null {
+  return documents.find((document) => document.path === currentPath) ??
+    documents.find((document) => document.scope.kind === 'shared') ??
+    documents[0] ??
+    null;
+}
+
+function ruleDocumentKey(document: RuleDocument): string {
+  const owner = document.scope.kind === 'provider' ? document.scope.provider : 'shared';
+  return `${document.scope.kind}:${owner}:${document.path}`;
+}
+
+function ruleDocumentLabel(document: RuleDocument): string {
+  return `${ruleDocumentTitle(document)} · ${fileName(document.path)}`;
+}
+
+function ruleDocumentTitle(document: RuleDocument): string {
+  return document.scope.kind === 'shared'
+    ? 'Unified rules'
+    : `${providerLabel(document.scope.provider)} rules`;
+}
+
+function providerLabel(provider: ManagerProviderId): string {
+  switch (provider) {
+  case 'claude': return 'Claude';
+  case 'codex': return 'Codex';
+  case 'cursor': return 'Cursor';
+  case 'gemini': return 'Gemini';
+  case 'windsurf': return 'Windsurf';
+  case 'opencode': return 'OpenCode';
+  }
+}
+
+function fileName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+function resolveRulePath(regletHome: string, documentPath: string): string {
+  if (documentPath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(documentPath)) return documentPath;
+  return `${regletHome.replace(/\/$/, '')}/rules/${documentPath}`;
 }
 
 function mergeRunnerFromJson(value: JsonObject): MergeRunner | undefined {
