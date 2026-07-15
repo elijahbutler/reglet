@@ -22,4 +22,8 @@ This release establishes Reglet as a local-only CLI for rules, skills, and MCP c
 - Automatic update checks in the retained macOS manager source are disabled by default; manual update checks remain available in source builds.
 - Public artifacts include CLI binaries, ad-hoc-signed/unnotarized macOS desktop artifacts, and unsigned Windows desktop artifacts, with checksums, provenance, and mandatory Homebrew formula publication before release publishing. The Swift app remains frozen during parity, and Linux GUI publishing is deferred.
 
+### Desktop manager
+
+- The Tauri Rules tab now opens the unified Reglet markdown by default, exposes provider-scoped markdown files only when they exist, and focuses editing on content with refresh, save, and open-file-location actions.
+
 See [Release integrity and V1 certification](release.md) before distributing a tagged build.
