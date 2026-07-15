@@ -125,7 +125,6 @@ jobs:
             gh release create "$GITHUB_REF_NAME" \
               --draft \
               --title "$GITHUB_REF_NAME" \
-              --fail-on-no-commits \
               --generate-notes \
               --notes "Includes standalone CLI binaries, ad-hoc-signed unnotarized macOS desktop artifacts, and unsigned Windows desktop artifacts. macOS artifacts are not Developer ID signed and Windows may require SmartScreen approval. Linux GUI packaging is structurally prepared but not published."
           fi
