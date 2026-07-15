@@ -2,7 +2,7 @@
 
 ## Requirements
 
-Public releases include macOS arm64, macOS x64, and Windows x64 CLI binaries plus Apple silicon and Intel `Reglet.app` archives. App archives are ad-hoc signed, not signed with an Apple Developer ID, and not notarized. Installer packages and updated Homebrew casks are not distributed.
+Public releases include macOS arm64, macOS x64, and Windows x64 CLI binaries plus Apple silicon and Intel `Reglet.app` archives and drag-to-Applications disk images. Apps are ad-hoc signed, not signed with an Apple Developer ID, and not notarized. Updated Homebrew casks are not distributed.
 
 ## Homebrew
 
@@ -56,6 +56,8 @@ shasum -a 256 -c SHA256SUMS.txt
 ```
 
 GitHub also publishes build provenance attestation for the release artifacts.
+
+For the macOS app, download the `.dmg` matching your Mac, open it, and drag Reglet into Applications. If Gatekeeper blocks the unsigned app, open System Settings → Privacy & Security and approve Reglet after confirming the downloaded checksum.
 
 On Windows, compare the PowerShell hash against the matching entry in `SHA256SUMS.txt`:
 

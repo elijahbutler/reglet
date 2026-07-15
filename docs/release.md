@@ -7,7 +7,7 @@ Public releases include CLI binaries and unnotarized macOS app archives. Release
 1. run Bun checks and tests;
 2. run the source-level Swift tests for the retained macOS manager;
 3. build `reglet-darwin-arm64`, `reglet-darwin-x64`, and `reglet-windows-x64.exe`;
-4. build ad-hoc-signed, unnotarized `Reglet.app` archives for Apple silicon and Intel Macs;
+4. build ad-hoc-signed, unnotarized `Reglet.app` archives and themed drag-to-Applications disk images for Apple silicon and Intel Macs;
 5. publish SHA-256 checksums and GitHub build provenance for all release artifacts;
 6. generate the Homebrew formula;
 7. update `Formula/reglet.rb` in `elijahbutler/homebrew-reglet` using `HOMEBREW_TAP_TOKEN`;
@@ -24,6 +24,7 @@ Each tag release includes:
 - arm64 and Intel macOS CLI binaries;
 - Windows x64 CLI binary;
 - Apple silicon and Intel macOS app archives;
+- Apple silicon and Intel drag-to-Applications disk images;
 - `SHA256SUMS.txt`;
 - `provenance.txt` and GitHub artifact attestation.
 

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { GENERATED_HEADER, LEGACY_GENERATED_HEADER } from '../header.js';
 import { loadManifest } from '../manifest.js';
 import { loadMasterDir, type McpServerDef } from '../master.js';
-import { deleteMcpServer, isCanonicalMcpServerDef, listEffectiveMcpServers, providerMcpScope, sharedMcpScope, upsertMcpServer } from '../mcp.js';
+import { deleteMcpServer, isCanonicalMcpServerDef, listEffectiveMcpServers, providerMcpScope, sharedMcpScope, upsertMcpServer, validateMcpServer } from '../mcp.js';
 import { regletHome } from '../paths.js';
 import { readProviderMcpServers } from '../providers/mcp-read.js';
 import type { ProviderId } from '../providers/types.js';
@@ -118,8 +118,9 @@ export async function importDriftedMcp(provider: ProviderId, home = regletHome()
   for (const key of output.managedKeys ?? []) {
     const server = current[key];
     if (server !== undefined) {
-      if (!isCanonicalMcpServerDef(key, server)) {
-        throw new Error(`Cannot import MCP server ${key}: raw env values must be replaced with process-env references in mcp/servers.json`);
+      const validation = validateMcpServer(key, server);
+      if (!validation.ok || !isCanonicalMcpServerDef(key, server)) {
+        throw new Error(`Cannot import MCP server ${key} from ${provider}: ${validation.issues.join('; ')}`);
       }
       validatedServers.set(key, server);
     } else {

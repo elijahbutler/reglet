@@ -40,6 +40,7 @@ import {
   readUnmanagedSkillFile,
   regletHome,
   isCanonicalMcpServerDef,
+  validateMcpServer,
   inventoryItems,
   managerErrorFromUnknown,
   managerIssue,
@@ -2162,10 +2163,13 @@ async function importProviderMcp(provider: ProviderId): Promise<void> {
   const master = await loadMasterDir();
   const existingNames = new Set(Object.keys(master.mcpServers));
   const nextServers: Record<string, McpServerDef> = { ...master.mcpServers };
+  const skippedNames: string[] = [];
 
   for (const [name, server] of Object.entries(importedServers).sort(([left], [right]) => left.localeCompare(right))) {
-    if (!isCanonicalMcpServerDef(name, server)) {
-      throw new Error(`Cannot import MCP server ${name}: raw env values must be replaced with process-env references in mcp/servers.json`);
+    const validation = validateMcpServer(name, server);
+    if (!validation.ok || !isCanonicalMcpServerDef(name, server)) {
+      skippedNames.push(name);
+      continue;
     }
     const targetName = sameMcpServer(nextServers[name], server) ? name : uniqueName(name, provider, existingNames);
     existingNames.add(targetName);
@@ -2175,6 +2179,14 @@ async function importProviderMcp(provider: ProviderId): Promise<void> {
   const targetPath = path.join(regletHome(), 'mcp', 'servers.json');
   await mkdir(path.dirname(targetPath), { recursive: true });
   await writeFile(targetPath, serializeMcpServers(nextServers));
+  if (skippedNames.length > 0) {
+    const visibleNames = skippedNames.slice(0, 5).join(', ');
+    const remainingCount = skippedNames.length - 5;
+    const remaining = remainingCount > 0 ? `, and ${remainingCount} more` : '';
+    console.warn(
+      `Warning: Left ${skippedNames.length} incompatible MCP server${skippedNames.length === 1 ? '' : 's'} from ${provider} local and unmanaged (${visibleNames}${remaining}). Reglet does not copy literal environment values into mcp/servers.json.`,
+    );
+  }
 }
 
 function uniqueName(name: string, provider: ProviderId, existingNames: Set<string>): string {

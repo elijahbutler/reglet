@@ -186,7 +186,9 @@ describe('drift, import, and revert', () => {
       `${JSON.stringify({ mcpServers: { managed: { command: 'node', env: { TOKEN: 'secret' } } } }, null, 2)}\n`,
     );
 
-    await expect(importDriftedMcp('claude', home)).rejects.toThrow('raw env values');
+    await expect(importDriftedMcp('claude', home)).rejects.toThrow(
+      'env.TOKEN must be a process-env reference, not a raw string',
+    );
     const master = JSON.parse(await readFile(path.join(home, 'mcp', 'servers.json'), 'utf8')) as {
       mcpServers: Record<string, unknown>;
     };

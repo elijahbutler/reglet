@@ -47,6 +47,7 @@ describe('native MCP editing', () => {
     const root = await setup();
     expect(validateMcpServer('bad', { command: 'node', url: 'https://example.test' }).ok).toBe(false);
     expect(validateMcpServer('remote', { url: 'file:///tmp/socket' }).ok).toBe(false);
+    expect(validateMcpServer('absolute', { command: '/Users/example/.local/bin/branchforge' }).ok).toBe(true);
     await upsertMcpServer('zeta', { url: 'https://example.test' }, root);
     await expect(validateMcpServer('raw', { command: 'node', env: { TOKEN: 'secret' } }).issues).toContain(
       'env.TOKEN must be a process-env reference, not a raw string',

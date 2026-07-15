@@ -563,7 +563,7 @@ describe('reglet CLI', () => {
           theme: 'dark',
           mcpServers: {
             existingServer: {
-              command: 'node',
+              command: '/Users/example/.local/bin/node',
               args: ['server.js'],
             },
           },
@@ -581,7 +581,7 @@ describe('reglet CLI', () => {
     expect(JSON.parse(await readFile(path.join(home, 'mcp', 'servers.json'), 'utf8'))).toEqual({
       mcpServers: {
         existingServer: {
-          command: 'node',
+          command: '/Users/example/.local/bin/node',
           args: ['server.js'],
         },
       },
@@ -591,7 +591,7 @@ describe('reglet CLI', () => {
       theme: 'dark',
       mcpServers: {
         existingServer: {
-          command: 'node',
+          command: '/Users/example/.local/bin/node',
           args: ['server.js'],
         },
       },
@@ -600,17 +600,21 @@ describe('reglet CLI', () => {
     expect(await readFile(path.join(home, 'reglet.toml'), 'utf8')).toContain('enabled = true');
   });
 
-  test('init --yes rejects provider MCP env raw values before writing canonical master state', async () => {
+  test('init --yes leaves provider MCP env raw values local and unmanaged', async () => {
     const { home, providerHome } = await useTempHomes();
     await writeFile(
       path.join(providerHome, '.claude.json'),
       `${JSON.stringify({ mcpServers: { secretServer: { command: 'node', env: { TOKEN: 'one' } } } }, null, 2)}\n`,
     );
 
-    await expect(runCli(['init', '--yes', '--provider', 'claude', '--content', 'mcp'], home, providerHome))
-      .rejects.toMatchObject({ code: 1 });
+    const result = await runCli(['init', '--yes', '--provider', 'claude', '--content', 'mcp'], home, providerHome);
+    expect(result.stderr).toContain('Left 1 incompatible MCP server from claude local and unmanaged (secretServer)');
+    expect(result.stderr).not.toContain('one');
     expect(await Bun.file(path.join(home, 'mcp', 'servers.json')).exists()).toBe(true);
     expect(JSON.parse(await readFile(path.join(home, 'mcp', 'servers.json'), 'utf8'))).toEqual({ mcpServers: {} });
+    expect(JSON.parse(await readFile(path.join(providerHome, '.claude.json'), 'utf8'))).toEqual({
+      mcpServers: { secretServer: { command: 'node', env: { TOKEN: 'one' } } },
+    });
   });
 
   test('init --yes imports opencode mcp schema into canonical master format', async () => {

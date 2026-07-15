@@ -267,7 +267,6 @@ export function validateMcpServer(name: string, server: unknown): { ok: boolean;
     issues.push('exactly one transport is required: command or url');
   }
   if (command !== undefined && typeof command !== 'string') issues.push('command must be a string');
-  if (hasCommand && path.isAbsolute(command)) issues.push('command must be a command name, not an absolute path');
   if (args !== undefined && (!Array.isArray(args) || args.some((item) => typeof item !== 'string'))) {
     issues.push('args must be a string array');
   }
