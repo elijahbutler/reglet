@@ -1,0 +1,47 @@
+{
+  "requests": [
+    { "protocolVersion": 1, "operation": "snapshot", "input": { "contractVersion": 2 } },
+    { "protocolVersion": 1, "operation": "scan", "input": {} },
+    { "protocolVersion": 1, "operation": "plan", "input": { "providers": ["claude"], "contents": ["rules"] } },
+    { "protocolVersion": 1, "operation": "onboard", "input": { "providers": ["claude"], "contents": ["rules"], "stageOnly": true } },
+    { "protocolVersion": 1, "operation": "enroll", "input": { "provider": "claude", "content": "rules" } },
+    { "protocolVersion": 1, "operation": "unenroll", "input": { "target": "claude:rules" } },
+    { "protocolVersion": 1, "operation": "status", "input": {} },
+    { "protocolVersion": 1, "operation": "import-drift", "input": { "provider": "claude", "content": "rules", "scope": "shared" } },
+    { "protocolVersion": 1, "operation": "rules.list", "input": {} },
+    { "protocolVersion": 1, "operation": "rules.read", "input": { "path": "AGENTS.md" } },
+    { "protocolVersion": 1, "operation": "rules.write", "input": { "path": "AGENTS.md", "content": "# Rules" } },
+    { "protocolVersion": 1, "operation": "rules.merge-runners", "input": {} },
+    { "protocolVersion": 1, "operation": "rules.merge-draft", "input": { "providers": ["claude", "codex"], "runner": "codex" } },
+    { "protocolVersion": 1, "operation": "skills.list", "input": {} },
+    { "protocolVersion": 1, "operation": "skills.tree", "input": { "scope": "shared", "name": "review" } },
+    { "protocolVersion": 1, "operation": "skills.read", "input": { "scope": "shared", "name": "review", "path": "SKILL.md" } },
+    { "protocolVersion": 1, "operation": "skills.inspect", "input": { "provider": "claude", "name": "review" } },
+    { "protocolVersion": 1, "operation": "skills.write", "input": { "scope": "provider", "provider": "claude", "name": "review", "path": "SKILL.md", "content": "# Skill" } },
+    { "protocolVersion": 1, "operation": "skills.create", "input": { "scope": "shared", "name": "review", "content": "# Skill" } },
+    { "protocolVersion": 1, "operation": "skills.delete", "input": { "scope": "shared", "name": "review" } },
+    { "protocolVersion": 1, "operation": "skills.rename", "input": { "scope": "shared", "name": "review", "newName": "review-v2" } },
+    { "protocolVersion": 1, "operation": "skills.delete-file", "input": { "scope": "shared", "name": "review", "path": "README.md" } },
+    { "protocolVersion": 1, "operation": "skills.rename-file", "input": { "scope": "shared", "name": "review", "path": "README.md", "newPath": "NOTES.md" } },
+    { "protocolVersion": 1, "operation": "skills.adopt", "input": { "provider": "claude", "name": "review", "scope": "shared", "overwrite": false } },
+    { "protocolVersion": 1, "operation": "mcp.list", "input": { "scope": "shared" } },
+    { "protocolVersion": 1, "operation": "mcp.upsert", "input": { "scope": "shared", "id": "local", "server": { "command": "node", "args": [] } } },
+    { "protocolVersion": 1, "operation": "mcp.delete", "input": { "scope": "shared", "id": "local" } },
+    { "protocolVersion": 1, "operation": "structured-preview.preview", "input": { "providers": ["claude"], "contents": ["rules"] } },
+    { "protocolVersion": 1, "operation": "structured-preview.apply", "input": { "providers": ["claude"], "contents": ["rules"], "digest": "sha256" } },
+    { "protocolVersion": 1, "operation": "operation.restore", "input": { "id": "receipt-1" } },
+    { "protocolVersion": 1, "operation": "legacy-state.clear", "input": {} }
+  ],
+  "responses": [
+    { "protocolVersion": 1, "operation": "snapshot", "ok": true, "result": { "version": 2 } },
+    { "protocolVersion": 1, "operation": "structured-preview.apply", "ok": false, "error": { "code": "STALE_PLAN", "message": "Refresh and review again.", "recoverable": true } }
+  ],
+  "malformed": [
+    { "protocolVersion": 2, "operation": "snapshot", "input": {} },
+    { "protocolVersion": 1, "operation": "unknown", "input": {} },
+    { "protocolVersion": 1, "operation": "rules.read", "input": {} },
+    { "protocolVersion": 1, "operation": "mcp.upsert", "input": { "scope": "provider", "id": "local", "server": {} } },
+    { "protocolVersion": 1, "operation": "skills.tree", "input": { "scope": "shared", "provider": "claude", "name": "review" } },
+    { "protocolVersion": 1, "operation": "operation.restore", "input": { "id": "receipt", "extra": true } }
+  ]
+}

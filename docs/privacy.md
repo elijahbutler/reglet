@@ -12,7 +12,7 @@ The configuration engine and retained manager refresh path make no network reque
 
 Before each AI draft, the macOS manager shows the selected external CLI and exact source paths and requires consent. Reglet passes those files' contents to the installed tool, whose provider privacy terms apply, and receives an editable proposal without saving or applying it. Declining consent runs nothing. CLI users invoke the equivalent transfer explicitly with `reglet rules merge-draft`.
 
-Automatic update checks are disabled by default and can be enabled explicitly in the app menu preference. The manager is not distributed as a public release artifact.
+Automatic update checks are disabled by default and can be enabled explicitly in the desktop app. macOS desktop artifacts are ad-hoc signed and unnotarized; Windows artifacts are unsigned. The retained Swift manager remains frozen during parity and Linux GUI publishing is deferred.
 
 Provider outputs may cause their respective provider to make requests when that provider runs. Reglet does not control those providers' independent network behavior.
 

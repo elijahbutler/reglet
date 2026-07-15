@@ -77,6 +77,19 @@ async function runCliWithInput(
   return { stdout, stderr };
 }
 
+async function runRpc(
+  request: unknown,
+  home: string,
+  providerHome: string,
+): Promise<{ stdout: string; stderr: string }> {
+  return runCliWithInput(
+    ['manager', 'rpc', '--json', '--protocol-version', '1'],
+    typeof request === 'string' ? request : JSON.stringify(request),
+    home,
+    providerHome,
+  );
+}
+
 describe('reglet CLI', () => {
   test('rules list, read, and write manage master documents without applying providers', async () => {
     const { home, providerHome } = await useTempHomes();
@@ -722,6 +735,99 @@ describe('reglet CLI', () => {
     ) as { digest: string; entries: { expectedTargetHash: string | null; driftStatus: string }[] };
     expect(preview.digest).not.toBeEmpty();
     expect(preview.entries[0]).toMatchObject({ driftStatus: 'unmanaged', expectedTargetHash: expect.any(String) });
+  });
+
+  test('manager rpc returns typed errors for malformed input, unknown versions, and unknown operations', async () => {
+    const { home, providerHome } = await useTempHomes();
+
+    const malformed = JSON.parse((await runRpc('{', home, providerHome)).stdout) as {
+      ok: false;
+      error: { code: string };
+    };
+    expect(malformed).toMatchObject({ protocolVersion: 1, operation: 'unknown', ok: false, error: { code: 'MALFORMED_REQUEST' } });
+
+    const unknownVersion = JSON.parse((await runRpc({ protocolVersion: 2, operation: 'snapshot' }, home, providerHome)).stdout) as {
+      ok: false;
+      error: { code: string };
+    };
+    expect(unknownVersion.error.code).toBe('UNKNOWN_PROTOCOL_VERSION');
+
+    const unknownOperation = JSON.parse((await runRpc({ protocolVersion: 1, operation: 'missing' }, home, providerHome)).stdout) as {
+      ok: false;
+      error: { code: string };
+    };
+    expect(unknownOperation.error.code).toBe('UNKNOWN_OPERATION');
+
+    const invalidInput = JSON.parse((await runRpc({
+      protocolVersion: 1,
+      operation: 'rules.read',
+      input: {},
+    }, home, providerHome)).stdout) as { error: { code: string; recoverable: boolean } };
+    expect(invalidInput.error).toEqual({ code: 'INVALID_INPUT', message: 'Operation input is invalid.', recoverable: false });
+  });
+
+  test('manager rpc returns snapshot v2 and delegates mutations', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const snapshot = JSON.parse((await runRpc({
+      protocolVersion: 1,
+      operation: 'snapshot',
+      input: { contractVersion: 2 },
+    }, home, providerHome)).stdout) as {
+      ok: true;
+      result: { version: number; contract: string; providerDiscovery: { provider: string }[] };
+    };
+
+    expect(snapshot).toMatchObject({ protocolVersion: 1, operation: 'snapshot', ok: true });
+    expect(snapshot.result.version).toBe(2);
+    expect(snapshot.result.contract).toBe('manager-snapshot');
+    expect(snapshot.result.providerDiscovery.map((provider) => provider.provider)).toContain('claude');
+
+    const mutation = JSON.parse((await runRpc({
+      protocolVersion: 1,
+      operation: 'enroll',
+      input: { target: 'claude:rules' },
+    }, home, providerHome)).stdout) as { ok: true };
+    expect(mutation.ok).toBe(true);
+    expect(await readFile(path.join(home, 'reglet.toml'), 'utf8')).toContain('enabled = false');
+    expect(await readFile(path.join(home, 'reglet.toml'), 'utf8')).toContain('rules = true');
+  });
+
+  test('manager rpc maps stale structured preview and redacts secret canaries', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const canary = 'manager-rpc-secret-canary';
+    await mkdir(path.join(home, 'rules'), { recursive: true });
+    await mkdir(path.join(providerHome, '.claude'), { recursive: true });
+    await writeFile(path.join(home, 'rules', '00-general.md'), 'first\n');
+    await writeFile(
+      path.join(home, 'reglet.toml'),
+      [
+        '[providers.claude]',
+        'enabled = true',
+        'rules = true',
+        'skills = false',
+        'mcp = false',
+        '',
+      ].join('\n'),
+    );
+
+    const preview = JSON.parse((await runRpc({
+      protocolVersion: 1,
+      operation: 'structured-preview.preview',
+      input: { providers: ['claude'], contents: ['rules'] },
+    }, home, providerHome)).stdout) as { ok: true; result: { digest: string } };
+
+    await writeFile(path.join(home, 'rules', '00-general.md'), `${canary}\n`);
+    const stale = JSON.parse((await runRpc({
+      protocolVersion: 1,
+      operation: 'structured-preview.apply',
+      input: { digest: preview.result.digest, providers: ['claude'], contents: ['rules'] },
+    }, home, providerHome)).stdout) as {
+      ok: false;
+      error: { code: string; message: string };
+    };
+
+    expect(stale.error.code).toBe('STALE_PLAN');
+    expect(JSON.stringify(stale)).not.toContain(canary);
   });
 
   test('apply, status --check, and restore work in a sandbox', async () => {

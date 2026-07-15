@@ -1,16 +1,24 @@
 {
   "name": "reglet-monorepo",
   "private": true,
-  "workspaces": ["packages/*"],
+  "workspaces": ["packages/*", "apps/*"],
   "scripts": {
     "build:binaries": "bash scripts/build-binaries.sh",
+    "stage:desktop-sidecars": "bash scripts/stage-tauri-sidecars.sh",
+    "stage:desktop-check-sidecar": "bash scripts/stage-tauri-check-sidecar.sh",
+    "build:desktop-release": "bash scripts/build-tauri-desktop.sh",
     "build:macos-release": "bash scripts/build-macos-release.sh",
     "build:homebrew-formula": "bash scripts/generate-homebrew-formula.sh",
     "macos:local": "bash scripts/macos-local.sh run",
     "macos:install": "bash scripts/macos-local.sh install",
+    "desktop:typecheck": "bun run --cwd apps/desktop typecheck",
+    "desktop:lint": "bun run --cwd apps/desktop lint",
+    "desktop:test": "bun run --cwd apps/desktop test",
+    "desktop:cargo:check": "cd apps/desktop/src-tauri && cargo check",
+    "desktop:cargo:test": "cd apps/desktop/src-tauri && cargo test",
     "typecheck": "tsc --build",
     "lint": "eslint .",
-    "test": "bun test"
+    "test": "bun test packages"
   },
   "devDependencies": {
     "@types/bun": "^1.1.0",
