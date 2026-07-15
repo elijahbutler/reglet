@@ -70,31 +70,123 @@ describe('Reglet desktop app', () => {
     expect(await screen.findByText('invalid RPC envelope')).toBeInTheDocument();
   });
 
-  test('previews exact onboarding files before staging', async () => {
-    const rpc = vi.fn<ManagerBridge['rpc']>().mockResolvedValue({
-      version: 1,
-      reads: [{ provider: 'claude', content: 'rules', path: '/tmp/CLAUDE.md' }],
-      writes: [{ provider: 'claude', content: 'rules', path: '/tmp/reglet/rules/claude.md' }],
-      reconciliation: { rules: [{ provider: 'claude', state: 'different', preview: '# Existing' }] },
+  test('runs multi-page onboarding and keeps the provider preview condensed', async () => {
+    const rpc = vi.fn<ManagerBridge['rpc']>().mockImplementation(async (operation): Promise<JsonValue> => {
+      if (operation === 'plan') return {
+        version: 1,
+        reconciliation: { rules: [{ provider: 'claude', state: 'different', preview: '# Existing' }] },
+      };
+      if (operation === 'rules.merge-runners') return { version: 1, runners: [] };
+      if (operation === 'skills.list') return {
+        version: 1,
+        shared: [{ name: 'review', fileCount: 1 }],
+        providerScoped: [{ provider: 'codex', name: 'codex-only', fileCount: 1 }],
+        unmanaged: [],
+      };
+      if (operation === 'structured-preview.preview') return {
+        version: 1,
+        digest: 'onboarding-digest',
+        validationIssues: [],
+        entries: [
+          { provider: 'claude', content: 'rules', operation: 'write', path: '/tmp/.claude/CLAUDE.md', diff: '+new', expectedTargetHash: null, resultingTargetHash: 'after' },
+          { provider: 'claude', content: 'skills', operation: 'write', path: '/tmp/.claude/skills/review', diff: '+changed', expectedTargetHash: 'before', resultingTargetHash: 'after' },
+          { provider: 'claude', content: 'skills', operation: 'remove', path: '/tmp/.claude/skills/retired', diff: '-old', expectedTargetHash: 'before', resultingTargetHash: null },
+        ],
+      };
+      return { version: 1 };
     });
-    render(<App bridge={bridge(snapshotFixture(), rpc)} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Review onboarding' }));
-    expect(await screen.findByLabelText('Onboarding file preview')).toHaveTextContent('/tmp/CLAUDE.md');
-    fireEvent.click(screen.getByRole('button', { name: 'Stage reviewed' }));
-    expect(screen.getByRole('dialog')).toHaveTextContent('Stage onboarding');
+    const baseSnapshot = snapshotFixture();
+    const enrollmentMatrix: ManagerSnapshotV2['enrollmentMatrix'] = baseSnapshot.enrollmentMatrix.map((provider) => provider.provider === 'codex'
+      ? {
+          ...provider,
+          cells: {
+            ...provider.cells,
+            mcp: { ...provider.cells.mcp, capability: { state: 'unsupported', reason: 'No MCP destination' }, destinationPath: null },
+          },
+        }
+      : provider);
+    render(<App bridge={bridge(snapshotFixture({ enrollmentMatrix }), rpc)} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Set up providers' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(screen.getByRole('heading', { name: 'Choose what Reglet manages' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByRole('heading', { name: 'Create one AGENT.md' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Unified AGENT.md')).toHaveValue('# Existing\n');
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+    expect(screen.getByRole('heading', { name: 'Preview setup' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Unified Reglet source')).toHaveTextContent('AGENT.md');
+    expect(screen.getByText('AGENT.md → CLAUDE.md')).toBeInTheDocument();
+    expect(screen.getAllByText('review')).toHaveLength(2);
+    const claudeDisclosure = screen.getByText('Claude').closest('details');
+    const codexDisclosure = screen.getByText('Codex').closest('details');
+    expect(claudeDisclosure).not.toBeNull();
+    expect(codexDisclosure).not.toBeNull();
+    expect(within(claudeDisclosure as HTMLElement).queryByText('codex-only')).not.toBeInTheDocument();
+    expect(within(codexDisclosure as HTMLElement).getByText('codex-only')).toBeInTheDocument();
+    expect(screen.queryByText('/tmp/.claude/skills/review')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review changes' }));
+    expect(await screen.findByRole('heading', { name: 'Review changes' })).toBeInTheDocument();
+    expect(rpc).toHaveBeenCalledWith('unenroll', { provider: 'codex', content: 'mcp' });
+    const condensed = screen.getByLabelText('Condensed provider changes');
+    expect(condensed).toHaveTextContent('AGENT.md → CLAUDE.md');
+    expect(condensed).toHaveTextContent('review');
+    expect(condensed).toHaveTextContent('retired');
+    expect(condensed).toHaveTextContent('New');
+    expect(condensed).toHaveTextContent('Updated');
+    expect(condensed).toHaveTextContent('Removed');
+    expect(condensed).not.toHaveTextContent('/tmp/');
   });
 
   test('prompts onboarding on first install and preselects detected providers', async () => {
     render(<App bridge={bridge(firstRunSnapshot())} />);
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toHaveTextContent('Set up Reglet');
-    expect(dialog).toHaveTextContent('found 2 local AI tools');
-    expect(dialog).toHaveTextContent('review every file before Reglet writes anything');
+    expect(dialog).toHaveTextContent('Set up Reglet without surprises');
+    expect(dialog).toHaveTextContent('Every write is reviewed');
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Begin onboarding' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    expect(screen.getByRole('checkbox', { name: 'Select Claude Code' })).toBeChecked();
-    expect(screen.getByRole('checkbox', { name: 'Select Codex CLI' })).toBeChecked();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Continue' }));
+    expect(screen.getByRole('checkbox', { name: 'Select Claude' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Select Codex' })).toBeChecked();
+  });
+
+  test('keeps AI drafting opt-in and shows unmanaged skills without file paths', async () => {
+    const rpc = vi.fn<ManagerBridge['rpc']>().mockImplementation(async (operation): Promise<JsonValue> => {
+      if (operation === 'plan') return {
+        version: 1,
+        reconciliation: {
+          rules: [
+            { provider: 'claude', state: 'different', preview: '# Claude rules', sourcePath: '/private/CLAUDE.md' },
+            { provider: 'codex', state: 'different', preview: '# Codex rules', sourcePath: '/private/AGENTS.md' },
+          ],
+        },
+      };
+      if (operation === 'rules.merge-runners') return { version: 1, runners: [{ id: 'codex', displayName: 'Codex CLI' }] };
+      if (operation === 'skills.list') return {
+        version: 1,
+        shared: [],
+        providerScoped: [],
+        unmanaged: [{ provider: 'claude', name: 'local-review', sourcePath: '/private/.claude/skills/local-review', sharedConflict: 'none' }],
+      };
+      return { version: 1 };
+    });
+    render(<App bridge={bridge(snapshotFixture(), rpc)} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Set up providers' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+    expect(await screen.findByRole('heading', { name: 'Create one AGENT.md' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Draft merge' }));
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Nothing is applied until the final review');
+    expect(rpc).not.toHaveBeenCalledWith('rules.merge-draft', expect.anything());
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Cancel' }));
+
+    fireEvent.change(screen.getByLabelText('Unified AGENT.md'), { target: { value: '# Unified' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(screen.getByRole('heading', { name: 'Choose unified skills' })).toBeInTheDocument();
+    expect(screen.getByText('local-review')).toBeInTheDocument();
+    expect(screen.queryByText('/private/.claude/skills/local-review')).not.toBeInTheDocument();
   });
 
   test('browses rule documents and only offers discovered AI runners', async () => {

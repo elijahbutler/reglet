@@ -5,7 +5,7 @@ The Swift app remains frozen while Tauri reaches parity. This checklist maps the
 | Swift surface | Tauri status |
 |---|---|
 | `RegletCommand.scan`, `managerSnapshot`, `status` | Covered by snapshot v2 refresh through one fixed Manager RPC sidecar command. |
-| `plan`, onboarding selection, staged `onboard` | Providers tab shows exact reads, writes, and rule reconciliation previews before a separate staging confirmation. |
+| `plan`, onboarding selection, staged `onboard` | First launch and the Providers tab open a multi-page safety, selection, unified-instructions, skills, provider-preview, and digest-backed apply flow. Technical paths stay hidden in favor of the unified `AGENT.md`, named skills, native provider filenames, and condensed New/Updated/Removed changes. |
 | `enroll`, `unenroll` | Providers tab enrolls content directly and requires confirmation before Stop Managing detaches ownership while preserving content. |
 | `importDrifted` | Activity & Drift tab requires destructive confirmation, calls `import-drift`, then refreshes. |
 | `rulesList`, `readRule`, `writeRule` | Rules tab explicitly loads and picks shared/provider documents, reads exact content, and saves through RPC. |
@@ -18,7 +18,7 @@ The Swift app remains frozen while Tauri reaches parity. This checklist maps the
 | `clearLegacyNetworkState` | Recovery tab removes legacy state after destructive confirmation. |
 | Manual update check, automatic update opt-in | Sidebar implements manual check action and opt-in automatic checks defaulting off. |
 | Unsaved-edit protection | Section changes and native window close protect dirty Rules/Skills/MCP edits. |
-| Swift `ProvidersManager`, `RulesManager`, `SkillsManager`, `McpManager`, `ActivityManager`, `RecoveryManager`, `Onboarding`, `ApplyPreview` | Represented as Tauri tabs and dialogs with snapshot v2 read model and RPC-only mutations. |
-| Swift tests: color/theme, onboarding route, apply preview grouping, command failures, AI runner consent, drift/recovery, staged onboarding | Frontend tests cover loading, empty, blocked, onboarding file previews, document/runner discovery, skill browsing/adoption, MCP browsing, exact review, destructive confirmations, stale plans, unsaved edits, recovery, and protocol rejection. Rust tests cover fixed sidecar args, malformed output, nonzero exit, and redaction. |
+| Swift `ProvidersManager`, `RulesManager`, `SkillsManager`, `McpManager`, `ActivityManager`, `RecoveryManager`, `Onboarding`, `ApplyPreview` | Represented as Tauri tabs plus a dedicated multi-page onboarding dialog, using the snapshot v2 read model and RPC-only mutations. |
+| Swift tests: color/theme, onboarding route, apply preview grouping, command failures, AI runner consent, drift/recovery, staged onboarding | Frontend tests cover loading, empty, blocked, onboarding routing, first-run selection, AI consent, path-free skill previews, condensed provider change grouping, document/runner discovery, skill browsing/adoption, MCP browsing, exact review, destructive confirmations, stale plans, unsaved edits, recovery, and protocol rejection. Rust tests cover fixed sidecar args, malformed output, nonzero exit, and redaction. |
 
 The implementation surface is mapped. Swift removal remains blocked by the plan's acceptance gates: automated accessibility results, VoiceOver and Narrator evidence, native smoke evidence on macOS arm64/x64 and Windows x64, recovery/no-secret certification, and clean installation of the untrusted release artifacts.
