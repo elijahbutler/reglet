@@ -84,6 +84,19 @@ describe('Reglet desktop app', () => {
     expect(screen.getByRole('dialog')).toHaveTextContent('Stage onboarding');
   });
 
+  test('prompts onboarding on first install and preselects detected providers', async () => {
+    render(<App bridge={bridge(firstRunSnapshot())} />);
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('Set up Reglet');
+    expect(dialog).toHaveTextContent('found 2 local AI tools');
+    expect(dialog).toHaveTextContent('review every file before Reglet writes anything');
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Begin onboarding' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('checkbox', { name: 'Select Claude Code' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Select Codex CLI' })).toBeChecked();
+  });
+
   test('browses rule documents and only offers discovered AI runners', async () => {
     const rpc = vi.fn<ManagerBridge['rpc']>().mockImplementation(async (operation): Promise<JsonValue> => {
       if (operation === 'rules.list') return { version: 1, documents: [{ path: 'team.md', scope: { kind: 'shared' } }] };
@@ -176,6 +189,23 @@ function bridge(snapshot: ManagerSnapshotV2, rpc: ManagerBridge['rpc'] = default
     snapshot: vi.fn().mockResolvedValue(snapshot),
     checkForUpdates: vi.fn().mockResolvedValue({ currentVersion: '0.1.0', latestVersion: '0.1.0', available: false, releaseUrl: 'https://github.com/elijahbutler/reglet/releases/latest' }),
     openRelease: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+function firstRunSnapshot(): ManagerSnapshotV2 {
+  const snapshot = snapshotFixture();
+  return {
+    ...snapshot,
+    state: { state: 'draftOnly', reasons: ['noDestinationsEnrolled'] },
+    enrollmentMatrix: snapshot.enrollmentMatrix.map((provider) => ({
+      ...provider,
+      enabled: false,
+      cells: {
+        rules: { ...provider.cells.rules, enrolled: false },
+        skills: { ...provider.cells.skills, enrolled: false },
+        mcp: { ...provider.cells.mcp, enrolled: false },
+      },
+    })),
   };
 }
 
