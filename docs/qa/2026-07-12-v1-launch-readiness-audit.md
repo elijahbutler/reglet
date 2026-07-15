@@ -2,7 +2,7 @@
 
 ## Product boundary
 
-Public V1 is a local-only CLI release for the six current provider adapters. No account, device linking, hosted service, self-hosted deployment, remote configuration, or background configuration-network activity is part of the release. The macOS manager remains source-level only and is not a public release artifact.
+Public V1 is a local-only CLI release for the six current provider adapters with ad-hoc-signed/unnotarized macOS and unsigned Windows desktop artifacts under Tauri parity. No account, device linking, hosted service, self-hosted deployment, remote configuration, or background configuration-network activity is part of the release. The retained Swift manager remains frozen during parity, and Linux GUI publishing is deferred.
 
 ## Implemented trust controls
 

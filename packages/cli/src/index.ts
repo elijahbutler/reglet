@@ -7,6 +7,21 @@ import path from 'node:path';
 import { confirm, isCancel, multiselect, outro } from '@clack/prompts';
 import { Command, InvalidArgumentError } from 'commander';
 import {
+  failureResponse,
+  isJsonObject,
+  isManagerRpcEnvelope,
+  isManagerProtocolOperation,
+  managerProtocolVersion,
+  managerRpcRequestValidator,
+  successResponse,
+  type JsonObject,
+  type JsonValue,
+  type ManagerProtocolErrorCode,
+  type ManagerProtocolOperation,
+  type ManagerRpcRequest,
+  type ManagerRpcResponse,
+} from '@reglet/manager-protocol';
+import {
   applyAll,
   applyStructuredPreview,
   adoptSkill,
@@ -159,6 +174,16 @@ program
   });
 
 const manager = program.command('manager').description('Read local-only manager state');
+
+manager
+  .command('rpc')
+  .description('Read one Manager RPC request from stdin and print one typed JSON response')
+  .requiredOption('--json', 'print machine-readable JSON')
+  .requiredOption('--protocol-version <version>', 'manager RPC protocol version', parseRpcProtocolVersion)
+  .action(async (options: { json: boolean; protocolVersion: 1 }) => {
+    const response = await handleManagerRpc(await Bun.stdin.text(), options.protocolVersion);
+    printRpcJson(response);
+  });
 
 manager
   .command('snapshot')
@@ -1073,6 +1098,11 @@ function parseManagerContractVersion(value: string): ManagerContractVersion {
   throw new InvalidArgumentError(`Unsupported manager snapshot contract version: ${value}`);
 }
 
+function parseRpcProtocolVersion(value: string): 1 {
+  if (value === '1' || value === 'v1') return 1;
+  throw new InvalidArgumentError(`Unsupported manager RPC protocol version: ${value}`);
+}
+
 function parseProviderList(value: string, previous: ProviderId[] = []): ProviderId[] {
   return [...previous, ...value.split(',').filter((item) => item.length > 0).map(parseProvider)];
 }
@@ -1091,6 +1121,315 @@ function parseProviderTarget(value: string): ProviderTarget {
     return { provider };
   }
   return { provider, content: parseContent(contentRaw) };
+}
+
+async function handleManagerRpc(rawInput: string, cliProtocolVersion: 1): Promise<ManagerRpcResponse> {
+  if (cliProtocolVersion !== managerProtocolVersion) {
+    return failureResponse('unknown', 'UNKNOWN_PROTOCOL_VERSION', 'Unsupported Manager RPC protocol version.', false);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawInput) as unknown;
+  } catch {
+    return failureResponse('unknown', 'MALFORMED_REQUEST', 'Request body must be exactly one JSON object.', false);
+  }
+
+  if (!isRecord(parsed)) {
+    return failureResponse('unknown', 'MALFORMED_REQUEST', 'Request body must be a JSON object.', false);
+  }
+  if (parsed.protocolVersion !== managerProtocolVersion) {
+    return failureResponse('unknown', 'UNKNOWN_PROTOCOL_VERSION', 'Unsupported Manager RPC protocol version.', false);
+  }
+  if (!isManagerProtocolOperation(parsed.operation)) {
+    return failureResponse('unknown', 'UNKNOWN_OPERATION', 'Unknown Manager RPC operation.', false);
+  }
+  if (!isManagerRpcEnvelope(parsed)) {
+    return failureResponse(parsed.operation, 'MALFORMED_REQUEST', 'Request envelope is malformed.', false);
+  }
+  if (!managerRpcRequestValidator.validate(parsed)) {
+    return failureResponse(parsed.operation, 'INVALID_INPUT', 'Operation input is invalid.', false);
+  }
+
+  try {
+    return successResponse(parsed.operation, toJsonValue(await dispatchManagerRpc(parsed)));
+  } catch (error) {
+    return managerRpcErrorResponse(parsed.operation, error);
+  }
+}
+
+async function dispatchManagerRpc(request: ManagerRpcRequest): Promise<unknown> {
+  const input = rpcInput(request);
+  switch (request.operation) {
+    case 'snapshot': {
+      const contractVersion = readOptionalNumber(input, 'contractVersion') ?? 2;
+      if (contractVersion === 1) return buildManagerSnapshotV1();
+      if (contractVersion === 2) return buildManagerSnapshotV2();
+      throw new InvalidArgumentError('contractVersion must be 1 or 2');
+    }
+    case 'scan':
+      return buildScanJson();
+    case 'plan':
+      return buildOnboardingPlanJson({
+        providers: readProviderArray(input, 'providers') ?? await detectedProviderIds(),
+        contents: readContentArray(input, 'contents') ?? [...contentIds],
+      });
+    case 'onboard': {
+      const providers = readProviderArray(input, 'providers') ?? await detectedProviderIds();
+      const contents = readContentArray(input, 'contents') ?? [...contentIds];
+      const stageOnly = readOptionalBoolean(input, 'stageOnly') ?? true;
+      await initMasterDir();
+      await runOnboarding(providers, contents, !stageOnly);
+      return { version: 1, providers, contents, stageOnly };
+    }
+    case 'enroll':
+      return setEnrollmentForRpc(readProviderTargetInput(input), true);
+    case 'unenroll':
+      return setEnrollmentForRpc(readProviderTargetInput(input), false);
+    case 'status':
+      return buildStatusJson();
+    case 'import-drift':
+      return importDriftForRpc(readProvider(input, 'provider'), readContent(input, 'content'), readOptionalMcpImportScope(input));
+    case 'rules.list': {
+      const master = await loadMasterDir();
+      return { version: 1, documents: ruleDocuments(master) };
+    }
+    case 'rules.read':
+      return { version: 1, path: readString(input, 'path'), content: await readFile(masterRulePath(readString(input, 'path')), 'utf8') };
+    case 'rules.write': {
+      const relativePath = readString(input, 'path');
+      const target = masterRulePath(relativePath);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, readString(input, 'content'));
+      return { version: 1, path: relativePath };
+    }
+    case 'rules.merge-runners':
+      return { version: 1, runners: await listInstalledMergeRunners() };
+    case 'rules.merge-draft':
+      return { version: 1, ...await generateRulesMergeDraft(readProviderArray(input, 'providers') ?? [], readOptionalRunner(input)) };
+    case 'skills.list':
+      return { version: 1, regletHome: regletHome(), ...await listSkills() };
+    case 'skills.tree': {
+      const tree = (await listManagedSkillTrees()).find((skill) => skill.name === readString(input, 'name') && sameSkillScope(skill.scope, readSkillOptions(input)));
+      if (tree === undefined) throw new Error(`Skill does not exist: ${readString(input, 'name')}`);
+      return { version: 1, tree };
+    }
+    case 'skills.read':
+      return { version: 1, document: await readSkillFile(readSkillScopeInput(input), readString(input, 'name'), readString(input, 'path')) };
+    case 'skills.inspect':
+      if (typeof input.path === 'string') {
+        return { version: 1, document: await readUnmanagedSkillFile(readProvider(input, 'provider'), readString(input, 'name'), input.path) };
+      }
+      return { version: 1, tree: await describeUnmanagedSkill(readProvider(input, 'provider'), readString(input, 'name')) };
+    case 'skills.write':
+      return { version: 1, document: await writeSkillFile(readSkillScopeInput(input), readString(input, 'name'), readString(input, 'path'), readString(input, 'content')) };
+    case 'skills.create':
+      return { version: 1, document: await createSkill(readSkillScopeInput(input), readString(input, 'name'), readOptionalString(input, 'content') ?? '# Skill\n') };
+    case 'skills.delete':
+      return { version: 1, skill: await deleteSkill(readSkillScopeInput(input), readString(input, 'name')) };
+    case 'skills.rename':
+      return { version: 1, skill: await renameSkill(readSkillScopeInput(input), readString(input, 'name'), readString(input, 'newName')) };
+    case 'skills.delete-file':
+      return { version: 1, skill: await deleteSkillFile(readSkillScopeInput(input), readString(input, 'name'), readString(input, 'path')) };
+    case 'skills.rename-file':
+      return { version: 1, skill: await renameSkillFile(readSkillScopeInput(input), readString(input, 'name'), readString(input, 'path'), readString(input, 'newPath')) };
+    case 'skills.adopt':
+      return {
+        version: 1,
+        adoption: await adoptSkill({
+          provider: readProvider(input, 'provider'),
+          name: readString(input, 'name'),
+          scope: readSkillAdoptionScope(input),
+          overwrite: readOptionalBoolean(input, 'overwrite'),
+        }),
+      };
+    case 'mcp.list':
+      if (typeof input.effectiveProvider === 'string') {
+        const provider = parseProvider(input.effectiveProvider);
+        return { version: 1, scope: { kind: 'provider', provider }, effective: true, servers: await listEffectiveMcpServers(provider) };
+      }
+      return { version: 1, ...await listMcpServers(readMcpScopeInput(input)) };
+    case 'mcp.upsert':
+      return {
+        version: 1,
+        server: await upsertMcpServer(readString(input, 'id'), readMcpServerDefinition(input), readMcpScopeInput(input), undefined, readOptionalString(input, 'displayName')),
+      };
+    case 'mcp.delete':
+      return { version: 1, server: await deleteMcpServer(readString(input, 'id'), readMcpScopeInput(input)) };
+    case 'structured-preview.preview':
+      return previewApplyStructured({ providers: readProviderArray(input, 'providers'), contents: readContentArray(input, 'contents') });
+    case 'structured-preview.apply':
+      return applyStructuredPreview(readString(input, 'digest'), { providers: readProviderArray(input, 'providers'), contents: readContentArray(input, 'contents') });
+    case 'operation.restore':
+      return { version: 1, actions: await restoreOperationReceipt(readString(input, 'id')) };
+    case 'legacy-state.clear':
+      return { version: 1, legacyNetworkState: await clearLegacySyncState() };
+  }
+}
+
+async function setEnrollmentForRpc(target: ProviderTarget, enabled: boolean): Promise<JsonObject> {
+  const config = await loadConfig();
+  const detachment = enabled ? undefined : await detachManagedContent(target.provider, target.content);
+  if (target.content === undefined) {
+    config.providers[target.provider].enabled = enabled;
+  } else {
+    config.providers[target.provider][target.content] = enabled;
+  }
+  await saveConfig(config);
+  return toJsonObject({ version: 1, target, enabled, detached: detachment?.detached ?? [] });
+}
+
+async function importDriftForRpc(provider: ProviderId, content: ApplyContent, scope: 'shared' | 'provider'): Promise<unknown> {
+  if (content === 'rules') return { version: 1, content: 'rules', ...await importDriftedRules(provider) };
+  if (content === 'skills') return { version: 1, content: 'skills', ...await importDriftedSkills(provider) };
+  return { version: 1, content: 'mcp', ...await importDriftedMcp(provider, regletHome(), scope) };
+}
+
+function managerRpcErrorResponse(operation: ManagerProtocolOperation, error: unknown): ManagerRpcResponse {
+  const managerError = managerErrorFromUnknown(error, `manager.rpc.${operation}`);
+  const code = protocolErrorCode(error, managerError.error.code);
+  const message = redactManagerValue(managerError.error.message);
+  return failureResponse(operation, code, message, code === 'INVALID_INPUT' ? false : managerError.error.recoverable);
+}
+
+function protocolErrorCode(error: unknown, managerCode: ManagerIssueCodeV2): ManagerProtocolErrorCode {
+  if (error instanceof InvalidArgumentError) return 'INVALID_INPUT';
+  if (managerCode === 'STALE_PLAN') return 'STALE_PLAN';
+  if (managerCode === 'OPERATION_FAILED') return 'OPERATION_FAILED';
+  return 'OPERATION_FAILED';
+}
+
+function rpcInput(request: ManagerRpcRequest): JsonObject {
+  if (request.input === undefined) return {};
+  if (!isJsonObject(request.input)) {
+    throw new InvalidArgumentError('RPC input must be a JSON object');
+  }
+  return request.input;
+}
+
+function readProviderTargetInput(input: JsonObject): ProviderTarget {
+  if (typeof input.target === 'string') return parseProviderTarget(input.target);
+  return { provider: readProvider(input, 'provider'), content: readOptionalContent(input, 'content') };
+}
+
+function readSkillOptions(input: JsonObject): SkillCommandOptions {
+  return { scope: readSkillAdoptionScope(input), provider: readOptionalProvider(input, 'provider') };
+}
+
+function readSkillScopeInput(input: JsonObject): SkillScope {
+  return skillScope(readSkillOptions(input));
+}
+
+function readMcpScopeInput(input: JsonObject): McpScope {
+  return mcpScope({ scope: readOptionalMcpImportScope(input), provider: readOptionalProvider(input, 'provider') });
+}
+
+function readMcpServerDefinition(input: JsonObject): McpServerDef {
+  const server = input.server;
+  if (!isJsonObject(server)) throw new InvalidArgumentError('server must be an object');
+  return server as unknown as McpServerDef;
+}
+
+function readString(input: JsonObject, key: string): string {
+  const value = input[key];
+  if (typeof value !== 'string') throw new InvalidArgumentError(`${key} must be a string`);
+  return value;
+}
+
+function readOptionalString(input: JsonObject, key: string): string | undefined {
+  const value = input[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new InvalidArgumentError(`${key} must be a string`);
+  return value;
+}
+
+function readOptionalNumber(input: JsonObject, key: string): number | undefined {
+  const value = input[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number') throw new InvalidArgumentError(`${key} must be a number`);
+  return value;
+}
+
+function readOptionalBoolean(input: JsonObject, key: string): boolean | undefined {
+  const value = input[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'boolean') throw new InvalidArgumentError(`${key} must be a boolean`);
+  return value;
+}
+
+function readProvider(input: JsonObject, key: string): ProviderId {
+  return parseProvider(readString(input, key));
+}
+
+function readOptionalProvider(input: JsonObject, key: string): ProviderId | undefined {
+  const value = readOptionalString(input, key);
+  return value === undefined ? undefined : parseProvider(value);
+}
+
+function readContent(input: JsonObject, key: string): ApplyContent {
+  return parseContent(readString(input, key));
+}
+
+function readOptionalContent(input: JsonObject, key: string): ApplyContent | undefined {
+  const value = readOptionalString(input, key);
+  return value === undefined ? undefined : parseContent(value);
+}
+
+function readProviderArray(input: JsonObject, key: string): ProviderId[] | undefined {
+  const value = input[key];
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) {
+    throw new InvalidArgumentError(`${key} must be a string array`);
+  }
+  return value.map(parseProvider);
+}
+
+function readContentArray(input: JsonObject, key: string): ApplyContent[] | undefined {
+  const value = input[key];
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) {
+    throw new InvalidArgumentError(`${key} must be a string array`);
+  }
+  return value.map(parseContent);
+}
+
+function readSkillAdoptionScope(input: JsonObject): SkillAdoptionScope {
+  return parseSkillScope(readOptionalString(input, 'scope') ?? 'shared');
+}
+
+function readOptionalMcpImportScope(input: JsonObject): 'shared' | 'provider' {
+  return parseMcpScope(readOptionalString(input, 'scope') ?? 'shared');
+}
+
+function readOptionalRunner(input: JsonObject): AiMergeRunnerId | undefined {
+  const value = readOptionalString(input, 'runner');
+  return value === undefined ? undefined : parseAiMergeRunnerId(value);
+}
+
+function toJsonObject(value: unknown): JsonObject {
+  const json = toJsonValue(value);
+  if (!isJsonObject(json)) throw new Error('RPC result is not a JSON object');
+  return json;
+}
+
+function toJsonValue(value: unknown): JsonValue {
+  const normalized = JSON.parse(JSON.stringify(redactManagerValue(value))) as unknown;
+  if (!isJsonValueForRpc(normalized)) {
+    throw new Error('RPC result is not JSON-serializable');
+  }
+  return normalized;
+}
+
+function isJsonValueForRpc(value: unknown): value is JsonValue {
+  if (value === null) return true;
+  if (typeof value === 'string' || typeof value === 'boolean') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValueForRpc);
+  return isJsonObject(value);
+}
+
+function printRpcJson(value: ManagerRpcResponse): void {
+  process.stdout.write(`${JSON.stringify(redactManagerValue(value))}\n`);
 }
 
 async function runOnboarding(providers: ProviderId[], contents: ApplyContent[], applyProviderOutputs = true): Promise<void> {

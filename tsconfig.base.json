@@ -9,6 +9,11 @@
     "skipLibCheck": true,
     "declaration": true,
     "composite": true,
-    "types": ["bun"]
+    "types": ["bun"],
+    "baseUrl": ".",
+    "paths": {
+      "@reglet/core": ["packages/core/src/index.ts"],
+      "@reglet/manager-protocol": ["packages/manager-protocol/src/index.ts"]
+    }
   }
 }

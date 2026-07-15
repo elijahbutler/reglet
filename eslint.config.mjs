@@ -1,7 +1,7 @@
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['**/dist/**', '**/node_modules/**', '.context/**', 'artifacts/**'] },
+  { ignores: ['**/dist/**', '**/node_modules/**', '**/target/**', '.context/**', 'artifacts/**'] },
   ...tseslint.configs.recommended,
   {
     rules: {

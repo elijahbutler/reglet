@@ -1,214 +1,68 @@
 import type { ApplyContent } from './engine/apply.js';
-import type { DriftStatus } from './engine/drift.js';
 import type { OperationReceipt } from './engine/operations.js';
-import type { ManagedContent } from './manifest.js';
 import type { EffectiveMcpServerEntry, McpConflictStatus, McpScope, McpServerEntry } from './mcp.js';
 import type { ProviderId, ProviderInventory } from './providers/types.js';
 import { providerNames, type ProviderName } from './config.js';
+import type {
+  CapabilityState,
+  ManagerDerivedStateReasonV2,
+  ManagerDerivedStateV2,
+  ManagerDriftInboxItemV2,
+  ManagerEffectiveContentV2,
+  ManagerEffectiveProviderCompositionV2,
+  ManagerEnrollmentCellV2,
+  ManagerEnrollmentProviderV2,
+  ManagerErrorResponseV2,
+  ManagerIssueCodeV2,
+  ManagerIssueSeverityV2,
+  ManagerIssueV2,
+  ManagerLegacyStateV2,
+  ManagerMasterSummaryV2,
+  ManagerMcpServerSummaryV2,
+  ManagerProviderDiscoveryV2,
+  ManagerReceiptDetailV2,
+  ManagerReceiptListItemV2,
+  ManagerSafetyCapabilitiesV2,
+  ManagerSnapshotV2,
+  ManagerSourceInventoryItemV2,
+  ManagerStructuredPlanEntryV2,
+  ManagerStructuredPlanSummaryV2,
+} from '@reglet/manager-protocol';
+
+export type {
+  CapabilityState,
+  ManagerDerivedStateNameV2,
+  ManagerDerivedStateReasonV2,
+  ManagerDerivedStateV2,
+  ManagerDriftInboxItemV2,
+  ManagerEffectiveContentV2,
+  ManagerEffectiveProviderCompositionV2,
+  ManagerEnrollmentCellV2,
+  ManagerEnrollmentProviderV2,
+  ManagerErrorResponseV2,
+  ManagerIssueCodeV2,
+  ManagerIssueSeverityV2,
+  ManagerIssueV2,
+  ManagerLegacyStateV2,
+  ManagerManifestOutputV2,
+  ManagerMasterSummaryV2,
+  ManagerMcpConflictStatus,
+  ManagerMcpScope,
+  ManagerMcpServerSummaryV2,
+  ManagerOperationLifecycle,
+  ManagerProviderDiscoveryV2,
+  ManagerReceiptDetailV2,
+  ManagerReceiptListItemV2,
+  ManagerReceiptRecoveryV2,
+  ManagerReceiptTargetV2,
+  ManagerSafetyCapabilitiesV2,
+  ManagerSnapshotV2,
+  ManagerSourceInventoryItemV2,
+  ManagerStructuredPlanEntryV2,
+  ManagerStructuredPlanSummaryV2,
+} from '@reglet/manager-protocol';
 
 export type ManagerContractVersion = 1 | 2;
-export type CapabilityState =
-  | { state: 'supported' }
-  | { state: 'unsupported'; reason: string }
-  | { state: 'needs-attention'; reason: string };
-
-export interface ManagerSafetyCapabilitiesV2 {
-  localOnly: true;
-  requiresExplicitReview: true;
-}
-
-export interface ManagerProviderDiscoveryV2 {
-  provider: ProviderId;
-  displayName: string;
-  presence: 'installed' | 'not-found' | 'needs-attention';
-  detected: boolean;
-  capabilities: Record<ApplyContent, CapabilityState>;
-}
-
-export interface ManagerSourceInventoryItemV2 {
-  provider: ProviderId;
-  content: ApplyContent;
-  path: string | null;
-  readable: boolean;
-  exists: boolean;
-  items: string[];
-  issue?: string;
-}
-
-export interface ManagerEnrollmentCellV2 {
-  provider: ProviderId;
-  content: ApplyContent;
-  enrolled: boolean;
-  capability: CapabilityState;
-  destinationPath: string | null;
-}
-
-export interface ManagerEnrollmentProviderV2 {
-  provider: ProviderId;
-  displayName: string;
-  enabled: boolean;
-  cells: Record<ApplyContent, ManagerEnrollmentCellV2>;
-}
-
-export interface ManagerMasterSummaryV2 {
-  rules: {
-    sharedDocuments: number;
-    providerOverlays: Record<ProviderName, number>;
-  };
-  skills: {
-    sharedSkills: number;
-    providerScopedSkills: Record<ProviderName, number>;
-  };
-  mcp: {
-    sharedServers: ManagerMcpServerSummaryV2[];
-    providerServers: Record<ProviderName, ManagerMcpServerSummaryV2[]>;
-  };
-}
-
-export interface ManagerMcpServerSummaryV2 {
-  id: string;
-  name: string;
-  displayName: string;
-  scope: McpScope;
-  overrideOf: string | null;
-  affectedProviders: ProviderName[];
-  conflictStatus: McpConflictStatus;
-  transport: 'command' | 'url' | 'invalid';
-  envKeys: string[];
-  issues: string[];
-}
-
-export interface ManagerEffectiveProviderCompositionV2 {
-  provider: ProviderId;
-  displayName: string;
-  contents: Partial<Record<ApplyContent, ManagerEffectiveContentV2>>;
-}
-
-export interface ManagerEffectiveContentV2 {
-  enrolled: true;
-  destinationPath: string;
-  masterItems: number;
-  capability: CapabilityState;
-  compositionRevision?: string;
-  lastAppliedCompositionRevision?: string;
-  mcpServers?: ManagerMcpServerSummaryV2[];
-}
-
-export type ManagerDerivedStateNameV2 = 'draftOnly' | 'changesReady' | 'upToDate' | 'driftDetected' | 'blocked';
-export type ManagerDerivedStateReasonV2 =
-  | 'noDestinationsEnrolled'
-  | 'contentNeedsAttention'
-  | 'contentUnsupported'
-  | 'requiredMcpEnvironmentMissing'
-  | 'managedOutputMissing'
-  | 'managedOutputModified'
-  | 'noAppliedRevision'
-  | 'compositionRevisionChanged'
-  | 'compositionRevisionCurrent';
-
-export interface ManagerDerivedStateV2 {
-  state: ManagerDerivedStateNameV2;
-  reasons: ManagerDerivedStateReasonV2[];
-}
-
-export type ManagerIssueCodeV2 =
-  | 'INVALID_CONTENT'
-  | 'STALE_PLAN'
-  | 'MISSING_MCP_ENVIRONMENT'
-  | 'UNREADABLE_SOURCE'
-  | 'OPERATION_FAILED'
-  | 'PARTIAL_SNAPSHOT'
-  | 'INTERRUPTED_OPERATION_RECOVERED';
-
-export type ManagerIssueSeverityV2 = 'info' | 'warning' | 'error';
-
-export interface ManagerIssueV2 {
-  code: ManagerIssueCodeV2;
-  severity: ManagerIssueSeverityV2;
-  message: string;
-  recoverable: boolean;
-  provider?: ProviderId;
-  content?: ApplyContent;
-  path?: string;
-  operationId?: string;
-  command?: string;
-}
-
-export interface ManagerErrorResponseV2 {
-  version: 2;
-  contract: 'manager-error';
-  error: ManagerIssueV2;
-}
-
-export interface ManagerStructuredPlanSummaryV2 {
-  available: false;
-  reason: 'snapshot-read-only';
-  entries: ManagerStructuredPlanEntryV2[];
-}
-
-export interface ManagerStructuredPlanEntryV2 {
-  provider: ProviderId;
-  content: ApplyContent;
-  destinationPath: string | null;
-  state: 'eligible' | 'unenrolled' | 'unsupported' | 'needs-attention';
-  reason?: string;
-}
-
-export interface ManagerDriftInboxItemV2 {
-  provider: string;
-  content: ManagedContent;
-  outputPath: string;
-  status: DriftStatus | 'unknown';
-  issue?: string;
-}
-
-export interface ManagerReceiptListItemV2 {
-  id: string;
-  lifecycle: OperationReceipt['lifecycle'];
-  startedAt: string;
-  completedAt: string | null;
-  targetCount: number;
-  masterRevision?: string;
-}
-
-export interface ManagerReceiptDetailV2 {
-  id: string;
-  lifecycle: OperationReceipt['lifecycle'];
-  startedAt: string;
-  completedAt: string | null;
-  structuredPreviewDigest?: string;
-  masterRevision?: string;
-  compositionRevisions?: Record<string, string>;
-  targets: OperationReceipt['targets'];
-  recovery: OperationReceipt['recovery'];
-}
-
-export interface ManagerLegacyStateV2 {
-  present: boolean;
-  paths: string[];
-}
-
-export interface ManagerSnapshotV2 {
-  version: 2;
-  contract: 'manager-snapshot';
-  regletHome: string;
-  safety: ManagerSafetyCapabilitiesV2;
-  providerDiscovery: ManagerProviderDiscoveryV2[];
-  sourceInventory: ManagerSourceInventoryItemV2[];
-  enrollmentMatrix: ManagerEnrollmentProviderV2[];
-  master: ManagerMasterSummaryV2;
-  masterRevision?: string;
-  state: ManagerDerivedStateV2;
-  problems: ManagerIssueV2[];
-  effectiveProviders: ManagerEffectiveProviderCompositionV2[];
-  structuredPlan: ManagerStructuredPlanSummaryV2;
-  driftInbox: ManagerDriftInboxItemV2[];
-  receipts: {
-    list: ManagerReceiptListItemV2[];
-    details: ManagerReceiptDetailV2[];
-  };
-  legacyNetworkState: ManagerLegacyStateV2;
-}
 
 export interface JsonSchemaCheck<T> {
   readonly version: ManagerContractVersion;

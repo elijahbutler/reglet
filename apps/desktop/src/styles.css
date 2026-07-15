@@ -1,0 +1,137 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    color-scheme: dark;
+    background: #0f1115;
+  }
+
+  body {
+    margin: 0;
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  }
+
+  button,
+  input,
+  textarea {
+    font: inherit;
+  }
+
+  select {
+    font: inherit;
+  }
+
+  :focus-visible {
+    outline: 2px solid #d6b36a;
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .icon-button,
+  .primary-button,
+  .secondary-button,
+  .danger-button,
+  .nav-button {
+    @apply inline-flex min-h-9 items-center gap-2 rounded-md px-3 py-2 text-sm transition disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .icon-button {
+    @apply justify-center border border-reglet-line bg-reglet-panel2 text-reglet-text hover:bg-reglet-line;
+  }
+
+  .primary-button {
+    @apply border border-reglet-accent bg-reglet-accent text-black hover:brightness-110;
+  }
+
+  .secondary-button {
+    @apply border border-reglet-line bg-reglet-panel2 text-reglet-text hover:bg-reglet-line;
+  }
+
+  .danger-button {
+    @apply border border-reglet-red bg-reglet-red/15 text-reglet-red hover:bg-reglet-red/25;
+  }
+
+  .nav-button {
+    @apply mb-1 w-full justify-start text-reglet-muted hover:bg-reglet-panel2 hover:text-reglet-text;
+  }
+
+  .nav-button-active {
+    @apply bg-reglet-panel2 text-reglet-text;
+  }
+
+  .banner {
+    @apply mb-4 flex items-center gap-2 rounded-md border px-3 py-2 text-sm;
+  }
+
+  .banner-error {
+    @apply border-reglet-red bg-reglet-red/10 text-reglet-red;
+  }
+
+  .banner-info {
+    @apply border-reglet-line bg-reglet-panel2 text-reglet-text;
+  }
+
+  .status-badge {
+    @apply inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm;
+  }
+
+  .status-badge-ok {
+    @apply border-reglet-green/70 text-reglet-green;
+  }
+
+  .status-badge-warn {
+    @apply border-reglet-red/70 text-reglet-red;
+  }
+
+  .status-dot {
+    @apply inline-block h-2.5 w-2.5 rounded-full;
+  }
+
+  .status-dot-ok {
+    @apply bg-reglet-green;
+  }
+
+  .status-dot-warn {
+    @apply bg-reglet-red;
+  }
+
+  .data-grid {
+    @apply grid gap-3;
+  }
+
+  .row-card {
+    @apply rounded-md border border-reglet-line bg-reglet-panel2 p-4;
+  }
+
+  .review-entry {
+    @apply rounded-md border border-reglet-line bg-reglet-bg p-3;
+  }
+
+  .field-label {
+    @apply grid gap-1 text-sm text-reglet-muted;
+  }
+
+  .text-input,
+  .editor {
+    @apply rounded-md border border-reglet-line bg-reglet-bg px-3 py-2 text-reglet-text;
+  }
+
+  .editor {
+    @apply min-h-56 resize-y font-mono text-sm;
+  }
+
+  .segmented {
+    @apply inline-flex cursor-pointer items-center gap-2 rounded-md border border-reglet-line bg-reglet-panel2 px-3 py-2 text-sm;
+  }
+
+  .modal-backdrop {
+    @apply fixed inset-0 grid place-items-center bg-black/65 p-5;
+  }
+
+  .modal {
+    @apply w-full max-w-lg rounded-md border border-reglet-line bg-reglet-panel p-5 shadow-2xl;
+  }
+}

@@ -2,7 +2,7 @@
 
 ## Requirements
 
-Public releases include macOS arm64, macOS x64, and Windows x64 CLI binaries plus Apple silicon and Intel `Reglet.app` archives and drag-to-Applications disk images. Apps are ad-hoc signed, not signed with an Apple Developer ID, and not notarized. Updated Homebrew casks are not distributed.
+Public releases include macOS arm64, macOS x64, and Windows x64 CLI binaries plus ad-hoc-signed/unnotarized macOS and unsigned Windows desktop artifacts. The retained Swift app remains frozen during Tauri parity. Linux GUI artifacts are deferred. Updated Homebrew casks are not distributed.
 
 ## Homebrew
 
@@ -57,7 +57,9 @@ shasum -a 256 -c SHA256SUMS.txt
 
 GitHub also publishes build provenance attestation for the release artifacts.
 
-For the macOS app, download the `.dmg` matching your Mac, open it, and drag Reglet into Applications. If Gatekeeper blocks the unsigned app, open System Settings → Privacy & Security and approve Reglet after confirming the downloaded checksum.
+For the macOS desktop app, download the `.dmg` matching your Mac, open it, and drag Reglet into Applications. The app is ad-hoc signed rather than Developer ID signed and is not notarized. If Gatekeeper blocks it, open System Settings → Privacy & Security and approve Reglet after confirming the downloaded checksum.
+
+On Windows, download `reglet-desktop-windows-x64-setup.exe`. Because the installer is not Authenticode-signed, Microsoft Defender SmartScreen may show an “unrecognized app” warning. Verify the SHA-256 checksum first, then choose **More info → Run anyway** only when it matches the release checksum. The installer bootstraps WebView2 when the compatible runtime is absent.
 
 On Windows, compare the PowerShell hash against the matching entry in `SHA256SUMS.txt`:
 
@@ -67,7 +69,7 @@ Get-FileHash .\reglet-windows-x64.exe -Algorithm SHA256
 
 ## Source checkout
 
-Source work requires Bun and Xcode Command Line Tools:
+Source work requires Bun. Tauri work also requires Rust and the native Tauri system dependencies for the host; retained Swift app work requires Xcode Command Line Tools on macOS.
 
 ```bash
 git clone https://github.com/elijahbutler/reglet.git
@@ -82,4 +84,4 @@ On macOS, install a local build of both the current-architecture CLI and app fro
 bun run macos:install
 ```
 
-This installs the CLI to `~/.local/bin/reglet` and an ad-hoc-signed app to `~/Applications/Reglet.app`. Use `bun run macos:local` instead to install the CLI and run the Swift app directly from source. Public app archives use the same ad-hoc signing model and are not notarized.
+This installs the CLI to `~/.local/bin/reglet` and an ad-hoc-signed Swift app to `~/Applications/Reglet.app` for local development only. Use `bun run macos:local` instead to install the CLI and run the Swift app directly from source. Public Tauri macOS artifacts are also ad-hoc signed and are not notarized.

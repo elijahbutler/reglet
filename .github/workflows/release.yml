@@ -6,7 +6,36 @@ on:
       - "v*"
 
 jobs:
+  build-tauri-windows:
+    name: Build unsigned Tauri Windows artifacts
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run desktop:test
+      - run: bun run build:binaries
+      - run: bash scripts/stage-tauri-sidecars.sh x86_64-pc-windows-msvc
+      - run: bash scripts/build-tauri-desktop.sh x86_64-pc-windows-msvc nsis
+      - name: Collect Windows desktop artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/desktop
+          installer="$(find apps/desktop/src-tauri/target -path '*/bundle/nsis/*' -type f -name '*.exe' | head -n 1)"
+          test -n "$installer"
+          cp "$installer" dist/desktop/reglet-desktop-windows-x64-setup.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tauri-windows-unsigned
+          path: dist/desktop/*
+
   publish-release:
+    needs: build-tauri-windows
     runs-on: macos-latest
     permissions:
       contents: write
@@ -17,16 +46,36 @@ jobs:
         with:
           fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run lint
-      - run: bun test
+      - run: bun run test
+      - run: bun run desktop:typecheck
+      - run: bun run desktop:lint
+      - run: bun run desktop:test
       - run: swift test --package-path apps/macos/RegletSetup
       - run: bun run build:binaries
+      - run: bash scripts/stage-tauri-sidecars.sh aarch64-apple-darwin x86_64-apple-darwin
+      - uses: actions/download-artifact@v4
+        with:
+          name: tauri-windows-unsigned
+          path: dist/desktop
       - name: Build unnotarized macOS app archives and disk images
         run: |
           REGLET_ARCH=arm64 bun run build:macos-release
           REGLET_ARCH=x86_64 bun run build:macos-release
+      - name: Build ad-hoc-signed unnotarized Tauri macOS artifacts
+        run: |
+          bash scripts/build-tauri-desktop.sh aarch64-apple-darwin app,dmg
+          bash scripts/build-tauri-desktop.sh x86_64-apple-darwin app,dmg
+          mkdir -p dist/desktop
+          ditto -c -k --sequesterRsrc --keepParent apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Reglet.app dist/desktop/reglet-desktop-macos-arm64.app.zip
+          ditto -c -k --sequesterRsrc --keepParent apps/desktop/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/Reglet.app dist/desktop/reglet-desktop-macos-x86_64.app.zip
+          cp "$(find apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' | head -n 1)" dist/desktop/reglet-desktop-macos-arm64.dmg
+          cp "$(find apps/desktop/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg -name '*.dmg' | head -n 1)" dist/desktop/reglet-desktop-macos-x86_64.dmg
       - name: Create checksums and release provenance
         shell: bash
         run: |
@@ -40,11 +89,12 @@ jobs:
               reglet-macos-arm64.app.zip \
               reglet-macos-x86_64.app.zip \
               reglet-macos-arm64.dmg \
-              reglet-macos-x86_64.dmg > SHA256SUMS.txt
+              reglet-macos-x86_64.dmg \
+              desktop/* > SHA256SUMS.txt
           )
           {
             printf 'commit=%s\nref=%s\nrun=%s\n' "$GITHUB_SHA" "$GITHUB_REF_NAME" "$GITHUB_RUN_ID"
-            printf 'artifacts=%s\n' "reglet-darwin-arm64,reglet-darwin-x64,reglet-windows-x64.exe,reglet-macos-arm64.app.zip,reglet-macos-x86_64.app.zip,reglet-macos-arm64.dmg,reglet-macos-x86_64.dmg"
+            printf 'artifacts=%s\n' "standalone CLI binaries, retained Swift macOS app archives, ad-hoc-signed unnotarized Tauri macOS artifacts, unsigned Tauri Windows artifacts"
           } > dist/provenance.txt
       - run: bun run build:homebrew-formula
       - name: Attest release artifacts
@@ -58,6 +108,7 @@ jobs:
             dist/reglet-macos-x86_64.app.zip
             dist/reglet-macos-arm64.dmg
             dist/reglet-macos-x86_64.dmg
+            dist/desktop/*
             dist/SHA256SUMS.txt
       - name: Create or reuse draft GitHub release
         env:
@@ -76,7 +127,7 @@ jobs:
               --title "$GITHUB_REF_NAME" \
               --fail-on-no-commits \
               --generate-notes \
-              --notes "Includes CLI binaries plus ad-hoc-signed, unnotarized macOS app archives and drag-to-Applications disk images. The apps are not signed with an Apple Developer ID and may require manual Gatekeeper approval."
+              --notes "Includes standalone CLI binaries, ad-hoc-signed unnotarized macOS desktop artifacts, and unsigned Windows desktop artifacts. macOS artifacts are not Developer ID signed and Windows may require SmartScreen approval. Linux GUI packaging is structurally prepared but not published."
           fi
           gh release upload "$GITHUB_REF_NAME" --clobber \
             dist/reglet-darwin-arm64 \
@@ -86,6 +137,7 @@ jobs:
             dist/reglet-macos-x86_64.app.zip \
             dist/reglet-macos-arm64.dmg \
             dist/reglet-macos-x86_64.dmg \
+            dist/desktop/* \
             dist/SHA256SUMS.txt \
             dist/provenance.txt
       - name: Update Homebrew tap

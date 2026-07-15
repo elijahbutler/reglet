@@ -2,20 +2,21 @@
 
 ## Artifact requirements
 
-Public releases include CLI binaries and unnotarized macOS app archives. Release automation fails unless it can:
+Public releases include standalone CLI binaries plus ad-hoc-signed/unnotarized macOS and unsigned Windows desktop artifacts. The retained Swift macOS manager remains frozen during Tauri parity work. Linux GUI packaging is configured for `.deb` and AppImage, but Linux desktop artifacts are deferred until after macOS and Windows stabilize. Release automation fails unless it can:
 
 1. run Bun checks and tests;
 2. run the source-level Swift tests for the retained macOS manager;
 3. build `reglet-darwin-arm64`, `reglet-darwin-x64`, and `reglet-windows-x64.exe`;
-4. build ad-hoc-signed, unnotarized `Reglet.app` archives and themed drag-to-Applications disk images for Apple silicon and Intel Macs;
-5. publish SHA-256 checksums and GitHub build provenance for all release artifacts;
-6. generate the Homebrew formula;
-7. update `Formula/reglet.rb` in `elijahbutler/homebrew-reglet` using `HOMEBREW_TAP_TOKEN`;
-8. publish the GitHub Release only after the tap update succeeds.
+4. build ad-hoc-signed, unnotarized Tauri macOS desktop artifacts for Apple silicon and Intel Macs;
+5. build unsigned Windows x64 NSIS/WebView2 desktop artifacts;
+6. publish SHA-256 checksums and GitHub build provenance for all release artifacts;
+7. generate the Homebrew formula;
+8. update `Formula/reglet.rb` in `elijahbutler/homebrew-reglet` using `HOMEBREW_TAP_TOKEN`;
+9. publish the GitHub Release only after the tap update succeeds.
 
 `HOMEBREW_TAP_TOKEN` is a repository secret backed by a fine-grained token with **Contents: Read and write** access to `elijahbutler/homebrew-reglet`. If the secret is absent, cloning fails, committing fails, or pushing fails, the workflow fails and leaves the GitHub Release as a draft.
 
-The app archives are ad-hoc signed for bundle integrity, not signed with an Apple Developer ID, and not notarized. The legacy 0.1.6 app cask remains an uninstall path only; users install new app archives manually.
+macOS artifacts use ad-hoc code signing (`codesign` identity `-`), not an Apple Developer ID, and are not notarized. Windows artifacts are not Authenticode-signed and may trigger SmartScreen. The legacy 0.1.6 app cask remains an uninstall path only; users install new app archives manually.
 
 ## Release contents
 
@@ -23,8 +24,8 @@ Each tag release includes:
 
 - arm64 and Intel macOS CLI binaries;
 - Windows x64 CLI binary;
-- Apple silicon and Intel macOS app archives;
-- Apple silicon and Intel drag-to-Applications disk images;
+- ad-hoc-signed, unnotarized Apple silicon and Intel macOS Tauri desktop artifacts;
+- unsigned Windows x64 Tauri NSIS desktop installer artifacts;
 - `SHA256SUMS.txt`;
 - `provenance.txt` and GitHub artifact attestation.
 
@@ -43,4 +44,4 @@ Before publishing a release candidate, record the date, platform, artifact check
 | Detach | Stop Managing preserves content and removes only Reglet ownership/header. |
 | Homebrew tap gate | Public release is still draft until the formula update succeeds. |
 
-macOS manager keyboard, VoiceOver, and appearance checks remain tracked separately from the automated artifact gate and should be completed before promoting the unnotarized app archives more broadly.
+Desktop manager keyboard, VoiceOver, Narrator, and appearance checks remain tracked separately from the automated artifact gate and must be completed before promoting the untrusted app artifacts more broadly.

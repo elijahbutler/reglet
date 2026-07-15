@@ -1,8 +1,10 @@
 {
   "files": [],
   "references": [
+    { "path": "packages/manager-protocol" },
     { "path": "packages/core" },
     { "path": "packages/cli" },
-    { "path": "packages/server" }
+    { "path": "packages/server" },
+    { "path": "apps/desktop" }
   ]
 }
