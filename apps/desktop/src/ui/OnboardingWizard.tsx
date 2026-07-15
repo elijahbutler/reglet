@@ -3,9 +3,11 @@ import {
   ArrowRight,
   Check,
   CheckCircle2,
+  Copy,
   FileText,
   Folder,
   Plug,
+  Plus,
   Sparkles,
   Wrench,
   X,
@@ -28,6 +30,13 @@ type ChangeKind = 'New' | 'Updated' | 'Removed';
 interface RuleComparison {
   provider: ManagerProviderId;
   preview: string;
+  truncated: boolean;
+}
+
+interface ProviderRuleSource {
+  provider: ManagerProviderId;
+  fileName: string;
+  content: string;
 }
 
 interface MergeRunner {
@@ -106,6 +115,9 @@ export function OnboardingWizard({ bridge, snapshot, onClose, onStateChanged }: 
   const [managedSkills, setManagedSkills] = useState<ManagedSkill[]>([]);
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [ruleDraft, setRuleDraft] = useState('');
+  const [ruleSources, setRuleSources] = useState<Partial<Record<ManagerProviderId, ProviderRuleSource>>>({});
+  const [loadingRuleSources, setLoadingRuleSources] = useState<ManagerProviderId[]>([]);
+  const [steeringPrompt, setSteeringPrompt] = useState('');
   const [review, setReview] = useState<StructuredReview | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -154,6 +166,8 @@ export function OnboardingWizard({ bridge, snapshot, onClose, onStateChanged }: 
       ].filter(isDefined);
 
       setComparisons(nextComparisons);
+      setRuleSources({});
+      setLoadingRuleSources([]);
       setRunners(nextRunners);
       setSelectedRunner(nextRunners[0]?.id ?? null);
       setUnmanagedSkills(nextUnmanaged);
@@ -167,6 +181,26 @@ export function OnboardingWizard({ bridge, snapshot, onClose, onStateChanged }: 
     }
   };
 
+  const loadRuleSource = async (provider: ManagerProviderId) => {
+    if (ruleSources[provider] !== undefined || loadingRuleSources.includes(provider)) return;
+    setLoadingRuleSources((current) => [...current, provider]);
+    setError(null);
+    try {
+      const result = jsonObject(await bridge.rpc('rules.source-read', { provider }));
+      if (result.version !== 1 || result.provider !== provider || typeof result.fileName !== 'string' || typeof result.content !== 'string') {
+        throw new Error(`Reglet returned an invalid ${simpleProviderName(provider)} rules source.`);
+      }
+      setRuleSources((current) => ({
+        ...current,
+        [provider]: { provider, fileName: result.fileName, content: result.content },
+      }));
+    } catch (sourceError) {
+      setError(errorMessage(sourceError));
+    } finally {
+      setLoadingRuleSources((current) => current.filter((item) => item !== provider));
+    }
+  };
+
   const generateDraft = async (runner: MergeRunner) => {
     setConfirmAction(null);
     setBusy(true);
@@ -175,6 +209,7 @@ export function OnboardingWizard({ bridge, snapshot, onClose, onStateChanged }: 
       const result = jsonObject(await bridge.rpc('rules.merge-draft', {
         providers: comparisons.map((comparison) => comparison.provider),
         runner: runner.id,
+        ...(steeringPrompt.trim().length === 0 ? {} : { steeringPrompt: steeringPrompt.trim() }),
       }));
       if (typeof result.draft !== 'string' || result.draft.trim().length === 0) {
         throw new Error('The AI tool returned an empty draft.');
@@ -323,11 +358,16 @@ export function OnboardingWizard({ bridge, snapshot, onClose, onStateChanged }: 
               runners={runners}
               selectedRunner={selectedRunner}
               setSelectedRunner={setSelectedRunner}
+              sources={ruleSources}
+              loadingSources={loadingRuleSources}
+              onLoadSource={(provider) => void loadRuleSource(provider)}
               draft={ruleDraft}
               setDraft={setRuleDraft}
+              steeringPrompt={steeringPrompt}
+              setSteeringPrompt={setSteeringPrompt}
               onGenerate={(runner) => setConfirmAction({
                 title: `Generate with ${runner.displayName}?`,
-                body: `${runner.displayName} will read ${comparisons.length} selected local instruction files and return an editable draft. Nothing is applied until the final review.`,
+                body: `${runner.displayName} will read ${comparisons.length} selected local instruction files${steeringPrompt.trim().length === 0 ? '' : ' and your additional guidance'} and return an editable draft. Nothing is applied until the final review.`,
                 label: 'Generate draft',
                 run: () => generateDraft(runner),
               })}
@@ -468,34 +508,161 @@ function InstructionsStep(props: {
   runners: MergeRunner[];
   selectedRunner: ManagerMergeRunnerId | null;
   setSelectedRunner: (runner: ManagerMergeRunnerId) => void;
+  sources: Partial<Record<ManagerProviderId, ProviderRuleSource>>;
+  loadingSources: ManagerProviderId[];
+  onLoadSource: (provider: ManagerProviderId) => void;
   draft: string;
   setDraft: (draft: string) => void;
+  steeringPrompt: string;
+  setSteeringPrompt: (prompt: string) => void;
   onGenerate: (runner: MergeRunner) => void;
   onBack: () => void;
   onContinue: () => void;
   busy: boolean;
 }) {
   const runner = props.runners.find((item) => item.id === props.selectedRunner);
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+  const [copyFeedback, setCopyFeedback] = useState<Partial<Record<ManagerProviderId, 'copied' | 'failed'>>>({});
+
+  const insertSource = (source: ProviderRuleSource) => {
+    const editor = editorRef.current;
+    const start = editor?.selectionStart ?? props.draft.length;
+    const end = editor?.selectionEnd ?? start;
+    const insertion = source.content.trim();
+    const before = props.draft.slice(0, start);
+    const after = props.draft.slice(end);
+    const leadingBreak = before.length > 0 && !before.endsWith('\n\n') ? (before.endsWith('\n') ? '\n' : '\n\n') : '';
+    const trailingBreak = after.length > 0 && !after.startsWith('\n\n') ? (after.startsWith('\n') ? '\n' : '\n\n') : '';
+    const next = `${before}${leadingBreak}${insertion}${trailingBreak}${after}`;
+    const caret = before.length + leadingBreak.length + insertion.length;
+    props.setDraft(next);
+    queueMicrotask(() => {
+      editor?.focus();
+      editor?.setSelectionRange(caret, caret);
+    });
+  };
+
+  const replaceDraft = (source: ProviderRuleSource) => {
+    props.setDraft(normalizedRuleDraft(source.content));
+    queueMicrotask(() => editorRef.current?.focus());
+  };
+
+  const copySource = async (source: ProviderRuleSource) => {
+    try {
+      await copyText(source.content);
+      setCopyFeedback((current) => ({ ...current, [source.provider]: 'copied' }));
+    } catch {
+      setCopyFeedback((current) => ({ ...current, [source.provider]: 'failed' }));
+    }
+  };
+
   return (
-    <StepLayout title="Create one AGENT.md" body="Review the unified instructions Reglet will sync to every selected provider." footer={<StepActions onBack={props.onBack} onContinue={props.onContinue} continueLabel="Continue" disabled={props.busy || props.draft.trim().length === 0} busy={props.busy} />}>
+    <StepLayout title="Create one AGENT.md" body="Reuse your existing provider instructions, edit them directly, or ask a local AI tool for a draft." footer={<StepActions onBack={props.onBack} onContinue={props.onContinue} continueLabel="Continue" disabled={props.busy || props.draft.trim().length === 0} busy={props.busy} />}>
       <div className="onboarding-editor-card">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <section aria-labelledby="provider-source-title">
           <div>
-            <p className="font-medium">Unified instructions</p>
-            <p className="text-sm text-reglet-muted">{props.comparisons.length === 0 ? 'Start with a clean shared document.' : `${props.comparisons.length} existing provider document${props.comparisons.length === 1 ? '' : 's'} found.`}</p>
+            <h2 id="provider-source-title" className="font-medium">Existing provider files</h2>
+            <p className="text-sm text-reglet-muted">Open a file to copy it or bring its contents into the unified draft. Local paths stay hidden.</p>
           </div>
-          {props.runners.length > 0 && props.comparisons.length >= 2 && (
-            <div className="flex items-center gap-2">
-              <select className="text-input" value={props.selectedRunner ?? ''} onChange={(event) => props.setSelectedRunner(event.currentTarget.value as ManagerMergeRunnerId)} aria-label="AI drafting tool">
-                {props.runners.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}
-              </select>
-              <button className="secondary-button" onClick={() => runner !== undefined && props.onGenerate(runner)} disabled={props.busy || runner === undefined}>
-                <Sparkles size={16} aria-hidden="true" /> Draft merge
-              </button>
+          {props.comparisons.length === 0 ? (
+            <p className="provider-source-empty">No existing provider instruction files were found.</p>
+          ) : (
+            <div className="provider-source-list mt-4">
+              {props.comparisons.map((comparison) => {
+                const source = props.sources[comparison.provider];
+                const loading = props.loadingSources.includes(comparison.provider);
+                const providerName = simpleProviderName(comparison.provider);
+                const sourceName = source?.fileName ?? providerRuleName(comparison.provider);
+                const feedback = copyFeedback[comparison.provider];
+                return (
+                  <details
+                    className="provider-source-disclosure"
+                    key={comparison.provider}
+                    onToggle={(event) => {
+                      if (event.currentTarget.open) props.onLoadSource(comparison.provider);
+                    }}
+                  >
+                    <summary>
+                      <span><strong>{providerName}</strong><small>{sourceName}</small></span>
+                      <span className="provider-source-open-label">View file</span>
+                      <span className="provider-source-close-label">Hide file</span>
+                    </summary>
+                    <div className="provider-source-body">
+                      {loading && <div className="provider-source-loading" role="status">Loading {sourceName}…</div>}
+                      {!loading && source !== undefined && (
+                        <>
+                          <textarea
+                            className="provider-source-preview"
+                            value={source.content}
+                            readOnly
+                            spellCheck={false}
+                            aria-label={`${providerName} ${source.fileName} contents`}
+                          />
+                          <div className="provider-source-actions">
+                            <button className="secondary-button" type="button" onClick={() => void copySource(source)}>
+                              <Copy size={15} aria-hidden="true" />
+                              {feedback === 'copied' ? 'Copied' : feedback === 'failed' ? 'Copy failed' : 'Copy'}
+                            </button>
+                            <button className="secondary-button" type="button" onClick={() => insertSource(source)}>
+                              <Plus size={15} aria-hidden="true" /> Insert at cursor
+                            </button>
+                            <button className="secondary-button" type="button" onClick={() => replaceDraft(source)}>Use as draft</button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </details>
+                );
+              })}
             </div>
           )}
+        </section>
+
+        <div className="onboarding-editor-heading">
+          <div>
+            <label className="font-medium" htmlFor="unified-agent-editor">Unified instructions</label>
+            <p className="text-sm text-reglet-muted">This becomes the single editable AGENT.md in Reglet.</p>
+          </div>
         </div>
-        <textarea className="onboarding-editor" value={props.draft} onChange={(event) => props.setDraft(event.currentTarget.value)} aria-label="Unified AGENT.md" />
+        <textarea
+          ref={editorRef}
+          id="unified-agent-editor"
+          className="onboarding-editor"
+          value={props.draft}
+          onChange={(event) => props.setDraft(event.currentTarget.value)}
+          spellCheck={false}
+          aria-label="Unified AGENT.md"
+        />
+
+        {props.runners.length > 0 && props.comparisons.length >= 2 && (
+          <section className="onboarding-ai-draft" aria-labelledby="ai-draft-title">
+            <div>
+              <h2 id="ai-draft-title" className="font-medium">Guide an AI draft <span className="optional-label">Optional</span></h2>
+              <p className="text-sm text-reglet-muted">Tell the drafting tool what to include, exclude, or emphasize. This guidance is not saved.</p>
+            </div>
+            <label className="sr-only" htmlFor="draft-steering-prompt">Additional drafting guidance</label>
+            <textarea
+              id="draft-steering-prompt"
+              className="draft-steering-input"
+              value={props.steeringPrompt}
+              onChange={(event) => props.setSteeringPrompt(event.currentTarget.value)}
+              maxLength={4_000}
+              placeholder="For example: keep package manager preferences; exclude personal biography and provider-specific setup notes."
+              aria-describedby="draft-steering-help"
+            />
+            <div className="ai-draft-actions">
+              <span id="draft-steering-help" className="text-xs text-reglet-muted">Sent only after you confirm this run · {props.steeringPrompt.length.toLocaleString()} / 4,000</span>
+              <div className="flex items-center gap-2">
+                <select className="text-input" value={props.selectedRunner ?? ''} onChange={(event) => props.setSelectedRunner(event.currentTarget.value as ManagerMergeRunnerId)} aria-label="AI drafting tool">
+                  {props.runners.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}
+                </select>
+                <button className="secondary-button" onClick={() => runner !== undefined && props.onGenerate(runner)} disabled={props.busy || runner === undefined}>
+                  <Sparkles size={16} aria-hidden="true" /> Draft merge
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
         <p className="text-xs text-reglet-muted">Editable now and later. No provider files change on this step.</p>
       </div>
     </StepLayout>
@@ -708,6 +875,7 @@ function providerRuleName(provider: ManagerProviderId): string {
 
 function initialRuleDraft(comparisons: RuleComparison[]): string {
   if (comparisons.length === 0) return '# Agent instructions\n\n<!-- Add shared instructions here. -->\n';
+  if (comparisons.some((comparison) => comparison.truncated)) return '';
   const unique = Array.from(new Set(comparisons.map((comparison) => comparison.preview.trim()))).filter((item) => item.length > 0);
   return unique.length === 1 ? `${unique[0]}\n` : '';
 }
@@ -786,7 +954,9 @@ function providerSupports(snapshot: ManagerSnapshotV2, provider: ManagerProvider
 }
 
 function ruleComparisonFromJson(value: JsonObject): RuleComparison | undefined {
-  return isProvider(value.provider) && typeof value.preview === 'string' ? { provider: value.provider, preview: value.preview } : undefined;
+  return isProvider(value.provider) && typeof value.preview === 'string'
+    ? { provider: value.provider, preview: value.preview, truncated: value.truncated === true }
+    : undefined;
 }
 
 function mergeRunnerFromJson(value: JsonObject): MergeRunner | undefined {
@@ -848,6 +1018,24 @@ function isDefined<T>(value: T | undefined): value is T {
 function toggle<T>(items: T[], item: T, checked: boolean): T[] {
   if (checked) return items.includes(item) ? items : [...items, item];
   return items.filter((candidate) => candidate !== item);
+}
+
+async function copyText(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText !== undefined) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const temporary = document.createElement('textarea');
+  temporary.value = value;
+  temporary.setAttribute('readonly', '');
+  temporary.style.position = 'fixed';
+  temporary.style.opacity = '0';
+  document.body.append(temporary);
+  temporary.select();
+  const copied = document.execCommand('copy');
+  temporary.remove();
+  if (!copied) throw new Error('Clipboard copy failed.');
 }
 
 function errorMessage(error: unknown): string {

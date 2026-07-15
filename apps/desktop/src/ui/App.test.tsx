@@ -152,7 +152,9 @@ describe('Reglet desktop app', () => {
   });
 
   test('keeps AI drafting opt-in and shows unmanaged skills without file paths', async () => {
-    const rpc = vi.fn<ManagerBridge['rpc']>().mockImplementation(async (operation): Promise<JsonValue> => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    const rpc = vi.fn<ManagerBridge['rpc']>().mockImplementation(async (operation, input): Promise<JsonValue> => {
       if (operation === 'plan') return {
         version: 1,
         reconciliation: {
@@ -163,6 +165,13 @@ describe('Reglet desktop app', () => {
         },
       };
       if (operation === 'rules.merge-runners') return { version: 1, runners: [{ id: 'codex', displayName: 'Codex CLI' }] };
+      if (operation === 'rules.source-read' && input !== undefined && 'provider' in input) {
+        const provider = input.provider;
+        return provider === 'claude'
+          ? { version: 1, provider, fileName: 'CLAUDE.md', content: '# Full Claude rules\n\nUse pnpm.\n' }
+          : { version: 1, provider: 'codex', fileName: 'AGENTS.md', content: '# Full Codex rules\n' };
+      }
+      if (operation === 'rules.merge-draft') return { version: 1, draft: '# AI unified draft\n' };
       if (operation === 'skills.list') return {
         version: 1,
         shared: [],
@@ -177,10 +186,36 @@ describe('Reglet desktop app', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
 
     expect(await screen.findByRole('heading', { name: 'Create one AGENT.md' })).toBeInTheDocument();
+    const claudeSummary = screen.getByText('CLAUDE.md').closest('summary');
+    expect(claudeSummary).not.toBeNull();
+    fireEvent.click(claudeSummary as HTMLElement);
+    const sourceEditor = await screen.findByLabelText('Claude CLAUDE.md contents');
+    expect(sourceEditor).toHaveValue('# Full Claude rules\n\nUse pnpm.\n');
+    expect(screen.queryByText('/private/CLAUDE.md')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Insert at cursor' }));
+    expect(screen.getByLabelText('Unified AGENT.md')).toHaveValue('# Full Claude rules\n\nUse pnpm.');
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('# Full Claude rules\n\nUse pnpm.\n'));
+    expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Additional drafting guidance'), {
+      target: { value: 'Include package manager preferences. Exclude personal biography.' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Draft merge' }));
     expect(screen.getByRole('alertdialog')).toHaveTextContent('Nothing is applied until the final review');
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('additional guidance');
     expect(rpc).not.toHaveBeenCalledWith('rules.merge-draft', expect.anything());
     fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Cancel' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Draft merge' }));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Generate draft' }));
+    await waitFor(() => expect(rpc).toHaveBeenCalledWith('rules.merge-draft', {
+      providers: ['claude', 'codex'],
+      runner: 'codex',
+      steeringPrompt: 'Include package manager preferences. Exclude personal biography.',
+    }));
+    expect(screen.getByLabelText('Unified AGENT.md')).toHaveValue('# AI unified draft\n');
 
     fireEvent.change(screen.getByLabelText('Unified AGENT.md'), { target: { value: '# Unified' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));

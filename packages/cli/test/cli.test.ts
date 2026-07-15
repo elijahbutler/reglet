@@ -530,7 +530,17 @@ describe('reglet CLI', () => {
     }
 
     await runCli(
-      ['rules', 'merge-draft', '--provider', 'claude,codex', '--runner', 'codex', '--json'],
+      [
+        'rules',
+        'merge-draft',
+        '--provider',
+        'claude,codex',
+        '--runner',
+        'codex',
+        '--steer',
+        'Keep package manager preferences and exclude personal biography.',
+        '--json',
+      ],
       home,
       providerHome,
       {
@@ -549,6 +559,8 @@ describe('reglet CLI', () => {
     expect(args).not.toContain('Prefer concise answers.');
     expect(prompt).toContain('Prefer concise answers.');
     expect(prompt).toContain('Never use npm.');
+    expect(prompt).toContain('Additional guidance from the user:');
+    expect(prompt).toContain('Keep package manager preferences and exclude personal biography.');
     expect(path.basename(workingDirectory)).toStartWith('reglet-ai-merge-');
     await expect(stat(workingDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
   });
@@ -790,6 +802,34 @@ describe('reglet CLI', () => {
     expect(mutation.ok).toBe(true);
     expect(await readFile(path.join(home, 'reglet.toml'), 'utf8')).toContain('enabled = false');
     expect(await readFile(path.join(home, 'reglet.toml'), 'utf8')).toContain('rules = true');
+  });
+
+  test('manager rpc reads only a provider rules source and does not expose its path', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const claudeRules = path.join(providerHome, '.claude', 'CLAUDE.md');
+    await mkdir(path.dirname(claudeRules), { recursive: true });
+    await writeFile(claudeRules, '# Existing Claude rules\n\nUse pnpm.\n');
+
+    const response = JSON.parse((await runRpc({
+      protocolVersion: 1,
+      operation: 'rules.source-read',
+      input: { provider: 'claude' },
+    }, home, providerHome)).stdout) as {
+      ok: true;
+      result: { version: number; provider: string; fileName: string; content: string; sourcePath?: string };
+    };
+
+    expect(response).toMatchObject({
+      ok: true,
+      result: {
+        version: 1,
+        provider: 'claude',
+        fileName: 'CLAUDE.md',
+        content: '# Existing Claude rules\n\nUse pnpm.\n',
+      },
+    });
+    expect(response.result.sourcePath).toBeUndefined();
+    expect(JSON.stringify(response)).not.toContain(providerHome);
   });
 
   test('manager rpc maps stale structured preview and redacts secret canaries', async () => {

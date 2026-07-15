@@ -126,6 +126,7 @@ import {
 const providerIds = ['claude', 'codex', 'cursor', 'gemini', 'windsurf', 'opencode'] as const;
 const contentIds = ['rules', 'skills', 'mcp'] as const;
 const rulesPreviewLimit = 800;
+const rulesSteeringPromptLimit = 4_000;
 
 type ContentId = (typeof contentIds)[number];
 
@@ -497,9 +498,10 @@ rules
   .description('Generate a reviewable unified rules draft from selected provider rules without writing files')
   .requiredOption('-p, --provider <provider...>', 'provider rule sources to merge', parseProviderList)
   .option('--runner <runner>', 'local AI tool to use: codex, claude, or gemini', parseAiMergeRunnerId)
+  .option('--steer <prompt>', 'additional guidance for what the unified draft should include or exclude')
   .option('--json', 'print machine-readable JSON for setup apps')
-  .action(async (options: { provider: ProviderId[]; runner?: AiMergeRunnerId; json?: boolean }) => {
-    const result = await generateRulesMergeDraft(options.provider, options.runner);
+  .action(async (options: { provider: ProviderId[]; runner?: AiMergeRunnerId; steer?: string; json?: boolean }) => {
+    const result = await generateRulesMergeDraft(options.provider, options.runner, options.steer);
     if (options.json === true) {
       printJson({ version: 1, ...result });
       return;
@@ -1203,10 +1205,26 @@ async function dispatchManagerRpc(request: ManagerRpcRequest): Promise<unknown> 
       await writeFile(target, readString(input, 'content'));
       return { version: 1, path: relativePath };
     }
+    case 'rules.source-read': {
+      const provider = readProvider(input, 'provider');
+      const adapter = getAdapter(provider);
+      const sourcePath = adapter.rulesPath();
+      if (sourcePath === null) throw new Error(`${adapter.displayName} does not expose a rules file.`);
+      const content = await readOptionalFile(sourcePath);
+      if (content === null) throw new Error(`${adapter.displayName} rules were not found.`);
+      return { version: 1, provider, fileName: path.basename(sourcePath), content };
+    }
     case 'rules.merge-runners':
       return { version: 1, runners: await listInstalledMergeRunners() };
     case 'rules.merge-draft':
-      return { version: 1, ...await generateRulesMergeDraft(readProviderArray(input, 'providers') ?? [], readOptionalRunner(input)) };
+      return {
+        version: 1,
+        ...await generateRulesMergeDraft(
+          readProviderArray(input, 'providers') ?? [],
+          readOptionalRunner(input),
+          readOptionalString(input, 'steeringPrompt'),
+        ),
+      };
     case 'skills.list':
       return { version: 1, regletHome: regletHome(), ...await listSkills() };
     case 'skills.tree': {
@@ -2064,6 +2082,7 @@ async function buildRuleComparison(provider: ProviderId, inventory: ProviderInve
 async function generateRulesMergeDraft(
   providers: ProviderId[],
   selectedRunner?: AiMergeRunnerId,
+  steeringPrompt?: string,
 ): Promise<RuleMergeDraftJson> {
   const uniqueProviders = Array.from(new Set(providers));
   const sources: (RuleMergeSourceJson & { content: string })[] = [];
@@ -2098,7 +2117,11 @@ async function generateRulesMergeDraft(
       : `${runnerDisplayName(selectedRunner)} was not found. Install it or choose another AI tool.`);
   }
 
-  const prompt = buildRulesMergePrompt(sources);
+  const normalizedSteeringPrompt = steeringPrompt?.trim();
+  if ((normalizedSteeringPrompt?.length ?? 0) > rulesSteeringPromptLimit) {
+    throw new InvalidArgumentError(`Draft guidance must be ${rulesSteeringPromptLimit.toLocaleString()} characters or fewer.`);
+  }
+  const prompt = buildRulesMergePrompt(sources, normalizedSteeringPrompt);
   const draft = (await runAiMerge(runner, prompt)).trim();
   if (draft.length === 0) {
     throw new Error(`${runner.provider} returned an empty draft. Retry or choose provider-specific prompts.`);
@@ -2111,7 +2134,10 @@ async function generateRulesMergeDraft(
   };
 }
 
-function buildRulesMergePrompt(sources: (RuleMergeSourceJson & { content: string })[]): string {
+function buildRulesMergePrompt(
+  sources: (RuleMergeSourceJson & { content: string })[],
+  steeringPrompt?: string,
+): string {
   const sections = sources
     .map((source) => [
       `--- ${source.provider} (${source.sourcePath}) ---`,
@@ -2128,6 +2154,11 @@ function buildRulesMergePrompt(sources: (RuleMergeSourceJson & { content: string
     'Return only the merged Markdown draft. Do not wrap it in code fences. Do not include analysis.',
     '',
     sections,
+    ...(steeringPrompt === undefined ? [] : [
+      '',
+      'Additional guidance from the user:',
+      steeringPrompt,
+    ]),
   ].join('\n');
 }
 
