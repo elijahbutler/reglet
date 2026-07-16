@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { providerNames, type ProviderName } from './config.js';
+import { loadConfig, providerNames, saveConfig, setSyncProviders, syncProvidersFor, type ProviderName, type RegletConfig } from './config.js';
 import { sha256String } from './fsutil.js';
 import type { McpEnvironmentValue, McpServerDef, ResolvedMcpServerDef } from './master.js';
 import { regletHome } from './paths.js';
@@ -23,6 +23,7 @@ export interface McpServerEntry {
   overrideOf: string | null;
   affectedProviders: ProviderName[];
   conflictStatus: McpConflictStatus;
+  syncProviders: ProviderName[];
 }
 
 export interface McpListResult {
@@ -71,8 +72,8 @@ export function providerMcpScope(provider: ProviderName): McpScope {
 
 export async function listMcpServers(scopeOrHome: McpScope | string = sharedMcpScope(), maybeHome?: string): Promise<McpListResult> {
   const { scope, home } = normalizeScopeArgs(scopeOrHome, maybeHome);
+  const [config, raw] = await Promise.all([loadConfig(home), readMcpServersFile(mcpServersPath(home, scope))]);
   const serversPath = mcpServersPath(home, scope);
-  const raw = await readMcpServersFile(serversPath);
   const definitions = definitionsFromRaw(raw);
   const sharedDefinitions = scope.kind === 'shared'
     ? definitions
@@ -92,6 +93,9 @@ export async function listMcpServers(scopeOrHome: McpScope | string = sharedMcpS
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([id, definition]) => {
         const issues = validateMcpDefinition(id, definition);
+        const syncProviders = scope.kind === 'shared'
+          ? syncProvidersFor(config, 'mcp', id)
+          : [scope.provider];
         return {
           id,
           name: definition.displayName,
@@ -101,9 +105,10 @@ export async function listMcpServers(scopeOrHome: McpScope | string = sharedMcpS
           issues,
           overrideOf: scope.kind === 'provider' && sharedDefinitions[id] !== undefined ? id : null,
           affectedProviders: scope.kind === 'shared'
-            ? providerNames.filter((provider) => providerDefinitions[provider]?.[id] === undefined)
+            ? syncProviders.filter((provider) => providerDefinitions[provider]?.[id] === undefined)
             : [scope.provider],
           conflictStatus: { state: 'none' },
+          syncProviders,
         };
       }),
   };
@@ -111,6 +116,7 @@ export async function listMcpServers(scopeOrHome: McpScope | string = sharedMcpS
 
 export async function readMcpServer(id: string, scopeOrHome: McpScope | string = sharedMcpScope(), maybeHome?: string): Promise<McpServerEntry> {
   const { scope, home } = normalizeScopeArgs(scopeOrHome, maybeHome);
+  const config = await loadConfig(home);
   validateMcpId(id);
   const servers = definitionsFromRaw(await readMcpServersFile(mcpServersPath(home, scope)));
   const definition = servers[id];
@@ -135,9 +141,23 @@ export async function readMcpServer(id: string, scopeOrHome: McpScope | string =
     server: coerceMcpServerDef(definition.server),
     issues,
     overrideOf: scope.kind === 'provider' && sharedDefinitions[id] !== undefined ? id : null,
-    affectedProviders,
+    affectedProviders: scope.kind === 'shared'
+      ? affectedProviders.filter((provider) => syncProvidersFor(config, 'mcp', id).includes(provider))
+      : affectedProviders,
     conflictStatus: { state: 'none' },
+    syncProviders: scope.kind === 'shared' ? syncProvidersFor(config, 'mcp', id) : [scope.provider],
   };
+}
+
+export async function updateMcpSyncProviders(
+  id: string,
+  providers: readonly ProviderName[],
+  home = regletHome(),
+): Promise<ProviderName[]> {
+  const config = await loadConfig(home);
+  setSyncProviders(config, 'mcp', id, providers);
+  await saveConfig(config, home);
+  return syncProvidersFor(config, 'mcp', id);
 }
 
 export async function upsertMcpServer(
@@ -197,7 +217,12 @@ export async function deleteMcpServer(id: string, scopeOrHome: McpScope | string
 }
 
 export async function listEffectiveMcpServers(provider: ProviderName, home = regletHome()): Promise<EffectiveMcpServerEntry[]> {
-  const shared = definitionsFromRaw(await readMcpServersFile(mcpServersPath(home, sharedMcpScope())));
+  const config = await loadConfig(home);
+  const shared = filterMcpDefinitionsForProvider(
+    definitionsFromRaw(await readMcpServersFile(mcpServersPath(home, sharedMcpScope()))),
+    config,
+    provider,
+  );
   const scoped = definitionsFromRaw(await readMcpServersFile(mcpServersPath(home, providerMcpScope(provider))));
   return effectiveMcpDefinitions(shared, scoped, provider);
 }
@@ -235,6 +260,16 @@ export async function loadMcpDefinitions(home = regletHome()): Promise<{
     ),
   ) as Record<ProviderName, Record<string, McpServerDefinition>>;
   return { shared: definitionsFromRaw(await readMcpServersFile(mcpServersPath(home, sharedMcpScope())), false), providers };
+}
+
+export function filterMcpDefinitionsForProvider(
+  definitions: Record<string, McpServerDefinition>,
+  config: RegletConfig,
+  provider: ProviderName,
+): Record<string, McpServerDefinition> {
+  return Object.fromEntries(
+    Object.entries(definitions).filter(([id]) => syncProvidersFor(config, 'mcp', id).includes(provider)),
+  );
 }
 
 export function resolveEffectiveMcpDefinitions(

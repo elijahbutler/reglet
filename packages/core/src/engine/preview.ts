@@ -129,7 +129,7 @@ async function previewApplyStructuredBody(
       if (content === 'rules') {
         entries.push(await previewRules(adapter, [...master.rules, ...master.providerRules[adapter.id]], home, driftByPath, revisions.compositionRevisions[adapter.id].rules));
       }
-      if (content === 'skills') entries.push(...(await previewSkills(adapter, master, home, driftByPath, revisions.compositionRevisions[adapter.id].skills)));
+      if (content === 'skills') entries.push(...(await previewSkills(adapter, master, config, home, driftByPath, revisions.compositionRevisions[adapter.id].skills)));
       if (content === 'mcp') entries.push(await previewMcp(adapter, home, driftByPath, validationIssues, revisions.compositionRevisions[adapter.id].mcp));
     }
   }
@@ -182,6 +182,7 @@ async function previewRules(
 async function previewSkills(
   adapter: ProviderAdapter,
   master: Awaited<ReturnType<typeof loadMasterDir>>,
+  config: Awaited<ReturnType<typeof loadConfig>>,
   home: string,
   driftByPath: ReadonlyMap<string, DriftStatus>,
   compositionRevision: string,
@@ -189,7 +190,12 @@ async function previewSkills(
   const skillsDir = adapter.skillsDir();
   if (skillsDir === null) return [skipEntry(adapter.id, 'skills', `${adapter.id}:skills unsupported`)];
   const resolved = new Map<string, string>();
-  for (const skill of master.skills) resolved.set(skill.name, path.join(home, 'skills', skill.name));
+  for (const skill of master.skills) {
+    const syncProviders = config.contentSync.skills[skill.name];
+    if (syncProviders === undefined || syncProviders.includes(adapter.id)) {
+      resolved.set(skill.name, path.join(home, 'skills', skill.name));
+    }
+  }
   for (const skill of master.providerSkills[adapter.id]) resolved.set(skill.name, path.join(home, 'skills', adapter.id, skill.name));
   const entries: StructuredApplyPreviewEntry[] = [];
   for (const [name, sourceDir] of [...resolved.entries()].sort(([left], [right]) => left.localeCompare(right))) {

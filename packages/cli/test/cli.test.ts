@@ -802,6 +802,19 @@ describe('reglet CLI', () => {
     expect(mutation.ok).toBe(true);
     expect(await readFile(path.join(home, 'reglet.toml'), 'utf8')).toContain('enabled = false');
     expect(await readFile(path.join(home, 'reglet.toml'), 'utf8')).toContain('rules = true');
+
+    const skillSync = JSON.parse((await runRpc({
+      protocolVersion: 1,
+      operation: 'skills.update-sync',
+      input: { name: 'review', providers: ['claude'] },
+    }, home, providerHome)).stdout) as { ok: true; result: { providers: string[] } };
+    const mcpSync = JSON.parse((await runRpc({
+      protocolVersion: 1,
+      operation: 'mcp.update-sync',
+      input: { id: 'local', providers: ['claude', 'codex'] },
+    }, home, providerHome)).stdout) as { ok: true; result: { providers: string[] } };
+    expect(skillSync.result.providers).toEqual(['claude']);
+    expect(mcpSync.result.providers).toEqual(['claude', 'codex']);
   });
 
   test('manager rpc reads only a provider rules source and does not expose its path', async () => {
@@ -1180,7 +1193,7 @@ describe('reglet CLI', () => {
     const listed = JSON.parse((await runCli(['skills', 'list', '--json'], home, providerHome)).stdout) as {
       version: number;
       regletHome: string;
-      shared: { name: string; path: string; fileCount: number; shadowedBy: string[] }[];
+      shared: { name: string; path: string; fileCount: number; shadowedBy: string[]; syncProviders: string[] }[];
       providerScoped: {
         provider: string;
         name: string;
@@ -1200,6 +1213,7 @@ describe('reglet CLI', () => {
         path: shared,
         fileCount: 1,
         shadowedBy: ['claude'],
+        syncProviders: ['claude', 'codex', 'cursor', 'gemini', 'windsurf', 'opencode'],
       },
     ]);
     expect(listed.providerScoped).toEqual([

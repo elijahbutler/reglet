@@ -216,6 +216,22 @@ describe('applyAll', () => {
     ).rejects.toThrow();
   });
 
+  test('applies a shared skill only to its selected providers', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const config = defaultConfig();
+    config.providers.claude.enabled = true;
+    config.providers.codex.enabled = true;
+    config.contentSync.skills.review = ['claude'];
+    await saveConfig(config, home);
+    await mkdir(path.join(home, 'skills', 'review'), { recursive: true });
+    await writeFile(path.join(home, 'skills', 'review', 'SKILL.md'), 'review');
+
+    await applyAll({ providers: ['claude', 'codex'], contents: ['skills'] });
+
+    expect(await readFile(path.join(providerHome, '.claude', 'skills', 'review', 'SKILL.md'), 'utf8')).toBe('review');
+    await expect(readFile(path.join(providerHome, '.agents', 'skills', 'review', 'SKILL.md'), 'utf8')).rejects.toThrow();
+  });
+
   test('provider-specific skills override shared skills with the same name', async () => {
     const { home, providerHome } = await useTempHomes();
     await enableProviders(home, ['claude', 'codex']);
@@ -282,6 +298,22 @@ describe('applyAll', () => {
 
     expect(claude).toEqual({ theme: 'dark', mcpServers: { userServer: { command: 'python' } } });
     expect(gemini).toEqual({ selectedAuthType: 'oauth', mcpServers: { userServer: { url: 'https://example.test' } } });
+  });
+
+  test('applies a shared MCP server only to its selected providers', async () => {
+    const { home } = await useTempHomes();
+    const config = defaultConfig();
+    config.providers.claude.enabled = true;
+    config.providers.codex.enabled = true;
+    config.contentSync.mcp.local = ['claude'];
+    await saveConfig(config, home);
+    await mkdir(path.join(home, 'mcp'), { recursive: true });
+    await writeFile(path.join(home, 'mcp', 'servers.json'), '{"mcpServers":{"local":{"command":"node"}}}\n');
+
+    await applyAll({ providers: ['claude', 'codex'], contents: ['mcp'] });
+
+    expect(await readAppliedMcp('claude')).toEqual({ local: { command: 'node' } });
+    expect(await readAppliedMcp('codex')).toEqual({});
   });
 
   test('applies shared, provider-only, overrides, and display names for every mcp adapter', async () => {

@@ -254,44 +254,54 @@ describe('Reglet desktop app', () => {
     expect(screen.queryByRole('button', { name: /Gemini/ })).not.toBeInTheDocument();
   });
 
-  test('browses managed and unmanaged skills and confirms conflicting adoption', async () => {
+  test('separates unified and provider-local skills while saving per-skill sync targets', async () => {
     const rpc = vi.fn<ManagerBridge['rpc']>().mockImplementation(async (operation, input): Promise<JsonValue> => {
       if (operation === 'skills.list') return {
         version: 1,
-        shared: [{ name: 'review', fileCount: 1 }],
-        providerScoped: [],
+        shared: [{ name: 'review', path: '/tmp/reglet/skills/review', fileCount: 1, syncProviders: ['claude', 'codex'] }],
+        providerScoped: [{ provider: 'claude', name: 'claude-only', path: '/tmp/reglet/skills/claude/claude-only', fileCount: 1 }],
         unmanaged: [{ provider: 'claude', name: 'local-skill', sharedConflict: 'destination-exists', providerConflict: 'none' }],
       };
-      if (operation === 'skills.tree') return { version: 1, tree: { files: [{ path: 'SKILL.md', bytes: 22 }] } };
       if (operation === 'skills.read') return { version: 1, document: { content: '# Managed skill' } };
       if (operation === 'skills.inspect' && input !== undefined && 'path' in input) return { version: 1, document: { content: '# Unmanaged notes' } };
-      if (operation === 'skills.inspect') return { version: 1, tree: { files: [{ path: 'README.md', bytes: 17 }] } };
       return { version: 1 };
     });
     render(<App bridge={bridge(snapshotFixture(), rpc)} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Skills' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Load skills' }));
-    fireEvent.click(await screen.findByRole('button', { name: /review.*shared.*1 files/ }));
-    expect(await screen.findByLabelText('Skill file')).toHaveValue('# Managed skill');
-    fireEvent.click(screen.getByRole('button', { name: /local-skill.*unmanaged/ }));
-    await waitFor(() => expect(screen.getByLabelText('Skill name')).toHaveValue('local-skill'));
-    fireEvent.click(await screen.findByRole('button', { name: /README.md · 17 B/ }));
-    await waitFor(() => expect(screen.getByLabelText('Skill file')).toHaveValue('# Unmanaged notes'));
-    fireEvent.click(screen.getByRole('button', { name: 'Adopt' }));
-    expect(screen.getByRole('dialog')).toHaveTextContent('destination exists');
+    expect(await screen.findByRole('region', { name: 'Unified skills' })).toHaveTextContent('review');
+    expect(screen.getByRole('region', { name: 'Limited and provider-only skills' })).toHaveTextContent('claude-only');
+    expect(screen.getByRole('region', { name: 'Provider-local skills' })).toHaveTextContent('local-skill');
+    fireEvent.click(screen.getByText('review', { exact: true }));
+    expect(await screen.findByLabelText('Skill content')).toHaveValue('# Managed skill');
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Codex' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(rpc).toHaveBeenCalledWith('skills.update-sync', { name: 'review', providers: ['claude'] }));
+    fireEvent.click(screen.getByText('local-skill', { exact: true }));
+    await waitFor(() => expect(screen.getByLabelText('Skill content')).toHaveValue('# Unmanaged notes'));
+    expect(screen.getByLabelText('Skill content')).toHaveAttribute('readonly');
   });
 
-  test('loads MCP servers and requires confirmation for digest-backed apply', async () => {
-    const rpc = vi.fn<ManagerBridge['rpc']>().mockImplementation(async (operation): Promise<JsonValue> => {
-      if (operation === 'mcp.list') return { version: 1, servers: [{ id: 'local', displayName: 'Local', server: { command: 'node', args: [] }, issues: [] }] };
+  test('separates unified and provider-only MCP servers and requires confirmation for digest-backed apply', async () => {
+    const rpc = vi.fn<ManagerBridge['rpc']>().mockImplementation(async (operation, input): Promise<JsonValue> => {
+      if (operation === 'mcp.list') {
+        if (input !== undefined && 'scope' in input && input.scope === 'provider' && input.provider === 'claude') {
+          return { version: 1, path: '/tmp/reglet/mcp/providers/claude/servers.json', servers: [{ id: 'claude-only', displayName: 'Claude only', scope: { kind: 'provider', provider: 'claude' }, server: { command: 'claude-node' }, issues: [] }] };
+        }
+        if (input !== undefined && 'scope' in input && input.scope === 'provider') return { version: 1, path: '/tmp/reglet/mcp/providers/codex/servers.json', servers: [] };
+        return { version: 1, path: '/tmp/reglet/mcp/servers.json', servers: [{ id: 'local', displayName: 'Local', scope: { kind: 'shared' }, syncProviders: ['claude', 'codex'], server: { command: 'node', args: [] }, issues: [] }] };
+      }
       if (operation === 'structured-preview.preview') return { version: 1, digest: 'digest-1', entries: [{ provider: 'claude', content: 'rules', operation: 'write', path: '/tmp/rules', diff: '+new' }] };
       return { version: 1 };
     });
     render(<App bridge={bridge(snapshotFixture(), rpc)} />);
     fireEvent.click(await screen.findByRole('button', { name: 'MCP' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Load servers' }));
-    fireEvent.click(await screen.findByRole('button', { name: /Local.*local/ }));
+    expect(await screen.findByRole('region', { name: 'Unified MCP servers' })).toHaveTextContent('Local');
+    expect(screen.getByRole('region', { name: 'Limited and provider-only MCP servers' })).toHaveTextContent('Claude only');
+    fireEvent.click(screen.getByText('Local', { exact: true }));
     expect((screen.getByLabelText('Server JSON') as HTMLTextAreaElement).value).toContain('"command": "node"');
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Codex' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(rpc).toHaveBeenCalledWith('mcp.update-sync', { id: 'local', providers: ['claude'] }));
     fireEvent.click(screen.getByRole('button', { name: 'Activity & Drift' }));
     fireEvent.click(screen.getByRole('button', { name: 'Review & Apply' }));
     expect(await screen.findByText('+new')).toBeInTheDocument();

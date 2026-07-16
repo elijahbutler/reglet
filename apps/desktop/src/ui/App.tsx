@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  ChevronRight,
   CheckCircle2,
   Download,
   FileText,
@@ -11,7 +12,6 @@ import {
   RotateCcw,
   ShieldAlert,
   Sparkles,
-  Trash2,
   Wrench,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -47,13 +47,10 @@ interface SkillSummary {
   name: string;
   scope: 'shared' | 'provider' | 'unmanaged';
   provider?: ManagerProviderId;
+  path?: string;
   fileCount: number;
   conflict: boolean;
-}
-
-interface SkillFile {
-  path: string;
-  bytes: number;
+  syncProviders: ManagerProviderId[];
 }
 
 interface McpServerSummary {
@@ -61,6 +58,10 @@ interface McpServerSummary {
   displayName: string;
   server: JsonObject;
   issues: string[];
+  scope: 'shared' | 'provider';
+  provider?: ManagerProviderId;
+  path: string;
+  syncProviders: ManagerProviderId[];
 }
 
 const contentIds: ManagerContentId[] = ['rules', 'skills', 'mcp'];
@@ -73,36 +74,32 @@ interface DraftState {
   rulesPath: string;
   rulesText: string;
   skillName: string;
-  skillNewName: string;
-  skillPath: string;
-  skillNewPath: string;
   skillText: string;
   skillScope: 'shared' | 'provider';
   skillProvider: ManagerProviderId;
-  adoptProvider: ManagerProviderId;
+  skillSyncProviders: ManagerProviderId[];
   mcpId: string;
   mcpDisplayName: string;
   mcpProvider: ManagerProviderId;
   mcpScope: 'shared' | 'provider';
   mcpText: string;
+  mcpSyncProviders: ManagerProviderId[];
 }
 
 const initialDrafts: DraftState = {
   rulesPath: 'AGENTS.md',
   rulesText: '',
   skillName: 'review',
-  skillNewName: 'review-renamed',
-  skillPath: 'SKILL.md',
-  skillNewPath: 'README.md',
   skillText: '# Skill\n',
   skillScope: 'shared',
   skillProvider: 'claude',
-  adoptProvider: 'claude',
+  skillSyncProviders: [],
   mcpId: 'local-server',
   mcpDisplayName: 'Local server',
   mcpProvider: 'claude',
   mcpScope: 'shared',
   mcpText: '{\n  "command": "node",\n  "args": []\n}',
+  mcpSyncProviders: [],
 };
 
 export function App({ bridge }: AppProps) {
@@ -124,9 +121,9 @@ export function App({ bridge }: AppProps) {
   const [selectedRuleDocument, setSelectedRuleDocument] = useState<RuleDocument | null>(null);
   const [mergeRunners, setMergeRunners] = useState<MergeRunner[]>([]);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
-  const [skillFiles, setSkillFiles] = useState<SkillFile[]>([]);
   const [selectedSkill, setSelectedSkill] = useState<SkillSummary | null>(null);
   const [mcpServers, setMcpServers] = useState<McpServerSummary[]>([]);
+  const [selectedMcpServer, setSelectedMcpServer] = useState<McpServerSummary | null>(null);
   const [showsOnboarding, setShowsOnboarding] = useState(false);
   const promptedForOnboarding = useRef(false);
 
@@ -181,6 +178,18 @@ export function App({ bridge }: AppProps) {
   useEffect(() => {
     if (section === 'Rules' && snapshot !== null && ruleDocuments.length === 0 && !busy) {
       void loadRules();
+    }
+  }, [section, snapshot]);
+
+  useEffect(() => {
+    if (section === 'Skills' && snapshot !== null && skills.length === 0 && !busy) {
+      void loadSkills();
+    }
+  }, [section, snapshot]);
+
+  useEffect(() => {
+    if (section === 'MCP' && snapshot !== null && mcpServers.length === 0 && !busy) {
+      void loadMcpServers();
     }
   }, [section, snapshot]);
 
@@ -354,37 +363,14 @@ export function App({ bridge }: AppProps) {
         ...current,
         skillName: skill.name,
         skillScope: scope,
-        ...(skill.provider === undefined ? {} : { skillProvider: skill.provider, adoptProvider: skill.provider }),
+        skillSyncProviders: skill.syncProviders,
+        ...(skill.provider === undefined ? {} : { skillProvider: skill.provider }),
       }));
-      const result = skill.scope === 'unmanaged'
-        ? jsonObject(await bridge.rpc('skills.inspect', { provider: skill.provider ?? 'claude', name: skill.name }))
-        : jsonObject(await bridge.rpc('skills.tree', skillScopeInput(scope, skill.provider, { name: skill.name })));
-      const tree = objectFromUnknown(result.tree);
-      const files = objectArray(tree?.files).map(skillFileFromJson).filter(isDefined);
-      setSkillFiles(files);
-      if (files.some((file) => file.path === 'SKILL.md')) {
-        const fileResult = skill.scope === 'unmanaged'
-          ? jsonObject(await bridge.rpc('skills.inspect', { provider: skill.provider ?? 'claude', name: skill.name, path: 'SKILL.md' }))
-          : jsonObject(await bridge.rpc('skills.read', skillScopeInput(scope, skill.provider, { name: skill.name, path: 'SKILL.md' })));
-        const document = objectFromUnknown(fileResult.document);
-        setDrafts((current) => ({ ...current, skillPath: 'SKILL.md', skillText: String(document?.content ?? '') }));
-      }
-      setDirty(false);
-    } catch (skillError) {
-      setError(errorMessage(skillError));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const readSkillDocument = async (path: string) => {
-    setBusy(true);
-    try {
-      const result = selectedSkill?.scope === 'unmanaged'
-        ? jsonObject(await bridge.rpc('skills.inspect', { provider: selectedSkill.provider ?? drafts.adoptProvider, name: selectedSkill.name, path }))
-        : jsonObject(await bridge.rpc('skills.read', skillMutationInput(drafts, { path })));
-      const document = objectFromUnknown(result.document);
-      setDrafts((current) => ({ ...current, skillPath: path, skillText: String(document?.content ?? '') }));
+      const fileResult = skill.scope === 'unmanaged'
+        ? jsonObject(await bridge.rpc('skills.inspect', { provider: skill.provider ?? 'claude', name: skill.name, path: 'SKILL.md' }))
+        : jsonObject(await bridge.rpc('skills.read', skillScopeInput(scope, skill.provider, { name: skill.name, path: 'SKILL.md' })));
+      const document = objectFromUnknown(fileResult.document);
+      setDrafts((current) => ({ ...current, skillText: String(document?.content ?? '') }));
       setDirty(false);
     } catch (skillError) {
       setError(errorMessage(skillError));
@@ -397,15 +383,36 @@ export function App({ bridge }: AppProps) {
     setBusy(true);
     setError(null);
     try {
-      const result = jsonObject(await bridge.rpc('mcp.list', mcpScopeInput(drafts)));
-      const servers = objectArray(result.servers).map(mcpServerFromJson).filter(isDefined);
+      const results = await Promise.all([
+        bridge.rpc('mcp.list', {}),
+        ...providers.map((provider) => bridge.rpc('mcp.list', { scope: 'provider', provider })),
+      ]);
+      const servers = results.flatMap((raw) => {
+        const result = jsonObject(raw);
+        const path = typeof result.path === 'string' ? result.path : '';
+        return objectArray(result.servers).map((server) => mcpServerFromJson(server, path)).filter(isDefined);
+      });
       setMcpServers(servers);
-      setNotice(`Loaded ${servers.length} MCP servers.`);
+      setNotice(`Loaded ${servers.length} unified and provider-scoped MCP servers.`);
     } catch (listError) {
       setError(errorMessage(listError));
     } finally {
       setBusy(false);
     }
+  };
+
+  const selectMcpServer = (server: McpServerSummary) => {
+    setSelectedMcpServer(server);
+    setDrafts((current) => ({
+      ...current,
+      mcpId: server.id,
+      mcpDisplayName: server.displayName,
+      mcpScope: server.scope,
+      mcpProvider: server.provider ?? current.mcpProvider,
+      mcpText: JSON.stringify(server.server, null, 2),
+      mcpSyncProviders: server.syncProviders,
+    }));
+    setDirty(false);
   };
 
   const mergeRulesWithAi = (runner: ManagerMergeRunnerId) => {
@@ -427,11 +434,49 @@ export function App({ bridge }: AppProps) {
     });
   };
 
-  const saveMcp = async () => {
+  const saveSkill = async () => {
+    if (selectedSkill === null || selectedSkill.scope === 'unmanaged') return;
+    setBusy(true);
+    setError(null);
     try {
-      await mutate('mcp.upsert', mcpInput(drafts), 'MCP server saved.');
+      await bridge.rpc('skills.write', skillMutationInput(drafts, { path: 'SKILL.md', content: drafts.skillText }));
+      if (drafts.skillScope === 'shared') {
+        await bridge.rpc('skills.update-sync', { name: drafts.skillName, providers: drafts.skillSyncProviders });
+      }
+      setSkills((current) => current.map((skill) => skillKey(skill) === skillKey(selectedSkill)
+        ? { ...skill, syncProviders: drafts.skillSyncProviders }
+        : skill));
+      setSelectedSkill((current) => current === null ? null : { ...current, syncProviders: drafts.skillSyncProviders });
+      setDirty(false);
+      setNotice('Skill saved.');
+    } catch (skillError) {
+      setError(errorMessage(skillError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveMcp = async () => {
+    if (selectedMcpServer === null) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await bridge.rpc('mcp.upsert', mcpInput(drafts));
+      if (drafts.mcpScope === 'shared') {
+        await bridge.rpc('mcp.update-sync', { id: drafts.mcpId, providers: drafts.mcpSyncProviders });
+      }
+      setMcpServers((current) => current.map((server) => mcpServerKey(server) === mcpServerKey(selectedMcpServer)
+        ? { ...server, server: parseMcpDraft(drafts.mcpText), syncProviders: drafts.mcpSyncProviders }
+        : server));
+      setSelectedMcpServer((current) => current === null
+        ? null
+        : { ...current, server: parseMcpDraft(drafts.mcpText), syncProviders: drafts.mcpSyncProviders });
+      setDirty(false);
+      setNotice('MCP server saved.');
     } catch (mcpError) {
       setError(errorMessage(mcpError));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -560,20 +605,12 @@ export function App({ bridge }: AppProps) {
                   setDrafts={setDrafts}
                   setDirty={setDirty}
                   skills={skills}
-                  files={skillFiles}
+                  selectedSkill={selectedSkill}
+                  providers={syncProviders(snapshot, 'skills')}
                   onLoad={() => void loadSkills()}
                   onSelect={(skill) => void selectSkill(skill)}
-                  onReadFile={(path) => void readSkillDocument(path)}
-                  onCreate={() => void mutate('skills.create', skillMutationInput(drafts, { content: drafts.skillText }), 'Skill created.')}
-                  onWrite={() => void mutate('skills.write', skillMutationInput(drafts, { path: drafts.skillPath, content: drafts.skillText }), 'Skill file saved.')}
-                  onRename={() => void mutate('skills.rename', skillMutationInput(drafts, { newName: drafts.skillNewName }), 'Skill renamed.')}
-                  onRenameFile={() => void mutate('skills.rename-file', skillMutationInput(drafts, { path: drafts.skillPath, newPath: drafts.skillNewPath }), 'Skill file renamed.')}
-                  onDeleteFile={() => setDialog({ kind: 'destructive', title: 'Delete skill file', body: `Delete ${drafts.skillPath} from ${drafts.skillName}?`, actionLabel: 'Delete file', run: () => mutate('skills.delete-file', skillMutationInput(drafts, { path: drafts.skillPath }), 'Skill file deleted.') })}
-                  onAdopt={() => {
-                    const conflict = skills.find((skill) => skill.scope === 'unmanaged' && skill.provider === drafts.adoptProvider && skill.name === drafts.skillName)?.conflict ?? false;
-                    setDialog({ kind: 'destructive', title: 'Adopt unmanaged skill', body: conflict ? 'The destination exists. Replace it with this provider-local skill?' : 'Copy this provider-local skill into Reglet while preserving its source?', actionLabel: conflict ? 'Replace and adopt' : 'Adopt skill', run: () => mutate('skills.adopt', { provider: drafts.adoptProvider, name: drafts.skillName, scope: drafts.skillScope, overwrite: conflict }, 'Unmanaged skill adopted.') });
-                  }}
-                  onDelete={() => setDialog({ kind: 'destructive', title: 'Delete skill', body: `Delete ${drafts.skillName} from ${drafts.skillScope} skills?`, actionLabel: 'Delete skill', run: () => mutate('skills.delete', skillMutationInput(drafts), 'Skill deleted.') })}
+                  onSave={() => void saveSkill()}
+                  onOpenLocation={(path) => void openRuleLocation(path)}
                   busy={busy}
                 />
               )}
@@ -584,10 +621,12 @@ export function App({ bridge }: AppProps) {
                   setDrafts={setDrafts}
                   setDirty={setDirty}
                   servers={mcpServers}
+                  selectedServer={selectedMcpServer}
+                  providers={syncProviders(snapshot, 'mcp')}
                   onLoad={() => void loadMcpServers()}
-                  onSelect={(server) => { setDrafts((current) => ({ ...current, mcpId: server.id, mcpDisplayName: server.displayName, mcpText: JSON.stringify(server.server, null, 2) })); setDirty(false); }}
+                  onSelect={selectMcpServer}
                   onSave={() => void saveMcp()}
-                  onDelete={() => setDialog({ kind: 'destructive', title: 'Delete MCP server', body: `Delete ${drafts.mcpId} from ${drafts.mcpScope} MCP?`, actionLabel: 'Delete server', run: () => mutate('mcp.delete', mcpDeleteInput(drafts), 'MCP server deleted.') })}
+                  onOpenLocation={(path) => void openRuleLocation(path)}
                   busy={busy}
                 />
               )}
@@ -742,7 +781,7 @@ function RulesView(props: {
               <div key={ruleDocumentKey(document)} className="row-card flex items-center justify-between gap-3">
                 <button className="min-w-0 flex-1 text-left" onClick={() => props.onSelect(document)} disabled={props.busy} aria-label={`Edit ${ruleDocumentLabel(document)}`}>
                   <strong className="block truncate">{ruleDocumentTitle(document)}</strong>
-                  <span className="block truncate text-xs text-reglet-muted">{document.path}</span>
+                  <span className="block truncate text-xs text-reglet-muted">{fileName(document.path)}</span>
                 </button>
                 <button className="icon-button" onClick={() => props.onOpenLocation(resolveRulePath(props.regletHome, document.path))} disabled={props.busy} aria-label={`Open file location for ${ruleDocumentLabel(document)}`}>
                   <FolderOpen size={16} aria-hidden="true" />
@@ -772,35 +811,68 @@ function SkillsView(props: {
   setDrafts: (drafts: DraftState | ((current: DraftState) => DraftState)) => void;
   setDirty: (dirty: boolean) => void;
   skills: SkillSummary[];
-  files: SkillFile[];
+  selectedSkill: SkillSummary | null;
+  providers: ManagerProviderId[];
   onLoad: () => void;
   onSelect: (skill: SkillSummary) => void;
-  onReadFile: (path: string) => void;
-  onCreate: () => void;
-  onWrite: () => void;
-  onRename: () => void;
-  onRenameFile: () => void;
-  onDeleteFile: () => void;
-  onAdopt: () => void;
-  onDelete: () => void;
+  onSave: () => void;
+  onOpenLocation: (path: string) => void;
   busy: boolean;
 }) {
+  const unified = props.skills.filter((skill) => skill.scope === 'shared' && isSyncedToEveryProvider(skill.syncProviders, props.providers));
+  const limited = props.skills.filter((skill) => skill.scope !== 'unmanaged' && !unified.includes(skill));
+  const providerLocal = props.skills.filter((skill) => skill.scope === 'unmanaged');
   return (
-    <Panel title="Skills" action={<div className="flex flex-wrap gap-2"><button className="secondary-button" onClick={props.onLoad} disabled={props.busy}>Load skills</button><button className="secondary-button" onClick={props.onCreate} disabled={props.busy}>Create</button><button className="primary-button" onClick={props.onWrite} disabled={props.busy}>Save file</button><button className="secondary-button" onClick={props.onRename} disabled={props.busy}>Rename skill</button><button className="secondary-button" onClick={props.onRenameFile} disabled={props.busy}>Rename file</button><button className="secondary-button" onClick={props.onAdopt} disabled={props.busy}>Adopt</button><button className="danger-button" onClick={props.onDeleteFile} disabled={props.busy}>Delete file</button><button className="danger-button" onClick={props.onDelete} disabled={props.busy}><Trash2 size={16} aria-hidden="true" /> Delete</button></div>}>
-      <p className="mb-3 text-sm text-reglet-muted">Shared skills: {props.snapshot.master.skills.sharedSkills}. Provider-scoped skills: {sumRecord(props.snapshot.master.skills.providerScopedSkills)}.</p>
-      {props.skills.length > 0 && <div className="mb-4 grid grid-cols-2 gap-2" aria-label="Skills browser">{props.skills.map((skill) => <button className="row-card text-left" key={`${skill.scope}-${skill.provider ?? 'shared'}-${skill.name}`} onClick={() => props.onSelect(skill)}><strong>{skill.name}</strong><span className="ml-2 text-xs text-reglet-muted">{skill.scope}{skill.provider === undefined ? '' : ` · ${skill.provider}`} · {skill.fileCount} files{skill.conflict ? ' · conflict' : ''}</span></button>)}</div>}
-      <div className="grid grid-cols-2 gap-3">
-        <label className="field-label">Skill name<input className="text-input" value={props.drafts.skillName} onChange={(event) => { updateDraft(props.setDrafts, 'skillName', event.currentTarget.value); props.setDirty(true); }} /></label>
-        <label className="field-label">New skill name<input className="text-input" value={props.drafts.skillNewName} onChange={(event) => { updateDraft(props.setDrafts, 'skillNewName', event.currentTarget.value); props.setDirty(true); }} /></label>
-        <label className="field-label">File path<input className="text-input" value={props.drafts.skillPath} onChange={(event) => { updateDraft(props.setDrafts, 'skillPath', event.currentTarget.value); props.setDirty(true); }} /></label>
-        <label className="field-label">New file path<input className="text-input" value={props.drafts.skillNewPath} onChange={(event) => { updateDraft(props.setDrafts, 'skillNewPath', event.currentTarget.value); props.setDirty(true); }} /></label>
-        <label className="field-label">Adopt from provider<input className="text-input" value={props.drafts.adoptProvider} onChange={(event) => { updateDraft(props.setDrafts, 'adoptProvider', event.currentTarget.value as ManagerProviderId); props.setDirty(true); }} /></label>
-        <label className="field-label">Scope<select className="text-input" value={props.drafts.skillScope} onChange={(event) => { updateDraft(props.setDrafts, 'skillScope', event.currentTarget.value === 'provider' ? 'provider' : 'shared'); props.setDirty(true); }}><option value="shared">Shared</option><option value="provider">Provider</option></select></label>
-        <label className="field-label">Scope provider<input className="text-input" disabled={props.drafts.skillScope === 'shared'} value={props.drafts.skillProvider} onChange={(event) => { updateDraft(props.setDrafts, 'skillProvider', event.currentTarget.value as ManagerProviderId); props.setDirty(true); }} /></label>
-      </div>
-      {props.files.length > 0 && <div className="mt-3 flex flex-wrap gap-2" aria-label="Skill files">{props.files.map((file) => <button className="secondary-button" key={file.path} onClick={() => props.onReadFile(file.path)}>{file.path} · {file.bytes} B</button>)}</div>}
-      <label className="field-label mt-3">Skill file<textarea className="editor" value={props.drafts.skillText} onChange={(event) => { updateDraft(props.setDrafts, 'skillText', event.currentTarget.value); props.setDirty(true); }} /></label>
+    <Panel title="Skills" action={<button className="secondary-button" onClick={props.onLoad} disabled={props.busy}>Refresh</button>}>
+      <p className="mb-4 text-sm text-reglet-muted">Edit the shared source once, then choose its provider targets in Advanced settings.</p>
+      <SkillGroup {...props} title="Unified skills" skills={unified} />
+      <SkillGroup {...props} title="Limited and provider-only skills" skills={limited} />
+      <SkillGroup {...props} title="Provider-local skills" skills={providerLocal} />
     </Panel>
+  );
+}
+
+function SkillGroup(props: Omit<Parameters<typeof SkillsView>[0], 'snapshot'> & { title: string; skills: SkillSummary[] }) {
+  if (props.skills.length === 0) return null;
+  return (
+    <section className="mb-5 last:mb-0" aria-label={props.title}>
+      <h2 className="mb-2 text-sm font-semibold text-reglet-text">{props.title}</h2>
+      <div className="grid gap-2">
+        {props.skills.map((skill) => <SkillDisclosure key={skillKey(skill)} skill={skill} {...props} />)}
+      </div>
+    </section>
+  );
+}
+
+function SkillDisclosure(props: Omit<Parameters<typeof SkillsView>[0], 'snapshot' | 'skills'> & { skill: SkillSummary }) {
+  const selected = props.selectedSkill !== null && skillKey(props.selectedSkill) === skillKey(props.skill);
+  const editable = props.skill.scope !== 'unmanaged';
+  return (
+    <details className="row-card disclosure" open={selected}>
+      <summary onClick={(event) => { event.preventDefault(); props.onSelect(props.skill); }}>
+        <ChevronRight size={16} aria-hidden="true" />
+        <span className="min-w-0 flex-1">
+          <strong className="block truncate">{props.skill.name}</strong>
+          <span className="block truncate text-xs text-reglet-muted">{skillScopeLabel(props.skill)}{props.skill.conflict ? ' · conflict' : ''}</span>
+        </span>
+        {props.skill.path !== undefined && <button className="icon-button" type="button" aria-label={`Open file location for ${props.skill.name}`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); props.onOpenLocation(props.skill.path ?? ''); }} disabled={props.busy}><FolderOpen size={16} aria-hidden="true" /></button>}
+      </summary>
+      {selected && (
+        <div className="mt-4 grid gap-3 border-t border-reglet-line pt-4">
+          <label className="field-label">Skill content<textarea className="editor" aria-label="Skill content" readOnly={!editable} value={props.drafts.skillText} onChange={(event) => { updateDraft(props.setDrafts, 'skillText', event.currentTarget.value); props.setDirty(true); }} /></label>
+          {editable ? (
+            <details className="advanced-settings">
+              <summary>Advanced settings</summary>
+              {props.skill.scope === 'shared' ? <ProviderSyncChecklist providers={props.providers} selected={props.drafts.skillSyncProviders} label="Skill sync providers" onChange={(providers) => { updateDraft(props.setDrafts, 'skillSyncProviders', providers); props.setDirty(true); }} /> : <p className="mt-3 text-sm text-reglet-muted">This skill is scoped to {providerLabel(props.skill.provider ?? 'claude')}.</p>}
+            </details>
+          ) : <p className="text-sm text-reglet-muted">This provider-local skill is not managed by Reglet.</p>}
+          <div className="flex flex-wrap gap-2">
+            <button className="secondary-button" onClick={() => props.onSelect(props.skill)} disabled={props.busy}>Refresh content</button>
+            {editable && <button className="primary-button" onClick={props.onSave} disabled={props.busy}>Save</button>}
+          </div>
+        </div>
+      )}
+    </details>
   );
 }
 
@@ -810,24 +882,82 @@ function McpView(props: {
   setDrafts: (drafts: DraftState | ((current: DraftState) => DraftState)) => void;
   setDirty: (dirty: boolean) => void;
   servers: McpServerSummary[];
+  selectedServer: McpServerSummary | null;
+  providers: ManagerProviderId[];
   onLoad: () => void;
   onSelect: (server: McpServerSummary) => void;
   onSave: () => void;
-  onDelete: () => void;
+  onOpenLocation: (path: string) => void;
   busy: boolean;
 }) {
+  const unified = props.servers.filter((server) => server.scope === 'shared' && isSyncedToEveryProvider(server.syncProviders, props.providers));
+  const limited = props.servers.filter((server) => !unified.includes(server));
   return (
-    <Panel title="MCP" action={<div className="flex gap-2"><button className="secondary-button" onClick={props.onLoad} disabled={props.busy}>Load servers</button><button className="primary-button" onClick={props.onSave} disabled={props.busy}>Save server</button><button className="danger-button" onClick={props.onDelete} disabled={props.busy}><Trash2 size={16} aria-hidden="true" /> Delete</button></div>}>
-      <p className="mb-3 text-sm text-reglet-muted">Shared servers: {props.snapshot.master.mcp.sharedServers.length}. Missing environment variables block review and apply.</p>
-      {props.servers.length > 0 && <div className="mb-4 grid grid-cols-2 gap-2" aria-label="MCP servers">{props.servers.map((server) => <button className="row-card text-left" key={server.id} onClick={() => props.onSelect(server)}><strong>{server.displayName}</strong><span className="ml-2 text-xs text-reglet-muted">{server.id}{server.issues.length === 0 ? '' : ` · ${server.issues.join('; ')}`}</span></button>)}</div>}
-      <div className="grid grid-cols-2 gap-3">
-        <label className="field-label">Server id<input className="text-input" value={props.drafts.mcpId} onChange={(event) => { updateDraft(props.setDrafts, 'mcpId', event.currentTarget.value); props.setDirty(true); }} /></label>
-        <label className="field-label">Display name<input className="text-input" value={props.drafts.mcpDisplayName} onChange={(event) => { updateDraft(props.setDrafts, 'mcpDisplayName', event.currentTarget.value); props.setDirty(true); }} /></label>
-        <label className="field-label">Scope<select className="text-input" value={props.drafts.mcpScope} onChange={(event) => { updateDraft(props.setDrafts, 'mcpScope', event.currentTarget.value === 'provider' ? 'provider' : 'shared'); props.setDirty(true); }}><option value="shared">Shared</option><option value="provider">Provider</option></select></label>
-        <label className="field-label">Provider<input className="text-input" value={props.drafts.mcpProvider} onChange={(event) => { updateDraft(props.setDrafts, 'mcpProvider', event.currentTarget.value as ManagerProviderId); props.setDirty(true); }} /></label>
-      </div>
-      <label className="field-label mt-3">Server JSON<textarea className="editor" value={props.drafts.mcpText} onChange={(event) => { updateDraft(props.setDrafts, 'mcpText', event.currentTarget.value); props.setDirty(true); }} /></label>
+    <Panel title="MCP" action={<button className="secondary-button" onClick={props.onLoad} disabled={props.busy}>Refresh</button>}>
+      <p className="mb-4 text-sm text-reglet-muted">Edit each server once, then limit its provider targets in Advanced settings.</p>
+      <McpGroup {...props} title="Unified MCP servers" servers={unified} />
+      <McpGroup {...props} title="Limited and provider-only MCP servers" servers={limited} />
     </Panel>
+  );
+}
+
+function McpGroup(props: Omit<Parameters<typeof McpView>[0], 'snapshot'> & { title: string; servers: McpServerSummary[] }) {
+  if (props.servers.length === 0) return null;
+  return (
+    <section className="mb-5 last:mb-0" aria-label={props.title}>
+      <h2 className="mb-2 text-sm font-semibold text-reglet-text">{props.title}</h2>
+      <div className="grid gap-2">
+        {props.servers.map((server) => <McpDisclosure key={mcpServerKey(server)} server={server} {...props} />)}
+      </div>
+    </section>
+  );
+}
+
+function McpDisclosure(props: Omit<Parameters<typeof McpView>[0], 'snapshot' | 'servers'> & { server: McpServerSummary }) {
+  const selected = props.selectedServer !== null && mcpServerKey(props.selectedServer) === mcpServerKey(props.server);
+  return (
+    <details className="row-card disclosure" open={selected}>
+      <summary onClick={(event) => { event.preventDefault(); props.onSelect(props.server); }}>
+        <ChevronRight size={16} aria-hidden="true" />
+        <span className="min-w-0 flex-1">
+          <strong className="block truncate">{props.server.displayName}</strong>
+          <span className="block truncate text-xs text-reglet-muted">{mcpScopeLabel(props.server)}{props.server.issues.length === 0 ? '' : ` · ${props.server.issues.join('; ')}`}</span>
+        </span>
+        <button className="icon-button" type="button" aria-label={`Open file location for ${props.server.displayName}`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); props.onOpenLocation(props.server.path); }} disabled={props.busy}><FolderOpen size={16} aria-hidden="true" /></button>
+      </summary>
+      {selected && (
+        <div className="mt-4 grid gap-3 border-t border-reglet-line pt-4">
+          <label className="field-label">Server JSON<textarea className="editor" aria-label="Server JSON" value={props.drafts.mcpText} onChange={(event) => { updateDraft(props.setDrafts, 'mcpText', event.currentTarget.value); props.setDirty(true); }} /></label>
+          <details className="advanced-settings">
+            <summary>Advanced settings</summary>
+            {props.server.scope === 'shared' ? <ProviderSyncChecklist providers={props.providers} selected={props.drafts.mcpSyncProviders} label="MCP sync providers" onChange={(providers) => { updateDraft(props.setDrafts, 'mcpSyncProviders', providers); props.setDirty(true); }} /> : <p className="mt-3 text-sm text-reglet-muted">This server is scoped to {providerLabel(props.server.provider ?? 'claude')}.</p>}
+          </details>
+          <div className="flex flex-wrap gap-2">
+            <button className="secondary-button" onClick={() => props.onSelect(props.server)} disabled={props.busy}>Refresh content</button>
+            <button className="primary-button" onClick={props.onSave} disabled={props.busy}>Save</button>
+          </div>
+        </div>
+      )}
+    </details>
+  );
+}
+
+function ProviderSyncChecklist(props: {
+  providers: ManagerProviderId[];
+  selected: ManagerProviderId[];
+  label: string;
+  onChange: (providers: ManagerProviderId[]) => void;
+}) {
+  return (
+    <fieldset className="mt-3 grid gap-2" aria-label={props.label}>
+      <legend className="text-sm text-reglet-muted">Sync to providers</legend>
+      <div className="flex flex-wrap gap-2">
+        {props.providers.map((provider) => {
+          const checked = props.selected.includes(provider);
+          return <label className="segmented" key={provider}><input type="checkbox" checked={checked} onChange={() => props.onChange(checked ? props.selected.filter((item) => item !== provider) : [...props.selected, provider])} />{providerLabel(provider)}</label>;
+        })}
+      </div>
+    </fieldset>
   );
 }
 
@@ -1078,28 +1208,19 @@ function parseMcpDraft(text: string): JsonObject {
   throw new Error('MCP server JSON must be an object.');
 }
 
-function mcpInput(drafts: DraftState): JsonObject {
+function mcpInput(drafts: DraftState): JsonObject & {
+  id: string;
+  displayName: string;
+  scope: 'shared' | 'provider';
+  provider?: ManagerProviderId;
+  server: JsonObject;
+} {
   return {
     id: drafts.mcpId,
     displayName: drafts.mcpDisplayName,
     scope: drafts.mcpScope,
     ...(drafts.mcpScope === 'provider' ? { provider: drafts.mcpProvider } : {}),
     server: parseMcpDraft(drafts.mcpText),
-  };
-}
-
-function mcpDeleteInput(drafts: DraftState): JsonObject {
-  return {
-    id: drafts.mcpId,
-    scope: drafts.mcpScope,
-    ...(drafts.mcpScope === 'provider' ? { provider: drafts.mcpProvider } : {}),
-  };
-}
-
-function mcpScopeInput(drafts: DraftState): JsonObject {
-  return {
-    scope: drafts.mcpScope,
-    ...(drafts.mcpScope === 'provider' ? { provider: drafts.mcpProvider } : {}),
   };
 }
 
@@ -1173,6 +1294,41 @@ function providerLabel(provider: ManagerProviderId): string {
   }
 }
 
+function syncProviders(snapshot: ManagerSnapshotV2, content: 'skills' | 'mcp'): ManagerProviderId[] {
+  return snapshot.providerDiscovery
+    .filter((provider) => provider.capabilities[content].state !== 'unsupported')
+    .map((provider) => provider.provider);
+}
+
+function isSyncedToEveryProvider(selected: ManagerProviderId[], providers: ManagerProviderId[]): boolean {
+  return providers.length > 0 && providers.every((provider) => selected.includes(provider));
+}
+
+function skillKey(skill: SkillSummary): string {
+  return `${skill.scope}:${skill.provider ?? 'shared'}:${skill.name}`;
+}
+
+function skillScopeLabel(skill: SkillSummary): string {
+  if (skill.scope === 'shared') return `Unified · ${syncTargetLabel(skill.syncProviders)}`;
+  if (skill.scope === 'provider') return `${providerLabel(skill.provider ?? 'claude')} only`;
+  return `${providerLabel(skill.provider ?? 'claude')} local`;
+}
+
+function mcpServerKey(server: McpServerSummary): string {
+  return `${server.scope}:${server.provider ?? 'shared'}:${server.id}`;
+}
+
+function mcpScopeLabel(server: McpServerSummary): string {
+  return server.scope === 'shared'
+    ? `Unified · ${syncTargetLabel(server.syncProviders)}`
+    : `${providerLabel(server.provider ?? 'claude')} only`;
+}
+
+function syncTargetLabel(providers: ManagerProviderId[]): string {
+  if (providers.length === 0) return 'No sync targets';
+  return providers.map(providerLabel).join(', ');
+}
+
 function fileName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
@@ -1189,11 +1345,26 @@ function mergeRunnerFromJson(value: JsonObject): MergeRunner | undefined {
 
 function parseSkillSummaries(value: JsonObject): SkillSummary[] {
   const shared = objectArray(value.shared).flatMap((skill) => typeof skill.name === 'string'
-    ? [{ name: skill.name, scope: 'shared' as const, fileCount: numberOrZero(skill.fileCount), conflict: false }]
+    ? [{
+      name: skill.name,
+      scope: 'shared' as const,
+      path: typeof skill.path === 'string' ? skill.path : undefined,
+      fileCount: numberOrZero(skill.fileCount),
+      conflict: false,
+      syncProviders: syncProvidersFromJson(skill.syncProviders),
+    }]
     : []);
   const providerScoped = objectArray(value.providerScoped).flatMap((skill) =>
     typeof skill.name === 'string' && isProviderId(skill.provider)
-      ? [{ name: skill.name, scope: 'provider' as const, provider: skill.provider, fileCount: numberOrZero(skill.fileCount), conflict: false }]
+      ? [{
+        name: skill.name,
+        scope: 'provider' as const,
+        provider: skill.provider,
+        path: typeof skill.path === 'string' ? skill.path : undefined,
+        fileCount: numberOrZero(skill.fileCount),
+        conflict: false,
+        syncProviders: [skill.provider],
+      }]
       : []);
   const unmanaged = objectArray(value.unmanaged).flatMap((skill) => {
     if (typeof skill.name !== 'string' || !isProviderId(skill.provider)) return [];
@@ -1201,29 +1372,46 @@ function parseSkillSummaries(value: JsonObject): SkillSummary[] {
       name: skill.name,
       scope: 'unmanaged' as const,
       provider: skill.provider,
+      path: typeof skill.sourcePath === 'string' ? skill.sourcePath : undefined,
       fileCount: 0,
       conflict: skill.sharedConflict === 'destination-exists' || skill.providerConflict === 'destination-exists',
+      syncProviders: [],
     }];
   });
   return [...shared, ...providerScoped, ...unmanaged];
 }
 
-function skillFileFromJson(value: JsonObject): SkillFile | undefined {
-  return typeof value.path === 'string' && typeof value.bytes === 'number'
-    ? { path: value.path, bytes: value.bytes }
-    : undefined;
-}
-
-function mcpServerFromJson(value: JsonObject): McpServerSummary | undefined {
+function mcpServerFromJson(value: JsonObject, path: string): McpServerSummary | undefined {
   const server = objectFromUnknown(value.server);
-  if (typeof value.id !== 'string' || typeof value.displayName !== 'string' || server === undefined) return undefined;
+  const scope = objectFromUnknown(value.scope);
+  if (typeof value.id !== 'string' || typeof value.displayName !== 'string' || server === undefined || (scope?.kind !== 'shared' && scope?.kind !== 'provider')) return undefined;
+  const provider = isProviderId(scope.provider) ? scope.provider : undefined;
+  if (scope.kind === 'provider' && provider === undefined) return undefined;
   return {
     id: value.id,
     displayName: value.displayName,
     server,
     issues: Array.isArray(value.issues) ? value.issues.filter((issue): issue is string => typeof issue === 'string') : [],
+    scope: scope.kind,
+    ...(scope.kind === 'provider' ? { provider } : {}),
+    path,
+    syncProviders: scope.kind === 'shared' ? syncProvidersFromJson(value.syncProviders) : provider === undefined ? [] : [provider],
   };
 }
+
+function syncProvidersFromJson(value: unknown): ManagerProviderId[] {
+  return value === undefined ? allProviderIds : providerArray(value);
+}
+
+function providerArray(value: unknown): ManagerProviderId[] {
+  if (!Array.isArray(value)) return [];
+  return value.reduce<ManagerProviderId[]>((providers, candidate) => {
+    if (isProviderId(candidate)) providers.push(candidate);
+    return providers;
+  }, []);
+}
+
+const allProviderIds: ManagerProviderId[] = ['claude', 'codex', 'cursor', 'gemini', 'windsurf', 'opencode'];
 
 function isProviderId(value: unknown): value is ManagerProviderId {
   return typeof value === 'string' && ['claude', 'codex', 'cursor', 'gemini', 'windsurf', 'opencode'].includes(value);
@@ -1247,10 +1435,6 @@ function jsonPreview(value: JsonObject): string {
 
 function jsonObjectFromUnknown(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function sumRecord(record: Record<string, number>): number {
-  return Object.values(record).reduce((sum, value) => sum + value, 0);
 }
 
 function errorMessage(error: unknown): string {

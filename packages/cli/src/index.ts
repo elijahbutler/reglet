@@ -109,6 +109,8 @@ import {
   resolveEffectiveMcpServersEnv,
   sharedMcpScope,
   upsertMcpServer,
+  updateMcpSyncProviders,
+  updateSkillSyncProviders,
   writeSkillFile,
 } from '@reglet/core';
 import { allAdapters } from '@reglet/core';
@@ -1261,6 +1263,11 @@ async function dispatchManagerRpc(request: ManagerRpcRequest): Promise<unknown> 
           overwrite: readOptionalBoolean(input, 'overwrite'),
         }),
       };
+    case 'skills.update-sync':
+      return {
+        version: 1,
+        providers: await updateSkillSyncProviders(readString(input, 'name'), readProviderArray(input, 'providers') ?? []),
+      };
     case 'mcp.list':
       if (typeof input.effectiveProvider === 'string') {
         const provider = parseProvider(input.effectiveProvider);
@@ -1274,6 +1281,11 @@ async function dispatchManagerRpc(request: ManagerRpcRequest): Promise<unknown> 
       };
     case 'mcp.delete':
       return { version: 1, server: await deleteMcpServer(readString(input, 'id'), readMcpScopeInput(input)) };
+    case 'mcp.update-sync':
+      return {
+        version: 1,
+        providers: await updateMcpSyncProviders(readString(input, 'id'), readProviderArray(input, 'providers') ?? []),
+      };
     case 'structured-preview.preview':
       return previewApplyStructured({ providers: readProviderArray(input, 'providers'), contents: readContentArray(input, 'contents') });
     case 'structured-preview.apply':
