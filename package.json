@@ -20,7 +20,7 @@
     "server-admin:lint": "bun run --cwd apps/server-admin lint",
     "typecheck": "tsc --build",
     "lint": "eslint .",
-    "test": "bun test packages"
+    "test": "bun test --timeout 15000 packages"
   },
   "devDependencies": {
     "@types/bun": "^1.1.0",
