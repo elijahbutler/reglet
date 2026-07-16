@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -8,6 +8,7 @@ import { SyncClient } from '../src/sync/client.js';
 import { sha256String } from '../src/fsutil.js';
 import { isAllowedSyncPath, resolveSyncPath } from '../src/sync/path.js';
 import { closeApp, createApp } from '../../../packages/server/src/app.js';
+import { removeTestDirectory } from '../../server/test/cleanup.js';
 
 let currentDirs: string[] = [];
 let currentApps: Array<ReturnType<typeof createApp>> = [];
@@ -17,10 +18,11 @@ afterEach(async () => {
     closeApp(app);
   }
   currentApps = [];
-  for (const dir of currentDirs) {
-    await rm(dir, { recursive: true, force: true });
-  }
+  const dirs = currentDirs;
   currentDirs = [];
+  for (const dir of dirs) {
+    await removeTestDirectory(dir);
+  }
   delete process.env.REGLET_HOME;
   delete process.env.REGLET_PROVIDER_HOME;
 });
