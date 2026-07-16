@@ -1,4 +1,6 @@
-# macOS Manager product and delivery roadmap
+# macOS Manager product and delivery roadmap (historical)
+
+> Superseded by the cross-platform [production roadmap](../ROADMAP.md). This document is retained as product-design history for the frozen Swift implementation and is not an active delivery plan.
 
 ## Status and boundary
 

@@ -4,6 +4,7 @@ import { constants as fsConstants } from 'node:fs';
 import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { createInterface } from 'node:readline';
 import { confirm, isCancel, multiselect, outro } from '@clack/prompts';
 import { Command, InvalidArgumentError } from 'commander';
 import {
@@ -184,7 +185,7 @@ manager
   .requiredOption('--json', 'print machine-readable JSON')
   .requiredOption('--protocol-version <version>', 'manager RPC protocol version', parseRpcProtocolVersion)
   .action(async (options: { json: boolean; protocolVersion: 1 }) => {
-    const response = await handleManagerRpc(await Bun.stdin.text(), options.protocolVersion);
+    const response = await handleManagerRpc(await readManagerRpcLine(), options.protocolVersion);
     printRpcJson(response);
   });
 
@@ -1160,6 +1161,15 @@ async function handleManagerRpc(rawInput: string, cliProtocolVersion: 1): Promis
   } catch (error) {
     return managerRpcErrorResponse(parsed.operation, error);
   }
+}
+
+async function readManagerRpcLine(): Promise<string> {
+  const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  for await (const line of input) {
+    input.close();
+    return line;
+  }
+  return '';
 }
 
 async function dispatchManagerRpc(request: ManagerRpcRequest): Promise<unknown> {

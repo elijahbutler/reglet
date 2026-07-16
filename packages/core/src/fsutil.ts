@@ -1,5 +1,4 @@
-import { createHash } from 'node:crypto';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { chmod, copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -17,10 +16,14 @@ export async function ensurePrivateDir(dirPath: string): Promise<void> {
 }
 
 export async function writePrivateJson(filePath: string, value: unknown): Promise<void> {
+  await writePrivateFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+export async function writePrivateFile(filePath: string, content: string | Uint8Array): Promise<void> {
   await ensurePrivateDir(path.dirname(filePath));
   const stagePath = `${filePath}.reglet-stage-${randomUUID()}`;
   try {
-    await writeFile(stagePath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+    await writeFile(stagePath, content, { mode: 0o600 });
     if (hasPosixModes()) {
       await chmod(stagePath, 0o600);
       await assertMode(stagePath, 0o600);

@@ -25,6 +25,32 @@ describe('Reglet desktop app', () => {
     expect(await screen.findByText('blocked')).toBeInTheDocument();
   });
 
+  test('disables unsupported provider enrollment controls', async () => {
+    const rpc = vi.fn<ManagerBridge['rpc']>().mockResolvedValue({ version: 1 });
+    const snapshot = snapshotFixture();
+    const enrollmentMatrix: ManagerSnapshotV2['enrollmentMatrix'] = snapshot.enrollmentMatrix.map((provider) =>
+      provider.provider === 'codex'
+        ? {
+            ...provider,
+            cells: {
+              ...provider.cells,
+              rules: {
+                ...provider.cells.rules,
+                capability: { state: 'unsupported', reason: 'Codex rules are unavailable for this installation.' },
+                destinationPath: null,
+              },
+            },
+          }
+        : provider,
+    );
+    render(<App bridge={bridge(snapshotFixture({ enrollmentMatrix }), rpc)} />);
+
+    const unavailable = await screen.findByRole('button', { name: /Codex CLI rules unavailable/ });
+    expect(unavailable).toBeDisabled();
+    fireEvent.click(unavailable);
+    expect(rpc).not.toHaveBeenCalledWith('enroll', expect.anything());
+  });
+
   test('renders drift import destructive confirmation', async () => {
     const rpc = vi.fn<ManagerBridge['rpc']>().mockResolvedValue({ version: 1 });
     render(<App bridge={bridge(snapshotFixture({ driftInbox: [{ provider: 'claude', content: 'rules', outputPath: '/tmp/out', status: 'modified' }] }), rpc)} />);

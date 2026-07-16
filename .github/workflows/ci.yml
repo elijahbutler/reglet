@@ -17,6 +17,8 @@ jobs:
         with:
           bun-version: latest
       - run: bun install --frozen-lockfile
+      - run: bun audit --production
+        if: runner.os == 'Linux'
       - run: bun run typecheck
       - run: bun run lint
         if: runner.os == 'Linux'

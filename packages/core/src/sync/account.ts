@@ -1,5 +1,6 @@
 import { regletHome } from '../paths.js';
 import { configureTokenLogin } from './engine.js';
+import { readBoundedSyncJson, requireSecureSyncServerUrl } from './client.js';
 import type { SyncState } from './state.js';
 
 export type AccountAuthMode = 'register' | 'login';
@@ -79,7 +80,7 @@ async function postJson(
   payload: Record<string, unknown>,
   sessionToken?: string,
 ): Promise<Record<string, unknown>> {
-  const response = await fetchImpl(new URL(route, ensureTrailingSlash(serverUrl)), {
+  const response = await fetchImpl(new URL(route, ensureTrailingSlash(requireSecureSyncServerUrl(serverUrl))), {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -88,12 +89,18 @@ async function postJson(
     body: JSON.stringify(payload),
   });
 
-  const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  const value = await readBoundedSyncJson(response).catch(() => ({}));
+  const body = isRecord(value) ? value : {};
   if (!response.ok) {
-    const message = typeof body.error === 'string' ? body.error : `HTTP ${response.status}`;
+    const error = typeof body.error === 'object' && body.error !== null ? body.error as Record<string, unknown> : undefined;
+    const message = typeof error?.message === 'string' ? error.message : `HTTP ${response.status}`;
     throw new Error(`${route} failed: ${message}`);
   }
   return body;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function ensureTrailingSlash(serverUrl: string): string {

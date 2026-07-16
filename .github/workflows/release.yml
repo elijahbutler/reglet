@@ -16,6 +16,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - uses: dtolnay/rust-toolchain@stable
       - run: bun install --frozen-lockfile
+      - run: bun audit --production
       - run: bun run typecheck
       - run: bun run desktop:test
       - run: bun run build:binaries -- windows-x64
@@ -50,6 +51,7 @@ jobs:
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
       - run: bun install --frozen-lockfile
+      - run: bun audit --production
       - run: bun run typecheck
       - run: bun run lint
       - run: bun run test

@@ -1,4 +1,6 @@
-# macOS Manager remaining implementation plan
+# macOS Manager remaining implementation plan (historical)
+
+> Superseded by the cross-platform [production roadmap](../ROADMAP.md). Do not schedule new Swift feature rounds from this document; the retained Swift app is frozen pending Tauri acceptance and removal.
 
 ## Purpose
 
