@@ -8,6 +8,7 @@ import {
   bootstrapSyncV2,
   completeSyncV2BootstrapConnection,
   completeSyncV2Pairing,
+  disconnectSyncV2,
   listManagedSyncV2Devices,
   loadActiveSyncV2State,
   loadSyncV2State,
@@ -194,6 +195,12 @@ describe('sync protocol v2 pairing orchestration', () => {
         }
       }
     }
+
+    await disconnectSyncV2({ home: windowsHome, fetchImpl, secretStore: windowsStore });
+    expect(await loadSyncV2State(windowsHome)).toBeNull();
+    expect(windowsStore.values()).toEqual([]);
+    expect((await listManagedSyncV2Devices({ home: macHome, fetchImpl, secretStore: macStore })).devices
+      .find((device) => device.deviceName === 'Windows PC')?.revokedAt).not.toBeNull();
 
     await macStore.set(pendingSyncV2CredentialId('https://reglet.test'), 'interrupted-cleanup-credential');
     await logoutSyncV2({ home: macHome, secretStore: macStore });

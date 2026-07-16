@@ -3,6 +3,8 @@ import {
   Check,
   ChevronRight,
   Clipboard,
+  DatabaseBackup,
+  HardDrive,
   KeyRound,
   Laptop,
   Link2,
@@ -19,6 +21,7 @@ import {
 import type {
   AdminOverview,
   AdminSession,
+  BackupSummary,
   ConnectionGrant,
   DeviceSummary,
   PendingConnection,
@@ -28,6 +31,7 @@ interface DashboardData {
   overview: AdminOverview;
   connections: PendingConnection[];
   devices: DeviceSummary[];
+  backups: BackupSummary[];
 }
 
 interface SessionResponse {
@@ -140,16 +144,20 @@ function Dashboard(props: {
   const [busy, setBusy] = useState('');
   const [grant, setGrant] = useState<ConnectionGrant | null>(null);
   const [copied, setCopied] = useState(false);
+  const [integrityCheckedAt, setIntegrityCheckedAt] = useState('');
 
   const load = useCallback(async () => {
     props.setError('');
     try {
-      const [overview, connections, devices] = await Promise.all([
-        api<AdminOverview>('/api/admin/v1/overview'),
+      const overview = await api<AdminOverview>('/api/admin/v1/overview');
+      const [connections, devices, backups] = await Promise.all([
         api<{ connections: PendingConnection[] }>('/api/admin/v1/connections'),
         api<{ devices: DeviceSummary[] }>('/api/admin/v1/devices'),
+        overview.capabilities.serverBackups
+          ? api<{ backups: BackupSummary[] }>('/api/admin/v1/backups')
+          : Promise.resolve({ backups: [] }),
       ]);
-      setData({ overview, connections: connections.connections, devices: devices.devices });
+      setData({ overview, connections: connections.connections, devices: devices.devices, backups: backups.backups });
     } catch (requestError) {
       props.setError(message(requestError));
     }
@@ -198,6 +206,22 @@ function Dashboard(props: {
     }
   };
 
+  const checkIntegrity = async (): Promise<void> => {
+    setBusy('integrity');
+    props.setError('');
+    try {
+      const result = await api<{ ok: true; checkedAt: string }>('/api/admin/v1/integrity-check', {
+        method: 'POST',
+        headers: { 'x-reglet-csrf': props.csrfToken },
+      });
+      setIntegrityCheckedAt(result.checkedAt);
+    } catch (requestError) {
+      props.setError(message(requestError));
+    } finally {
+      setBusy('');
+    }
+  };
+
   return (
     <div className="dashboard-shell">
       <header className="topbar">
@@ -222,10 +246,34 @@ function Dashboard(props: {
           {grant !== null && <InvitationPanel grant={grant} copied={copied} onCopy={() => void navigator.clipboard.writeText(grant.connectUrl).then(() => setCopied(true))} onClose={() => setGrant(null)} />}
           <PendingLedger connections={data.connections} busy={busy} onApprove={(id) => void mutate(`approve:${id}`, `/api/admin/v1/connections/${encodeURIComponent(id)}/approve`, { method: 'POST' })} onCancel={(id) => void mutate(`cancel:${id}`, `/api/admin/v1/connections/${encodeURIComponent(id)}`, { method: 'DELETE' })} />
           <DeviceLedger devices={data.devices} busy={busy} onRename={(id, name) => void mutate(`rename:${id}`, `/api/admin/v1/devices/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) })} onRevoke={(id) => void mutate(`revoke:${id}`, `/api/admin/v1/devices/${encodeURIComponent(id)}`, { method: 'DELETE' })} />
+          <HostOperations
+            overview={data.overview}
+            backups={data.backups}
+            busy={busy}
+            integrityCheckedAt={integrityCheckedAt}
+            onBackup={() => void mutate('backup', '/api/admin/v1/backups', { method: 'POST' })}
+            onIntegrity={() => void checkIntegrity()}
+          />
         </>}
       </main>
     </div>
   );
+}
+
+function HostOperations({ overview, backups, busy, integrityCheckedAt, onBackup, onIntegrity }: {
+  overview: AdminOverview;
+  backups: BackupSummary[];
+  busy: string;
+  integrityCheckedAt: string;
+  onBackup: () => void;
+  onIntegrity: () => void;
+}): JSX.Element {
+  return <section className="ledger-section host-operations">
+    <div className="section-heading"><div><h2>Host operations</h2><p>Verified snapshots and live SQLite integrity.</p></div><div className="row-actions"><button className="secondary" onClick={onIntegrity} disabled={busy !== ''}>{busy === 'integrity' ? <LoaderCircle className="spin" /> : <HardDrive />}Check database</button>{overview.capabilities.serverBackups && <button className="secondary" onClick={onBackup} disabled={busy !== ''}>{busy === 'backup' ? <LoaderCircle className="spin" /> : <DatabaseBackup />}Create backup</button>}</div></div>
+    {integrityCheckedAt !== '' && <div className="integrity-result" role="status"><ShieldCheck />Live database passed quick_check at {formatDate(integrityCheckedAt)}.</div>}
+    {overview.capabilities.serverBackups ? <div className="ledger backup-ledger">{backups.length === 0 ? <div className="empty-ledger"><DatabaseBackup /><div><strong>No backups yet</strong><p>Create the first verified server snapshot.</p></div></div> : backups.map((backup) => <div className="ledger-row" key={backup.name}><DatabaseBackup /><div className="ledger-primary"><strong>{backup.name}</strong><span>{formatDate(backup.createdAt)} · {formatBytes(backup.sizeBytes)}</span></div><span className={`badge ${backup.verification === 'verified' ? 'active' : 'revoked'}`}>{backup.verification}</span></div>)}</div> : <div className="empty-ledger"><DatabaseBackup /><div><strong>Backup directory not configured</strong><p>Set REGLET_BACKUP_DIR to a dedicated mounted directory.</p></div></div>}
+    <div className="restore-guard"><ShieldAlert /><div><strong>Restore stays offline</strong><p>Stop the service, preserve the current database and WAL files, replace the database from a verified backup, then require readiness and a two-device sync check. The dashboard never performs a live restore.</p><p>For upgrades, retain a verified backup, update the image or checkout, recreate the service, and confirm schema readiness before reconnecting clients.</p></div></div>
+  </section>;
 }
 
 function HealthStrip({ overview }: { overview: AdminOverview }): JSX.Element {
@@ -291,10 +339,12 @@ function DeviceRow({ device, busy, onRename, onRevoke }: { device: DeviceSummary
 }
 
 function ConnectionHandoff(): JSX.Element {
-  const grant = new URLSearchParams(window.location.hash.slice(1)).get('grant');
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  const grant = params.get('grant');
+  const kind = params.get('kind');
   const [copied, setCopied] = useState(false);
   const invitation = window.location.href;
-  const deepLink = grant === null ? '' : `reglet://connect#grant=${encodeURIComponent(grant)}&server=${encodeURIComponent(window.location.origin)}`;
+  const deepLink = grant === null ? '' : `reglet://connect#grant=${encodeURIComponent(grant)}&server=${encodeURIComponent(window.location.origin)}${kind === 'bootstrap' || kind === 'pair' ? `&kind=${kind}` : ''}`;
   return <main className="handoff-shell"><section className="handoff-panel"><Brand /><div className="handoff-icon"><Link2 /></div><h1>Connect to {window.location.hostname}</h1><p>This invitation gives Reglet permission to request encrypted sync access. A trusted device must approve later-device membership.</p>{grant === null ? <ErrorNotice message="This invitation link is incomplete." /> : <><a className="primary link-button" href={deepLink}>Open Reglet<ChevronRight /></a><button className="secondary" onClick={() => void navigator.clipboard.writeText(invitation).then(() => setCopied(true))}>{copied ? <Check /> : <Clipboard />}{copied ? 'Copied invitation' : 'Copy for Reglet'}</button></>}<p className="boundary"><ShieldCheck />The server cannot read vault content or transfer vault keys.</p></section></main>;
 }
 
@@ -330,4 +380,5 @@ function claimFromHash(): { kind: 'claim' | 'reset'; token: string } | null {
 }
 
 function formatDate(value: string): string { return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)); }
+function formatBytes(value: number): string { return new Intl.NumberFormat(undefined, { style: 'unit', unit: 'megabyte', maximumFractionDigits: 2 }).format(value / 1_000_000); }
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }

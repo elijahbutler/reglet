@@ -20,6 +20,7 @@ import {
 import type { AdminOverview } from './admin-types.js';
 import { parseBootstrapConnectionRequest } from './connection-routes.js';
 import { errorBody, readJsonBody, type RateLimiter } from './http.js';
+import { createHostOperations } from './host-operations.js';
 import {
   accountCredentials,
   hashSecret,
@@ -46,10 +47,12 @@ export function registerAdminRoutes(
     rateLimiter: RateLimiter;
     publicUrl: string;
     serviceVersion: string;
+    backupDirectory?: string;
   },
 ): void {
   const { now, bodyLimitBytes, rateLimiter, publicUrl, serviceVersion } = options;
   const expectedOrigin = new URL(publicUrl).origin;
+  const host = createHostOperations(db, options.backupDirectory, now);
 
   app.post('/api/admin/v1/claim', async (c) => {
     if (!sameOrigin(c.req.raw, expectedOrigin)) return c.json(errorBody('invalid_origin', 'request origin is not allowed'), 403);
@@ -123,8 +126,8 @@ export function registerAdminRoutes(
         ownerDashboard: true,
         connectionGrants: true,
         pairingInvitations: true,
-        serverBackups: false,
-        liveIntegrityCheck: false,
+        serverBackups: host.backupsEnabled,
+        liveIntegrityCheck: true,
         liveRestore: false,
         backgroundSync: false,
       },
@@ -199,6 +202,34 @@ export function registerAdminRoutes(
     if (!revokeAdminDevice(db, auth.userId, deviceId, now)) return c.json(errorBody('not_found', 'device not found'), 404);
     audit(db, auth.userId, auth.ownerId, 'device.revoked', 'device', deviceId, {}, now());
     return c.json({ revoked: true, deviceId, keyRotationRequired: true });
+  });
+
+  app.get('/api/admin/v1/backups', async (c) => {
+    const auth = adminAuth(db, c.req.raw, now, false);
+    if (auth === null) return c.json(errorBody('unauthorized', 'unauthorized'), 401);
+    if (!host.backupsEnabled) return c.json(errorBody('capability_unavailable', 'server backups are not configured'), 503);
+    return c.json({ backups: await host.listBackups() });
+  });
+
+  app.post('/api/admin/v1/backups', async (c) => {
+    if (!sameOrigin(c.req.raw, expectedOrigin)) return c.json(errorBody('invalid_origin', 'request origin is not allowed'), 403);
+    const auth = adminAuth(db, c.req.raw, now, true);
+    if (auth === null) return c.json(errorBody('unauthorized', 'unauthorized'), 401);
+    if (!host.backupsEnabled) return c.json(errorBody('capability_unavailable', 'server backups are not configured'), 503);
+    const limited = rateLimiter.check(c.req.raw, 'admin');
+    if (!limited.ok) return c.json(errorBody('rate_limited', 'Too many requests'), 429);
+    const backup = await host.createBackup();
+    audit(db, auth.userId, auth.ownerId, 'backup.created', 'backup', backup.name, { sizeBytes: backup.sizeBytes }, now());
+    return c.json(backup, 201);
+  });
+
+  app.post('/api/admin/v1/integrity-check', async (c) => {
+    if (!sameOrigin(c.req.raw, expectedOrigin)) return c.json(errorBody('invalid_origin', 'request origin is not allowed'), 403);
+    const auth = adminAuth(db, c.req.raw, now, true);
+    if (auth === null) return c.json(errorBody('unauthorized', 'unauthorized'), 401);
+    const result = await host.checkIntegrity();
+    audit(db, auth.userId, auth.ownerId, 'integrity.checked', 'database', 'live', {}, now());
+    return c.json(result);
   });
 }
 

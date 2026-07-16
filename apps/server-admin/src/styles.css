@@ -77,6 +77,12 @@ input:hover { border-color: #4b4c4e; }
 .warning-icon { color: #ffb224; width: 18px; }
 .inline-edit { display: flex; align-items: center; gap: 6px; max-width: 360px; }.inline-edit input { min-height: 38px; }.inline-edit .icon-button { min-height: 38px; height: 38px; }
 .empty-ledger { min-height: 112px; margin-top: 16px; border: 1px dashed #343537; border-radius: 8px; display: flex; align-items: center; justify-content: center; gap: 14px; color: #6f7072; }.empty-ledger svg { width: 20px; }.empty-ledger p { margin-top: 4px; }
+.backup-ledger .ledger-row { grid-template-columns: 24px minmax(0, 1fr) auto; }
+.backup-ledger > .empty-ledger { margin: 0; border: 0; }
+.integrity-result { margin-top: 16px; padding: 10px 12px; border: 1px solid #285c45; border-radius: 6px; background: #0d1d16; color: #8de6b8; display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.integrity-result svg, .restore-guard > svg { width: 17px; flex: 0 0 auto; }
+.restore-guard { margin-top: 16px; padding: 16px; border-left: 2px solid #ffb224; background: #111214; display: flex; align-items: flex-start; gap: 11px; }
+.restore-guard > svg { color: #ffb224; }.restore-guard strong { font-size: 13px; }.restore-guard p { margin-top: 5px; }
 
 .error-notice { padding: 11px 13px; border: 1px solid #633638; border-radius: 8px; background: #211112; color: #ffb0b2; display: flex; align-items: flex-start; gap: 9px; font-size: 12px; line-height: 1.45; }
 .dashboard-content > .error-notice { margin-bottom: 20px; }

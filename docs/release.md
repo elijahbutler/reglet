@@ -42,6 +42,9 @@ Before publishing a release candidate, record the date, platform, artifact check
 | Drift | Plain apply refuses replacement; reviewed replacement succeeds only after fresh preview. |
 | Recovery | Receipt restore returns every affected file/directory to its captured state. |
 | Detach | Stop Managing preserves content and removes only Reglet ownership/header. |
+| First-device sync | Owner claim, invitation, matching fingerprint approval, and interrupted retry succeed without a bootstrap token. |
+| Two-device sync | Windows joins by invitation and request code; its Skill or `AGENTS.md` change reaches the Mac Master without provider writes before Review & Apply. |
+| Revocation and backup | Remote disconnect blocks access, the key-rotation warning persists, and a newly created SQLite backup passes verification. |
 | Homebrew tap gate | Public release is still draft until the formula update succeeds. |
 
 Desktop manager keyboard, VoiceOver, Narrator, and appearance checks remain tracked separately from the automated artifact gate and must be completed before promoting the untrusted app artifacts more broadly.

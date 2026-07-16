@@ -9,6 +9,7 @@ const app = createApp({
   rateLimit: { trustProxy: process.env.REGLET_TRUST_PROXY === '1' },
   publicUrl: process.env.REGLET_PUBLIC_URL,
   adminAssetsPath: process.env.REGLET_ADMIN_ASSETS,
+  backupDirectory: process.env.REGLET_BACKUP_DIR,
   onOwnerClaimLink: (link) => console.error(`[reglet] Claim the owner dashboard once: ${link}`),
 });
 

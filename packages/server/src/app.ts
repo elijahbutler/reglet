@@ -53,6 +53,7 @@ export interface CreateAppOptions {
   enableLegacyV1?: boolean;
   publicUrl?: string;
   adminAssetsPath?: string;
+  backupDirectory?: string;
   onOwnerClaimLink?: (link: string) => void;
 }
 
@@ -136,7 +137,14 @@ export function createApp(options: CreateAppOptions = {}): Hono {
     );
   });
 
-  registerAdminRoutes(app, db, { now, bodyLimitBytes, rateLimiter, publicUrl, serviceVersion });
+  registerAdminRoutes(app, db, {
+    now,
+    bodyLimitBytes,
+    rateLimiter,
+    publicUrl,
+    serviceVersion,
+    backupDirectory: options.backupDirectory,
+  });
   registerConnectionRoutes(app, db, { now, bodyLimitBytes, rateLimiter, publicUrl });
   registerSyncV2Routes(app, db, { now, bodyLimitBytes, rateLimiter });
   registerAdminAssets(app, options.adminAssetsPath ?? path.resolve('apps/server-admin/dist'));

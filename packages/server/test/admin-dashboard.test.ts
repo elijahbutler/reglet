@@ -1,4 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import {
   createSyncV2PairApproval,
@@ -10,10 +13,13 @@ import {
 import { closeApp, createApp } from '../src/app.js';
 
 const apps: Array<ReturnType<typeof createApp>> = [];
+const directories: string[] = [];
 
-afterEach(() => {
+afterEach(async () => {
   for (const app of apps) closeApp(app);
   apps.length = 0;
+  for (const directory of directories) await rm(directory, { recursive: true, force: true });
+  directories.length = 0;
 });
 
 describe('owner dashboard and connection grants', () => {
@@ -68,6 +74,7 @@ describe('owner dashboard and connection grants', () => {
     expect(grantResponse.status).toBe(201);
     const grant = await grantResponse.json() as { id: string; kind: string; connectUrl: string };
     expect(grant.kind).toBe('bootstrap');
+    expect(new URLSearchParams(new URL(grant.connectUrl).hash.slice(1)).get('kind')).toBe('bootstrap');
     expect(JSON.stringify(grant)).not.toContain('token');
     expect(new URL(grant.connectUrl).search).toBe('');
     const grantToken = new URLSearchParams(new URL(grant.connectUrl).hash.slice(1)).get('grant')!;
@@ -132,6 +139,7 @@ describe('owner dashboard and connection grants', () => {
     );
     const invitation = await invitationResponse.json() as { id: string; kind: string; connectUrl: string };
     expect(invitation.kind).toBe('pair');
+    expect(new URLSearchParams(new URL(invitation.connectUrl).hash.slice(1)).get('kind')).toBe('pair');
     const invitationToken = new URLSearchParams(new URL(invitation.connectUrl).hash.slice(1)).get('grant')!;
     const joining = generateSyncV2DeviceKeys();
     const joiningToken = randomBytes(24).toString('base64url');
@@ -201,15 +209,47 @@ describe('owner dashboard and connection grants', () => {
       body: JSON.stringify({ requestId }),
     })).status).toBe(409);
   });
+
+  test('serializes verified backups, reports corrupt entries, and checks live integrity', async () => {
+    const backupDirectory = await mkdtemp(path.join(tmpdir(), 'reglet-backups-'));
+    directories.push(backupDirectory);
+    const setup = await claimedServer(backupDirectory);
+    const overview = await setup.app.request('/api/admin/v1/overview', { headers: { cookie: setup.cookie } });
+    expect(await overview.json()).toMatchObject({ capabilities: { serverBackups: true, liveIntegrityCheck: true, liveRestore: false } });
+
+    const [first, second] = await Promise.all([
+      adminRequest(setup.app, setup.cookie, setup.csrfToken, '/api/admin/v1/backups', { method: 'POST' }),
+      adminRequest(setup.app, setup.cookie, setup.csrfToken, '/api/admin/v1/backups', { method: 'POST' }),
+    ]);
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    const created = await Promise.all([first.json(), second.json()]) as Array<{ name: string; verification: string }>;
+    expect(new Set(created.map((backup) => backup.name)).size).toBe(2);
+    expect(created.every((backup) => backup.verification === 'verified')).toBe(true);
+
+    const corruptName = 'reglet-20260716T120000-000-deadbeefdeadbeef.sqlite';
+    await writeFile(path.join(backupDirectory, corruptName), 'not sqlite');
+    const linkedName = 'reglet-20260716T120001-000-deadbeefdeadbeef.sqlite';
+    await symlink(path.join(backupDirectory, corruptName), path.join(backupDirectory, linkedName));
+    const listed = await setup.app.request('/api/admin/v1/backups', { headers: { cookie: setup.cookie } });
+    const list = await listed.json() as { backups: Array<{ name: string; verification: string }> };
+    expect(list.backups.find((backup) => backup.name === corruptName)?.verification).toBe('failed');
+    expect(list.backups.find((backup) => backup.name === linkedName)?.verification).toBe('failed');
+
+    const integrity = await adminRequest(setup.app, setup.cookie, setup.csrfToken, '/api/admin/v1/integrity-check', { method: 'POST' });
+    expect(integrity.status).toBe(200);
+    expect(await integrity.json()).toMatchObject({ ok: true });
+  });
 });
 
-async function claimedServer(): Promise<{ app: ReturnType<typeof createApp>; cookie: string; csrfToken: string }> {
+async function claimedServer(backupDirectory?: string): Promise<{ app: ReturnType<typeof createApp>; cookie: string; csrfToken: string }> {
   const links: string[] = [];
   const app = useApp(createApp({
     publicUrl: 'https://reglet.test',
     onOwnerClaimLink: (link) => links.push(link),
     rateLimit: false,
     enableLegacyV1: false,
+    backupDirectory,
   }));
   const claimed = await claim(app, new URL(links[0]!).hash.slice('#claim='.length));
   return { app, cookie: claimed.cookie, csrfToken: claimed.csrfToken };

@@ -41,6 +41,20 @@ jobs:
         if: runner.os == 'Linux'
       - run: bun run desktop:test
 
+  server-admin:
+    name: Server dashboard and image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run server-admin:typecheck
+      - run: bun run server-admin:lint
+      - run: bun run --cwd apps/server-admin build
+      - run: docker build -f Dockerfile.sync .
+
   desktop-rust:
     name: Desktop Rust bridge
     runs-on: ${{ matrix.os }}
