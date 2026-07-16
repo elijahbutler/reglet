@@ -52,6 +52,24 @@ describe('encrypted sync view', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Disconnect' }));
     await waitFor(() => expect(rpc).toHaveBeenCalledWith('sync.disconnect', { localOnly: false }));
   });
+
+  test('refreshes cleared local state when remote cancellation fails', async () => {
+    let snapshotCalls = 0;
+    const rpc = vi.fn().mockImplementation(async (operation: ManagerProtocolOperation) => {
+      if (operation === 'sync.snapshot') return snapshotCalls++ === 0 ? pendingSnapshot() : disconnectedSnapshot();
+      if (operation === 'sync.pair.status') return pendingSnapshot().pending ?? {};
+      if (operation === 'sync.pair.cancel') throw new Error('Sync server is offline.');
+      throw new Error(`unexpected operation: ${operation}`);
+    });
+    renderView(bridge(rpc));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel request' }));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Cancel request' }));
+
+    expect(await screen.findByText('Sync server is offline.')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Invitation link' })).toBeInTheDocument();
+    expect(snapshotCalls).toBe(2);
+  });
 });
 
 function renderView(syncBridge: ManagerBridge) {

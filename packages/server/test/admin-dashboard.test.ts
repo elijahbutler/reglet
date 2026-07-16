@@ -231,10 +231,13 @@ describe('owner dashboard and connection grants', () => {
     await writeFile(path.join(backupDirectory, corruptName), 'not sqlite');
     const linkedName = 'reglet-20260716T120001-000-deadbeefdeadbeef.sqlite';
     await symlink(path.join(backupDirectory, corruptName), path.join(backupDirectory, linkedName));
+    const danglingName = 'reglet-20260716T120002-000-deadbeefdeadbeef.sqlite';
+    await symlink('missing.sqlite', path.join(backupDirectory, danglingName));
     const listed = await setup.app.request('/api/admin/v1/backups', { headers: { cookie: setup.cookie } });
     const list = await listed.json() as { backups: Array<{ name: string; verification: string }> };
     expect(list.backups.find((backup) => backup.name === corruptName)?.verification).toBe('failed');
     expect(list.backups.find((backup) => backup.name === linkedName)?.verification).toBe('failed');
+    expect(list.backups.find((backup) => backup.name === danglingName)?.verification).toBe('failed');
 
     const integrity = await adminRequest(setup.app, setup.cookie, setup.csrfToken, '/api/admin/v1/integrity-check', { method: 'POST' });
     expect(integrity.status).toBe(200);

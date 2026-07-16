@@ -173,7 +173,12 @@ export function SyncView({ bridge, incomingLink, onConsumedLink, onReview }: Syn
     if (action === null) return;
     setConfirmation(null);
     if (action.kind === 'cancel') {
-      await bridge.rpc('sync.pair.cancel', {});
+      try {
+        await bridge.rpc('sync.pair.cancel', {});
+      } finally {
+        await refresh();
+      }
+      return;
     } else if (action.kind === 'revoke') {
       await bridge.rpc('sync.device.revoke', { deviceId: action.device.id });
     } else {

@@ -50,11 +50,10 @@ export function createHostOperations(
     return Promise.all(names.map(async (name) => {
       const filePath = path.join(root, name);
       const entry = await lstat(filePath);
-      const metadata = await stat(filePath);
       return {
         name,
         createdAt: entry.birthtime.toISOString(),
-        sizeBytes: metadata.size,
+        sizeBytes: entry.size,
         verification: await verifyFile(filePath),
       };
     }));
