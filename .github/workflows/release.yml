@@ -154,18 +154,19 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${HOMEBREW_TAP_TOKEN:-}" ]]; then
-            echo "HOMEBREW_TAP_TOKEN is required to publish Reglet releases. It must push Formula/reglet.rb to elijahbutler/homebrew-reglet." >&2
+            echo "HOMEBREW_TAP_TOKEN is required to publish Reglet releases. It must push Formula/reglet.rb and Casks/reglet.rb to elijahbutler/homebrew-reglet." >&2
             exit 1
           fi
 
           TAP_DIR="$RUNNER_TEMP/homebrew-reglet"
           git clone --depth 1 "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/elijahbutler/homebrew-reglet.git" "$TAP_DIR"
-          mkdir -p "$TAP_DIR/Formula"
+          mkdir -p "$TAP_DIR/Formula" "$TAP_DIR/Casks"
           cp dist/homebrew/Formula/reglet.rb "$TAP_DIR/Formula/reglet.rb"
+          cp dist/homebrew/Casks/reglet.rb "$TAP_DIR/Casks/reglet.rb"
 
           git -C "$TAP_DIR" config user.name "github-actions[bot]"
           git -C "$TAP_DIR" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git -C "$TAP_DIR" add Formula/reglet.rb
+          git -C "$TAP_DIR" add Formula/reglet.rb Casks/reglet.rb
           if git -C "$TAP_DIR" diff --cached --quiet; then
             echo "Homebrew tap already up to date."
             exit 0

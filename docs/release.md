@@ -10,13 +10,13 @@ Public releases include standalone CLI binaries plus ad-hoc-signed/unnotarized m
 4. build ad-hoc-signed, unnotarized Tauri macOS desktop artifacts for Apple silicon and Intel Macs;
 5. build unsigned Windows x64 NSIS/WebView2 desktop artifacts;
 6. publish SHA-256 checksums and GitHub build provenance for all release artifacts;
-7. generate the Homebrew formula;
-8. update `Formula/reglet.rb` in `elijahbutler/homebrew-reglet` using `HOMEBREW_TAP_TOKEN`;
+7. generate the Homebrew formula and cask;
+8. update `Formula/reglet.rb` and `Casks/reglet.rb` in `elijahbutler/homebrew-reglet` using `HOMEBREW_TAP_TOKEN`;
 9. publish the GitHub Release only after the tap update succeeds.
 
 `HOMEBREW_TAP_TOKEN` is a repository secret backed by a fine-grained token with **Contents: Read and write** access to `elijahbutler/homebrew-reglet`. If the secret is absent, cloning fails, committing fails, or pushing fails, the workflow fails and leaves the GitHub Release as a draft.
 
-macOS artifacts use ad-hoc code signing (`codesign` identity `-`), not an Apple Developer ID, and are not notarized. Windows artifacts are not Authenticode-signed and may trigger SmartScreen. The legacy 0.1.6 app cask remains an uninstall path only; users install new app archives manually.
+macOS artifacts use ad-hoc code signing (`codesign` identity `-`), not an Apple Developer ID, and are not notarized. Windows artifacts are not Authenticode-signed and may trigger SmartScreen. The app cask installs the same current desktop disk image published on the GitHub Release.
 
 ## Release contents
 
@@ -35,7 +35,7 @@ Before publishing a release candidate, record the date, platform, artifact check
 
 | Check | Required result |
 |---|---|
-| macOS Homebrew install | Formula installs the matching CLI from `elijahbutler/homebrew-reglet`. |
+| macOS Homebrew install | Formula installs the matching CLI and cask installs the matching desktop app from `elijahbutler/homebrew-reglet`. |
 | Direct binary launch | Downloaded macOS and Windows binaries report the expected version. |
 | Onboarding | Detects existing supported providers and writes nothing until review/apply. |
 | Review/apply | Redacted diff, current digest, receipt, and snapshots are shown. |
@@ -45,6 +45,6 @@ Before publishing a release candidate, record the date, platform, artifact check
 | First-device sync | Owner claim, invitation, matching fingerprint approval, and interrupted retry succeed without a bootstrap token. |
 | Two-device sync | Windows joins by invitation and request code; its Skill or `AGENTS.md` change reaches the Mac Master without provider writes before Review & Apply. |
 | Revocation and backup | Remote disconnect blocks access, the key-rotation warning persists, and a newly created SQLite backup passes verification. |
-| Homebrew tap gate | Public release is still draft until the formula update succeeds. |
+| Homebrew tap gate | Public release is still draft until the formula and cask update succeeds. |
 
 Desktop manager keyboard, VoiceOver, Narrator, and appearance checks remain tracked separately from the automated artifact gate and must be completed before promoting the untrusted app artifacts more broadly.
