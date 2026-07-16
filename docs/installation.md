@@ -2,7 +2,7 @@
 
 ## Requirements
 
-Public releases include macOS arm64, macOS x64, and Windows x64 CLI binaries plus ad-hoc-signed/unnotarized macOS and unsigned Windows desktop artifacts. The retained Swift app remains frozen during Tauri parity. Linux GUI artifacts are deferred. Updated Homebrew casks are not distributed.
+Public releases include macOS arm64, macOS x64, and Windows x64 CLI binaries plus ad-hoc-signed/unnotarized macOS and unsigned Windows desktop artifacts. The retained Swift app remains frozen during Tauri parity. Linux GUI artifacts are deferred.
 
 ## Homebrew
 
@@ -13,15 +13,23 @@ brew install elijahbutler/reglet/reglet
 
 The Homebrew formula installs the CLI on macOS and is updated for every public release before the GitHub Release is published.
 
+To install the desktop app through Homebrew:
+
+```bash
+brew tap elijahbutler/reglet
+brew install --cask elijahbutler/reglet/reglet
+```
+
+The cask installs the same current macOS desktop disk image published on the GitHub Release.
+
 ## Migrate from the 0.1.6 app cask
 
-Reglet 0.1.6 was installed as a Homebrew cask. Casks cannot be upgraded in place to a formula, and that legacy app cask receives no later releases. After the first CLI-only release is published, switch once:
+Reglet 0.1.6 was installed from a cask that was maintained manually in the tap. Current releases generate the cask from this repository and publish it to the tap automatically. To move an old cask install onto the generated cask:
 
 ```bash
 brew update
 brew uninstall --cask reglet
-brew install elijahbutler/reglet/reglet
-reglet --version
+brew install --cask elijahbutler/reglet/reglet
 ```
 
 Uninstalling the cask removes `Reglet.app` and its linked binary; it does not remove your `~/.reglet` configuration or provider files.
