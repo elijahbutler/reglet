@@ -14,7 +14,7 @@ afterEach(async () => {
     currentApp = undefined;
   }
   if (currentDbDir !== undefined) {
-    await rm(currentDbDir, { recursive: true, force: true });
+    await rm(currentDbDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     currentDbDir = undefined;
   }
 });

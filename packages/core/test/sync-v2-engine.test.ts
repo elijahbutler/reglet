@@ -18,7 +18,9 @@ const apps: Array<ReturnType<typeof createApp>> = [];
 afterEach(async () => {
   for (const app of apps) closeApp(app);
   apps.length = 0;
-  for (const directory of directories) await rm(directory, { recursive: true, force: true });
+  for (const directory of directories) {
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
   directories.length = 0;
   delete process.env.REGLET_PROVIDER_HOME;
 });
