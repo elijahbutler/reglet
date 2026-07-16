@@ -17,13 +17,28 @@ afterEach(async () => {
     closeApp(app);
   }
   currentApps = [];
-  for (const dir of currentDirs) {
-    await rm(dir, { recursive: true, force: true });
-  }
+  const dirs = currentDirs;
   currentDirs = [];
+  for (const dir of dirs) {
+    await removeDirWithRetry(dir);
+  }
   delete process.env.REGLET_HOME;
   delete process.env.REGLET_PROVIDER_HOME;
 });
+
+async function removeDirWithRetry(dir: string): Promise<void> {
+  try {
+    await rm(dir, { recursive: true, force: true });
+  } catch {
+    // On Windows, SQLite's WAL/SHM files can stay locked briefly after db.close() returns.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    try {
+      await rm(dir, { recursive: true, force: true });
+    } catch {
+      // Leave it for the OS temp cleaner; don't let a stuck handle poison subsequent tests.
+    }
+  }
+}
 
 async function tempDir(prefix: string): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), prefix));
