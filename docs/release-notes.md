@@ -1,5 +1,25 @@
 # Public V1 release notes
 
+## v0.1.18 - Encrypted sync homeserver preview
+
+This release promotes the protocol-v2 encrypted sync preview into the desktop and self-hosted server workflow while keeping it explicitly gated and owner-operated.
+
+### Server and dashboard
+
+- Adds the same-origin owner dashboard for single-owner server claiming, owner sign-in/reset, first-device invitations, pending connection approval, device rename/revoke, server health, schema status, live database integrity checks, and verified SQLite backups.
+- Hardens the bundled homeserver Compose deployment with loopback-only binding, disabled registration and legacy protocol v1, an unprivileged container, a read-only root filesystem, and a dedicated mounted backup directory.
+- Keeps `REGLET_BOOTSTRAP_TOKEN` as compatibility-only for older preview servers. New servers use the dashboard claim link and first-device invitation flow.
+
+### Desktop sync
+
+- Adds the desktop **Encrypted Sync** preview flow with explicit local opt-in, first-device invitation handling, deep links, trusted-device invitations, eight-character request codes, manual sync summaries, device management, and guarded disconnect actions.
+- Preserves the core security boundary: the server stores authenticated ciphertext and device registry state, while vault keys, plaintext Master content, provider outputs, resolved MCP secrets, credentials, receipts, and machine-local settings stay on devices.
+- Keeps sync manual and non-applying. Pulled changes update only the receiving Reglet Master and still require local Review & Apply before provider files change.
+
+### Reliability
+
+- Hardened Windows sync test cleanup around SQLite WAL/SHM files to avoid `EBUSY` poisoning later test cleanup.
+
 ## Local-only CLI V1
 
 This release establishes Reglet as a local-only CLI for rules, skills, and MCP configuration across Claude Code, Codex CLI, Cursor, Gemini CLI, Windsurf, and OpenCode.
