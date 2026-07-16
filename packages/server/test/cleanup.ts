@@ -9,9 +9,10 @@ export async function removeTestDirectory(directory: string): Promise<void> {
       await rm(directory, { recursive: true, force: true });
       return;
     } catch (error) {
-      if (!shouldRetryWindowsCleanup(error) || attempt >= WINDOWS_CLEANUP_RETRIES) {
+      if (!shouldRetryWindowsCleanup(error)) {
         throw error;
       }
+      if (attempt >= WINDOWS_CLEANUP_RETRIES) return;
       await delay(WINDOWS_CLEANUP_RETRY_DELAY_MS * (attempt + 1));
     }
   }
