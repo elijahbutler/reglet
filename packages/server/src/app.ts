@@ -34,6 +34,7 @@ import {
   rotateDeviceToken,
   type FileHead,
 } from './storage.js';
+import { registerSyncV2Routes } from './v2-routes.js';
 
 export type { RateLimitOptions } from './http.js';
 
@@ -44,6 +45,7 @@ export interface CreateAppOptions {
   bodyLimitBytes?: number;
   rateLimit?: RateLimitOptions | false;
   allowRegistration?: boolean;
+  enableLegacyV1?: boolean;
 }
 
 interface RegisterBody {
@@ -94,14 +96,29 @@ export function createApp(options: CreateAppOptions = {}): Hono {
     throw new Error('Single-user token mode cannot enable public account registration');
   }
   const allowRegistration = options.allowRegistration === true;
+  const enableLegacyV1 = options.enableLegacyV1 ?? true;
   const rateLimiter = createRateLimiter(options.rateLimit, now);
-  initializeSchema(db);
-  if (options.singleUserToken !== undefined) {
-    ensureSingleUser(db, options.singleUserToken);
+  try {
+    initializeSchema(db);
+    if (options.singleUserToken !== undefined) {
+      ensureSingleUser(db, options.singleUserToken);
+    }
+  } catch (error) {
+    db.close();
+    throw error;
   }
 
   const app = new Hono();
   appDatabases.set(app, db);
+
+  registerSyncV2Routes(app, db, { now, bodyLimitBytes, rateLimiter });
+
+  if (!enableLegacyV1) {
+    app.use('/v1/*', async (c, next) => {
+      if (!enableLegacyV1) return c.json(errorBody('not_found', 'not found'), 404);
+      await next();
+    });
+  }
 
   app.get('/', (c) =>
     c.html(`<!doctype html>
@@ -109,14 +126,11 @@ export function createApp(options: CreateAppOptions = {}): Hono {
   <head><title>Reglet sync server</title></head>
   <body>
     <h1>Reglet sync server</h1>
-    <p>Use the Reglet CLI to register, pair devices, and sync master directory files.</p>
+    <p>Use the Reglet encrypted sync preview CLI to pair devices and exchange ciphertext.</p>
     <ul>
       <li>GET /healthz</li>
-      <li>POST /v1/auth/register</li>
-      <li>POST /v1/auth/login</li>
-      <li>POST /v1/pair/start</li>
-      <li>POST /v1/pair/claim</li>
-      <li>GET /v1/changes?since=&lt;seq&gt;</li>
+      <li>GET /readyz</li>
+      <li>GET /v2/compatibility</li>
     </ul>
   </body>
 </html>
@@ -127,9 +141,18 @@ export function createApp(options: CreateAppOptions = {}): Hono {
     c.json({
       ok: true,
       service: { name: 'reglet-sync-server', version: serviceVersion },
-      protocol: { current: protocolVersion, supported: [protocolVersion] },
+      protocol: enableLegacyV1
+        ? { current: protocolVersion, supported: [protocolVersion] }
+        : { current: 2, supported: [2] },
     }),
   );
+
+  app.get('/readyz', (c) => {
+    const row = db.query('select max(version) as version from schema_migrations').get() as { version: number | null };
+    return row.version === 4
+      ? c.json({ ready: true })
+      : c.json(errorBody('not_ready', 'database schema is not ready'), 503);
+  });
 
   app.get('/v1/compatibility', (c) =>
     c.json({

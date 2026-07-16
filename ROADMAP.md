@@ -119,22 +119,25 @@ Goal: replace the plaintext prototype with a versioned, end-to-end encrypted pro
 ### Client protocol
 
 - [x] Define protocol v2 with authenticated encryption, opaque object identifiers, authenticated metadata, bounded payloads, idempotency keys, and explicit version negotiation.
-- [ ] Generate encryption keys on-device and transfer them only through an authenticated pairing flow.
-- [ ] Keep device credentials in the platform credential store; keep only non-secret sync metadata in `~/.reglet/.state`.
-- [ ] Encrypt Master objects before upload and decrypt only after integrity, identity, size, revision, and path validation.
-- [ ] Sync shared and provider-scoped rules, Skills, MCP definitions, tombstones, and enrollment metadata; exclude provider outputs, receipts, snapshots, merge bases, resolved secrets, and machine-local settings.
-- [ ] Stage pulled objects as a Master revision with a sync receipt and conflict inbox. Never invoke provider apply.
-- [ ] Support manual sync first. Any later background pull is separately opt-in and still cannot auto-apply.
+- [x] Generate encryption keys on-device and transfer them only through an authenticated fingerprint pairing flow.
+- [x] Keep device credentials in macOS Keychain or Windows Credential Manager; keep only non-secret sync metadata in `~/.reglet/.state`.
+- [x] Encrypt Master objects before upload and decrypt only after integrity, identity, size, revision, checkpoint, and path validation.
+- [x] Sync shared/provider-scoped rules, Skills, MCP definitions, and tombstones; exclude provider outputs, receipts, snapshots, merge bases, resolved secrets, enrollment, and machine-local settings.
+- [x] Pull only into the local Master and named conflict artifacts; never invoke provider apply.
+- [ ] Add a first-class sync receipt and conflict inbox UI over the existing conflict artifacts.
+- [x] Support manual sync first behind an explicit preview gate. Any later background pull is separately opt-in and still cannot auto-apply.
 
 ### Account and device lifecycle
 
 - [x] Normalize and validate account identifiers and enforce a documented password policy.
 - [x] Move password verification to asynchronous memory-hard scrypt.
 - [ ] Version password-hash parameters and complete a production parameter review.
-- [x] Add device list, rename, last-seen, token rotation, and revoke.
-- [ ] Add logout, expired-session cleanup, key epochs, and encrypted device recovery.
+- [x] Add device list, rename, last-seen, and server-access revoke.
+- [ ] Add protocol-v2 device-token rotation and current-device remote revocation.
+- [x] Add local logout and expired pairing cleanup.
+- [ ] Add epoch rotation/re-encryption and encrypted offline device recovery.
 - [x] Make development pairing codes short-lived, rate-limited, and single-use through an atomic claim.
-- [ ] Replace development pairing codes with an authenticated flow bound to a pending cryptographic device identity.
+- [x] Replace code-only pairing with an authenticated flow bound to pending X25519/Ed25519 device keys and an out-of-band fingerprint.
 - [x] Require TLS for non-loopback clients and document reverse-proxy trust configuration.
 - [x] Keep self-hosted single-user mode closed by default; do not expose public registration in that mode.
 
@@ -152,15 +155,19 @@ Goal: make the server deployable, observable, recoverable, and safe under concur
 - [x] Separate routing, authentication, sync storage, validation, and rate limiting behind typed interfaces.
 - [x] Make revision comparison, sequence allocation, write/tombstone persistence, history, and pairing claims transactional.
 - [x] Add bounded pagination and stable cursors for changes.
-- [ ] Add bounded pagination and stable cursors for device lists.
+- [x] Add bounded pagination and stable cursors for device lists.
 - [x] Ignore forwarded client addresses unless proxy trust is explicitly configured.
 - [ ] Add persistent/distributed rate limiting for hosted deployments.
 - [x] Add transactional schema migrations, indexes, foreign keys, and WAL/busy-timeout policy for SQLite.
-- [ ] Add forward-version startup compatibility, migration rollback rehearsals, and a hosted-store path before horizontal scaling.
-- [ ] Add quotas for users, devices, object count, object size, total storage, history, and request rate.
-- [ ] Add structured secret-free logs, request IDs, metrics, health/readiness endpoints, and audit events for authentication and device lifecycle.
-- [ ] Add backup, restore, corruption detection, retention, and disaster-recovery rehearsals.
-- [ ] Publish hardened container and single-node self-hosting instructions with TLS requirements.
+- [x] Refuse forward-incompatible schema versions at startup.
+- [ ] Add migration rollback rehearsals and a hosted-store path before horizontal scaling.
+- [x] Bound devices, pending pairs, object count, object size, history, request bodies, and response pages for the single-node preview.
+- [ ] Add user/total-storage quotas and persistent request-rate quotas for hosted operation.
+- [x] Add health and database-backed readiness endpoints.
+- [ ] Add structured secret-free logs, request IDs, metrics, and audit events for authentication and device lifecycle.
+- [x] Add verified online SQLite backup and corruption checks.
+- [ ] Automate restore, retention, and disaster-recovery rehearsals.
+- [x] Publish a hardened container and single-node homeserver runbook with TLS requirements and protocol v1 disabled.
 
 Exit criteria:
 

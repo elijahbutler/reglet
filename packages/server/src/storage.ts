@@ -32,6 +32,14 @@ create table if not exists schema_migrations (
   applied_at text not null
 );
 `);
+  const newestSchema = db.query('select max(version) as version from schema_migrations').get() as {
+    version: number | null;
+  };
+  if (newestSchema.version !== null && newestSchema.version > 4) {
+    throw new Error(
+      `Database schema version ${newestSchema.version} is newer than this server supports (maximum 4)`,
+    );
+  }
   const current = db.query('select version from schema_migrations where version = 1').get() as
     | { version: number }
     | null;
@@ -114,6 +122,100 @@ create index if not exists pair_codes_expiry on pair_codes (expires_at);
       if (!hasColumn(db, 'devices', 'last_seen_at')) db.exec('alter table devices add column last_seen_at text');
       if (!hasColumn(db, 'devices', 'revoked_at')) db.exec('alter table devices add column revoked_at text');
       db.query('insert into schema_migrations (version, applied_at) values (?, ?)').run(3, new Date().toISOString());
+    });
+    migrate();
+  }
+
+  const encryptedSync = db.query('select version from schema_migrations where version = 4').get() as
+    | { version: number }
+    | null;
+  if (encryptedSync === null) {
+    const migrate = db.transaction(() => {
+      if (!hasColumn(db, 'devices', 'sync_device_id')) db.exec('alter table devices add column sync_device_id text');
+      if (!hasColumn(db, 'devices', 'agreement_public_key')) db.exec('alter table devices add column agreement_public_key text');
+      if (!hasColumn(db, 'devices', 'signing_public_key')) db.exec('alter table devices add column signing_public_key text');
+      if (!hasColumn(db, 'devices', 'certificate_json')) db.exec('alter table devices add column certificate_json text');
+      db.exec(`
+create unique index if not exists devices_sync_device_id on devices (sync_device_id) where sync_device_id is not null;
+create table if not exists sync_vaults (
+  id text primary key,
+  user_id integer not null unique,
+  suite text not null,
+  authority_public_key text not null,
+  current_epoch integer not null,
+  sequence integer not null,
+  checkpoint text not null,
+  created_at text not null,
+  foreign key (user_id) references users(id)
+);
+create table if not exists sync_pair_requests (
+  id text primary key,
+  code_hash text not null unique,
+  request_token_hash text not null unique,
+  device_token_hash text not null unique,
+  device_id text not null unique,
+  device_name text not null,
+  agreement_public_key text not null,
+  signing_public_key text not null,
+  expires_at integer not null,
+  approved_at text,
+  claimed_at text,
+  user_id integer,
+  vault_id text,
+  approver_device_id text,
+  approval_json text,
+  foreign key (user_id) references users(id),
+  foreign key (vault_id) references sync_vaults(id)
+);
+create table if not exists sync_objects (
+  vault_id text not null,
+  object_id text not null,
+  key_epoch integer not null,
+  revision integer not null,
+  sequence integer not null,
+  author_device_id text not null,
+  nonce text not null,
+  ciphertext text not null,
+  previous_checkpoint_sequence integer not null,
+  previous_checkpoint_digest text not null,
+  idempotency_key text not null,
+  signature text not null,
+  checkpoint text not null,
+  primary key (vault_id, object_id),
+  foreign key (vault_id) references sync_vaults(id)
+);
+create table if not exists sync_history (
+  vault_id text not null,
+  object_id text not null,
+  key_epoch integer not null,
+  revision integer not null,
+  sequence integer not null,
+  author_device_id text not null,
+  nonce text not null,
+  ciphertext text not null,
+  previous_checkpoint_sequence integer not null,
+  previous_checkpoint_digest text not null,
+  idempotency_key text not null,
+  signature text not null,
+  checkpoint text not null,
+  created_at text not null,
+  primary key (vault_id, sequence),
+  unique (vault_id, key_epoch, nonce),
+  foreign key (vault_id) references sync_vaults(id)
+);
+create table if not exists sync_mutations (
+  device_row_id integer not null,
+  idempotency_key text not null,
+  mutation_digest text not null,
+  response_json text not null,
+  created_at text not null,
+  primary key (device_row_id, idempotency_key),
+  foreign key (device_row_id) references devices(id)
+);
+create index if not exists sync_history_vault_sequence on sync_history (vault_id, sequence);
+create index if not exists sync_pair_requests_expiry on sync_pair_requests (expires_at);
+`);
+      db.query('insert into schema_migrations (version, applied_at) values (?, ?)').run(4, new Date().toISOString());
     });
     migrate();
   }

@@ -1,16 +1,18 @@
 # Production-readiness audit
 
-Date: 2026-07-15
-Scope: Tauri desktop app, Manager RPC/CLI boundary, local transaction engine, dormant sync client, and sync server
-Baseline: `origin/main` at `ad404d9`
+Date: 2026-07-16
+Scope: Tauri desktop app, Manager RPC/CLI boundary, local transaction engine, encrypted sync preview, and sync server
+Baseline: `origin/main` at `966830f`
 
 ## Executive summary
 
 The local transaction engine is the strongest part of Reglet: digest freshness, rollback, receipts, scoped detachment, typed MCP references, and redaction are well tested. The Tauri app has broad surface coverage and a restrained visual system, but feature depth, state coordination, and accessibility evidence are not yet at a production bar.
 
-The dormant sync implementation is a prototype and must not be exposed. The initial audit found that a malicious server could escape the Reglet home and that a clean pull could invoke provider apply. Those P0 paths are now remediated and regression-tested, along with conflict preservation, deletion/provider-MCP propagation, private atomic state, server concurrency, basic device lifecycle, native bridge bounds, and dependency advisories.
+The plaintext sync implementation remains compatibility-test-only. The initial audit found that a malicious server could escape the Reglet home and that a clean pull could invoke provider apply. Those P0 paths remain remediated and regression-tested.
 
-The release-blocking P0 that remains is architectural: protocol v1 stores plaintext Master content. Client credentials also remain in local JSON rather than a platform credential store, and production pairing, key recovery, quotas, hosted rate limiting, observability, backup/restore, signing, and native acceptance remain open.
+Protocol v2 now provides authenticated end-to-end encryption, opaque paths, OS credential storage on macOS/Windows, fingerprint pairing, signed devices and objects, checkpointed manual sync, conflict/tombstone handling, bounded single-node storage, verified backups, and a hardened homeserver container. Protocol v1 is disabled by default in the server process.
+
+The remaining production sync blockers are epoch rotation after revocation, offline recovery, sync receipts/conflict UI, persistent hosted rate limits, total-storage quotas, operational telemetry/audit events, automated restore/retention drills, signed artifacts, and native acceptance.
 
 No source-level public capability currently enables sync, so these are contained release blockers rather than known exposure in the shipped local-only interface.
 
@@ -27,13 +29,13 @@ No source-level public capability currently enables sync, so these are contained
 | --- | --- | --- |
 | Remote path escape and symlink traversal | Resolved | Shared strict path contract, canonical containment, full-page validation before mutation, malicious-server tests. |
 | Remote provider apply | Resolved | Pull no longer imports or calls `applyAll`; results explicitly require local provider review. |
-| Plaintext server storage | **Open P0** | Protocol v2 is specified in `docs/sync-protocol-v2.md`; encryption and authenticated pairing are not implemented. |
-| Sync correctness/private state | Resolved for v1 containment | Tombstones and provider MCP sync, recomputed hashes, owner-only atomic state/bases, persistent blocked conflicts. |
-| Server concurrency/device foundation | Partially resolved | Transactional writes/pair claims, pagination, closed registration, TLS enforcement, list/rename/rotate/revoke/last-seen. Hosted lifecycle and operations remain. |
+| Plaintext server storage | Resolved for gated v2 preview | Protocol-v2 tables contain opaque identifiers and authenticated ciphertext; malicious-storage canaries pass. Protocol v1 remains disabled outside explicit compatibility testing. |
+| Sync correctness/private state | Resolved for v2 preview | Tombstones, scoped content, owner-only atomic state/bases, persistent conflicts, checkpoint validation, and OS credential storage. |
+| Server concurrency/device foundation | Partially resolved | Transactional encrypted writes/pair claims, pagination, closed registration, TLS, signed devices, list/rename/revoke/last-seen, bounded quotas, readiness, and verified backup. Hosted operations and epoch rotation remain. |
 | Desktop interaction safety | Partially resolved | Unsupported cells disabled; one focus-trapped dialog primitive; onboarding nested confirmations hidden; responsive/reduced-transparency CSS. Native evidence remains. |
 | Native bridge boundaries | Resolved for current surface | Request/response/stderr bounds, idle/update timeouts, fixed sidecar, one-line RPC, canonical Reveal allowlist. |
 | Dependency advisories | Resolved | Vitest 3.2.7; `bun audit --production` reports no vulnerabilities and now gates CI/release workflows. |
-| Oversized server coordinator | Resolved | `app.ts` reduced from 796 to 445 lines versus `origin/main`; storage, security, HTTP validation, and rate limiting have focused modules. |
+| Oversized server coordinator | Partially resolved | `app.ts` remains a 468-line coordinator and protocol-v2 routes are separate. The encrypted storage module is 624 lines and should split by pairing/object/device lifecycle before public release. |
 
 ## Release-blocking findings
 
@@ -49,11 +51,11 @@ No source-level public capability currently enables sync, so these are contained
 - **Impact:** Network-originated content can bypass the product's digest-backed Review & Apply trust boundary.
 - **Recommendation:** A pull may update only a staged Master revision and sync receipt. Provider writes require a separate local structured preview and current digest.
 
-### P0 — The server stores Master content in plaintext — open
+### P0 — The server stores Master content in plaintext — remediated for protocol v2
 
 - **Location:** `packages/server/src/app.ts`, `files` and `file_history`; protocol v1 payloads
-- **Impact:** Database, backup, server, or operator compromise exposes private rules, Skills, and MCP definitions.
-- **Recommendation:** Do not expose protocol v1. Specify and implement authenticated end-to-end encryption in protocol v2 before enabling sync.
+- **Impact:** Protocol v1 database, backup, server, or operator compromise exposes private rules, Skills, and MCP definitions.
+- **Remediation:** Protocol v2 encrypts paths and content before upload, authenticates routing metadata and authors, and stores keys only on devices. The server process disables `/v1` by default; the public capability remains off while remaining lifecycle gates are open.
 
 ## P1 findings
 
@@ -62,7 +64,7 @@ No source-level public capability currently enables sync, so these are contained
 1. **Resolved:** local deletions now produce revision-checked tombstones.
 2. **Resolved:** provider-scoped MCP files use the same shared path contract.
 3. **Resolved:** downloaded and conflict content hashes are recomputed before persistence.
-4. **Open:** `.state/sync.json` still contains the bearer token; protocol v2 must use the platform credential store.
+4. **Resolved for v2:** device tokens, vault roots, and private keys live in macOS Keychain or Windows Credential Manager; `.state/sync-v2.json` is non-secret.
 5. **Resolved:** merge bases use owner-only private-file writes.
 6. **Resolved:** sync state and bases use atomic staged replacement.
 
@@ -71,7 +73,7 @@ No source-level public capability currently enables sync, so these are contained
 7. **Resolved:** revision comparison, sequence allocation, head/history persistence, and tombstones commit together.
 8. **Resolved:** pair-code consumption and device creation use one transaction.
 9. **Partially resolved:** forwarded addresses are ignored unless explicitly trusted; hosted deployments still need persistent/distributed limiting.
-10. **Partially resolved:** list, rename, last-seen, token rotation, and revoke exist; expiry, logout, key epochs, and full cleanup remain.
+10. **Partially resolved:** protocol-v2 list, rename, last-seen, server-access revoke, local logout, and expired-pair cleanup exist; token rotation, pairing cancellation, current-device remote revoke, epoch rotation, and full cleanup remain.
 11. **Resolved:** clients require HTTPS except for loopback development.
 12. **Resolved:** registration is closed by default and cannot coexist with single-user token mode.
 13. **Partially resolved:** scrypt is asynchronous and account inputs are bounded/normalized; parameters still need versioning and production review.
@@ -98,11 +100,11 @@ No source-level public capability currently enables sync, so these are contained
 
 | File | `origin/main` | Current | Finding | Recommended boundary |
 | --- | ---: | ---: | --- | --- |
-| `packages/cli/src/index.ts` | 2,644 | 2,654 | Commands, RPC dispatch, snapshot construction, onboarding, AI runner execution, parsing, and formatting are coupled. | `commands/`, `manager-rpc/`, `manager-snapshot/`, `onboarding/`, `ai-draft/` |
-| `apps/desktop/src/ui/App.tsx` | 1,442 | 1,417 | Global state, transport parsing, mutations, six views, and helpers share one render unit; dialogs are now extracted. | coordinator, hooks, `views/`, RPC decoders |
-| `apps/desktop/src/ui/OnboardingWizard.tsx` | 1,043 | 1,059 | Workflow state, staging mutations, seven steps, and parsing are coupled. | onboarding controller plus one module per step |
-| `packages/server/src/app.ts` | 796 | 445 | **Remediated:** app factory and routes now coordinate typed storage/security/HTTP modules, each below 310 lines. | Continue route-group extraction only as new protocol-v2 surfaces land. |
-| `apps/desktop/src/styles.css` | 596 | 633 | Token-backed but one global component layer makes ownership and dead-style removal difficult. | base/tokens, primitives, shell, onboarding |
+| `packages/cli/src/index.ts` | 2,654 | 2,659 | Commands, RPC dispatch, snapshot construction, onboarding, AI runner execution, parsing, and formatting are coupled. | `commands/`, `manager-rpc/`, `manager-snapshot/`, `onboarding/`, `ai-draft/` |
+| `apps/desktop/src/ui/App.tsx` | 1,417 | 1,417 | Global state, transport parsing, mutations, six views, and helpers share one render unit; dialogs are now extracted. | coordinator, hooks, `views/`, RPC decoders |
+| `apps/desktop/src/ui/OnboardingWizard.tsx` | 1,059 | 1,059 | Workflow state, staging mutations, seven steps, and parsing are coupled. | onboarding controller plus one module per step |
+| `packages/server/src/app.ts` | 445 | 468 | The coordinator stays below 500 lines and protocol-v2 routes are extracted; `v2-storage.ts` is now a 624-line review hotspot. | Split encrypted pairing, object, and device persistence before public release. |
+| `apps/desktop/src/styles.css` | 633 | 633 | Token-backed but one global component layer makes ownership and dead-style removal difficult. | base/tokens, primitives, shell, onboarding |
 
 The target is not line count for its own sake. Each extracted module should own one reason to change, preserve type flow, and reduce the amount of code required to review a security-sensitive operation.
 

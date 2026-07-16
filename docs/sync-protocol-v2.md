@@ -1,14 +1,16 @@
 # Sync protocol v2 security design
 
-Status: proposed; required before sync is exposed
-Date: 2026-07-15
+Status: implemented as a gated CLI homeserver preview; not enabled in public capabilities
+Date: 2026-07-16
 Replaces: plaintext protocol v1
 
 ## Decision
 
 Reglet sync remains local-first and opt-in. Protocol v2 stores only authenticated ciphertext and minimal routing metadata on the service. Encryption keys are created and retained by devices; account passwords and server-issued tokens authenticate service access but never derive or recover Master encryption keys.
 
-Protocol v1 is test-only migration source. It must not be enabled by a public command, desktop control, hosted deployment, or release artifact.
+Protocol v1 remains an isolated compatibility-test source. The protocol-v2 server process disables `/v1` unless a developer explicitly sets `REGLET_ENABLE_LEGACY_V1=1`.
+
+The preview implements encrypted objects, OS credential storage on macOS and Windows, authenticated fingerprint pairing, signed device certificates, manual sync, conflicts, tombstones, device management, and single-node deployment safeguards. Epoch rotation, offline recovery, hosted operations, desktop UI, and public release gates remain open.
 
 ## Security goals
 
@@ -88,7 +90,7 @@ contentBytes, contentHash, createdAt
 
 The routing fields through `idempotencyKey` are canonical additional authenticated data. The author signs the canonical envelope digest. Decryption, AEAD verification, device authorization, signature verification, size checks, revision checks, and canonical path validation all complete before a path is resolved locally.
 
-Allowed content is limited to shared and provider-scoped rules, Skills, MCP definitions, enrollment metadata needed to interpret the Master, and tombstones. The shared path contract rejects absolute paths, traversal, backslashes, empty or dot segments, control characters, unknown provider scopes, `.state`, provider output, and local conflict/backup artifacts.
+Allowed content is limited to shared and provider-scoped rules, Skills, MCP definitions, and tombstones. Enrollment and machine-local configuration do not sync. The shared path contract rejects absolute paths, traversal, backslashes, empty or dot segments, control characters, unknown provider scopes, `.state`, provider output, and local conflict/backup artifacts.
 
 ## Revisions, checkpoints, and concurrency
 
@@ -103,7 +105,7 @@ Allowed content is limited to shared and provider-scoped rules, Skills, MCP defi
 
 After validating and decrypting a page, the client compares each object with its private merge base:
 
-- Remote-only change: update the Master draft and record it in a sync receipt.
+- Remote-only change: update the Master draft and report it in the preview result. A durable first-class sync receipt remains a public-release gate.
 - Non-overlapping text changes: produce a merged Master draft and require local review.
 - Overlapping edits, edit/delete, or delete/edit: preserve the local choice, write the remote choice to a local-only conflict artifact, and mark the path blocked.
 - Malformed or inconsistent data: stop before mutation and retain the prior cursor.
