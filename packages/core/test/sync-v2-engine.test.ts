@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -11,6 +11,7 @@ import {
   type SyncV2SecretStore,
 } from '../src/index.js';
 import { closeApp, createApp } from '../../server/src/app.js';
+import { removeTestDirectory } from '../../server/test/cleanup.js';
 
 const directories: string[] = [];
 const apps: Array<ReturnType<typeof createApp>> = [];
@@ -18,7 +19,9 @@ const apps: Array<ReturnType<typeof createApp>> = [];
 afterEach(async () => {
   for (const app of apps) closeApp(app);
   apps.length = 0;
-  for (const directory of directories) await rm(directory, { recursive: true, force: true });
+  for (const directory of directories) {
+    await removeTestDirectory(directory);
+  }
   directories.length = 0;
   delete process.env.REGLET_PROVIDER_HOME;
 });

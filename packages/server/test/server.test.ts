@@ -1,8 +1,9 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { closeApp, createApp } from '../src/app.js';
+import { removeTestDirectory } from './cleanup.js';
 
 let currentDbDir: string | undefined;
 let currentApp: ReturnType<typeof createApp> | undefined;
@@ -14,7 +15,7 @@ afterEach(async () => {
     currentApp = undefined;
   }
   if (currentDbDir !== undefined) {
-    await rm(currentDbDir, { recursive: true, force: true });
+    await removeTestDirectory(currentDbDir);
     currentDbDir = undefined;
   }
 });
