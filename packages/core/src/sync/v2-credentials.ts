@@ -1,6 +1,10 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import type { PendingSyncV2PairSecrets, SyncV2DeviceSecrets } from './v2-types.js';
+import type {
+  PendingSyncV2BootstrapSecrets,
+  PendingSyncV2PairSecrets,
+  SyncV2DeviceSecrets,
+} from './v2-types.js';
 
 export interface SyncV2SecretStore {
   get(account: string): Promise<string | null>;
@@ -71,6 +75,32 @@ export async function loadPendingSyncV2Secrets(
   }
   if (!isPendingSecrets(parsed)) {
     throw new Error('Pending pairing credentials in the operating system credential store are invalid');
+  }
+  return parsed;
+}
+
+export async function savePendingSyncV2BootstrapSecrets(
+  account: string,
+  secrets: PendingSyncV2BootstrapSecrets,
+  store = platformSyncV2SecretStore(),
+): Promise<void> {
+  await store.set(account, JSON.stringify(secrets));
+}
+
+export async function loadPendingSyncV2BootstrapSecrets(
+  account: string,
+  store = platformSyncV2SecretStore(),
+): Promise<PendingSyncV2BootstrapSecrets> {
+  const value = await store.get(account);
+  if (value === null) throw new Error('Pending connection credentials are missing from the operating system credential store');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    throw new Error('Pending connection credentials in the operating system credential store are invalid');
+  }
+  if (!isBootstrapSecrets(parsed)) {
+    throw new Error('Pending connection credentials in the operating system credential store are invalid');
   }
   return parsed;
 }
@@ -213,6 +243,14 @@ function isPendingSecrets(value: unknown): value is PendingSyncV2PairSecrets {
     typeof value.agreementSecretKey === 'string' &&
     typeof value.signingSecretKey === 'string'
   );
+}
+
+function isBootstrapSecrets(value: unknown): value is PendingSyncV2BootstrapSecrets {
+  return isRecord(value) && isDeviceSecrets(value) &&
+    typeof value.connectionToken === 'string' &&
+    typeof value.deviceId === 'string' &&
+    typeof value.deviceName === 'string' &&
+    typeof value.issuedAt === 'string';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

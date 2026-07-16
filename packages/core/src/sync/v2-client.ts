@@ -28,6 +28,25 @@ export interface SyncV2BootstrapInput {
   certificate: SyncV2DeviceCertificate;
 }
 
+export interface SyncV2BootstrapConnectionInput extends SyncV2BootstrapInput {
+  deviceTokenHash: string;
+}
+
+export interface SyncV2ConnectionStatus {
+  id: string;
+  status: 'open' | 'pending' | 'approved' | 'cancelled' | 'claimed';
+  fingerprint: string | null;
+  expiresAt: string;
+}
+
+export interface SyncV2Invitation {
+  id: string;
+  kind: 'pair';
+  status: 'open';
+  connectUrl: string;
+  expiresAt: string;
+}
+
 export interface SyncV2PairRequestInput {
   requestId: string;
   deviceTokenHash: string;
@@ -48,7 +67,11 @@ export interface SyncV2MutationConflict {
   checkpoint: SyncV2Checkpoint;
 }
 
-type SyncAuth = { kind: 'none' } | { kind: 'device'; token: string } | { kind: 'pairing'; token: string };
+type SyncAuth =
+  | { kind: 'none' }
+  | { kind: 'device'; token: string }
+  | { kind: 'pairing'; token: string }
+  | { kind: 'connection'; token: string };
 
 export class SyncV2Client {
   private readonly baseUrl: string;
@@ -92,6 +115,58 @@ export class SyncV2Client {
     }
   }
 
+  async requestBootstrapConnection(
+    connectionToken: string,
+    input: SyncV2BootstrapConnectionInput,
+  ): Promise<SyncV2ConnectionStatus & { fingerprint: string }> {
+    const value = await this.requestJson(
+      '/v2/bootstrap/requests',
+      { method: 'POST', body: JSON.stringify(input) },
+      { kind: 'connection', token: connectionToken },
+    );
+    if (!isConnectionStatus(value) || value.status !== 'pending' || value.fingerprint === null) {
+      throw new Error('Sync server returned an invalid first-device connection response');
+    }
+    return { ...value, fingerprint: value.fingerprint };
+  }
+
+  async bootstrapConnectionStatus(
+    connectionToken: string,
+    grantId: string,
+  ): Promise<SyncV2ConnectionStatus> {
+    const value = await this.requestJson(
+      `/v2/bootstrap/requests/${encodeURIComponent(grantId)}`,
+      {},
+      { kind: 'connection', token: connectionToken },
+    );
+    if (!isConnectionStatus(value) || value.id !== grantId) {
+      throw new Error('Sync server returned an invalid first-device connection status');
+    }
+    return value;
+  }
+
+  async claimBootstrapConnection(connectionToken: string, grantId: string): Promise<void> {
+    const value = await this.requestJson(
+      `/v2/bootstrap/requests/${encodeURIComponent(grantId)}/claim`,
+      { method: 'POST' },
+      { kind: 'connection', token: connectionToken },
+    );
+    if (!isRecord(value) || value.claimed !== true) {
+      throw new Error('Sync server returned an invalid first-device connection claim');
+    }
+  }
+
+  async cancelBootstrapConnection(connectionToken: string, grantId: string): Promise<void> {
+    const value = await this.requestJson(
+      `/v2/bootstrap/requests/${encodeURIComponent(grantId)}`,
+      { method: 'DELETE' },
+      { kind: 'connection', token: connectionToken },
+    );
+    if (!isRecord(value) || value.cancelled !== true) {
+      throw new Error('Sync server returned an invalid first-device cancellation response');
+    }
+  }
+
   async requestPairing(input: SyncV2PairRequestInput): Promise<SyncV2PairRequest & { requestToken: string }> {
     const value = await this.requestJson(
       '/v2/pair/requests',
@@ -102,6 +177,45 @@ export class SyncV2Client {
       throw new Error('Sync server returned an invalid pairing request');
     }
     return { ...value, requestToken: value.requestToken };
+  }
+
+  async requestInvitedPairing(
+    connectionToken: string,
+    input: SyncV2PairRequestInput,
+  ): Promise<SyncV2PairRequest & { requestToken: string }> {
+    const value = await this.requestJson(
+      '/v2/invitations/requests',
+      { method: 'POST', body: JSON.stringify(input) },
+      { kind: 'connection', token: connectionToken },
+    );
+    if (!isPairRequest(value) || typeof value.requestToken !== 'string' || value.requestToken.length < 20) {
+      throw new Error('Sync server returned an invalid invited pairing request');
+    }
+    return { ...value, requestToken: value.requestToken };
+  }
+
+  async createInvitation(deviceToken: string): Promise<SyncV2Invitation> {
+    const value = await this.requestJson('/v2/invitations', { method: 'POST' }, { kind: 'device', token: deviceToken });
+    if (!isRecord(value) || typeof value.id !== 'string' || value.kind !== 'pair' || value.status !== 'open' ||
+      typeof value.connectUrl !== 'string' || typeof value.expiresAt !== 'string') {
+      throw new Error('Sync server returned an invalid device invitation');
+    }
+    const url = new URL(value.connectUrl);
+    if (url.protocol !== 'https:' || url.pathname !== '/connect' || url.search !== '' || !url.hash.startsWith('#grant=')) {
+      throw new Error('Sync server returned an unsafe device invitation link');
+    }
+    return { id: value.id, kind: 'pair', status: 'open', connectUrl: value.connectUrl, expiresAt: value.expiresAt };
+  }
+
+  async cancelPairing(requestId: string, requestToken: string): Promise<void> {
+    const value = await this.requestJson(
+      `/v2/pair/requests/${encodeURIComponent(requestId)}`,
+      { method: 'DELETE' },
+      { kind: 'pairing', token: requestToken },
+    );
+    if (!isRecord(value) || value.cancelled !== true || value.requestId !== requestId) {
+      throw new Error('Sync server returned an invalid pairing cancellation response');
+    }
   }
 
   async inspectPairing(deviceToken: string, code: string): Promise<SyncV2PairRequest> {
@@ -266,7 +380,9 @@ export class SyncV2Client {
           ? { authorization: `Bearer ${auth.token}` }
           : auth.kind === 'pairing'
             ? { authorization: `Pairing ${auth.token}` }
-            : {}),
+            : auth.kind === 'connection'
+              ? { authorization: `Connection ${auth.token}` }
+              : {}),
         ...init.headers,
       },
     });
@@ -324,6 +440,12 @@ function isPairRequest(value: unknown): value is SyncV2PairRequest & { requestTo
     typeof value.signingPublicKey === 'string' &&
     typeof value.expiresAt === 'string'
   );
+}
+
+function isConnectionStatus(value: unknown): value is SyncV2ConnectionStatus {
+  return isRecord(value) && typeof value.id === 'string' &&
+    ['open', 'pending', 'approved', 'cancelled', 'claimed'].includes(String(value.status)) &&
+    (value.fingerprint === null || typeof value.fingerprint === 'string') && typeof value.expiresAt === 'string';
 }
 
 function isPairApproval(value: unknown): value is SyncV2PairApproval {

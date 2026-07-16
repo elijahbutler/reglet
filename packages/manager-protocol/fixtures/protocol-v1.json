@@ -33,7 +33,20 @@
     { "protocolVersion": 1, "operation": "structured-preview.preview", "input": { "providers": ["claude"], "contents": ["rules"] } },
     { "protocolVersion": 1, "operation": "structured-preview.apply", "input": { "providers": ["claude"], "contents": ["rules"], "digest": "sha256" } },
     { "protocolVersion": 1, "operation": "operation.restore", "input": { "id": "receipt-1" } },
-    { "protocolVersion": 1, "operation": "legacy-state.clear", "input": {} }
+    { "protocolVersion": 1, "operation": "legacy-state.clear", "input": {} },
+    { "protocolVersion": 1, "operation": "sync.preview.set", "input": { "acknowledged": true } },
+    { "protocolVersion": 1, "operation": "sync.snapshot", "input": {} },
+    { "protocolVersion": 1, "operation": "sync.bootstrap.start", "input": { "connectUrl": "https://sync.example/connect#grant=abcdefghijklmnopqrstuvwxyz&kind=bootstrap", "deviceName": "Mac" } },
+    { "protocolVersion": 1, "operation": "sync.invitation.create", "input": {} },
+    { "protocolVersion": 1, "operation": "sync.pair.request", "input": { "serverUrl": "https://sync.example", "deviceName": "Windows" } },
+    { "protocolVersion": 1, "operation": "sync.pair.approve", "input": { "code": "AB12CD34" } },
+    { "protocolVersion": 1, "operation": "sync.pair.status", "input": {} },
+    { "protocolVersion": 1, "operation": "sync.pair.complete", "input": { "fingerprint": "ABCD EFGH" } },
+    { "protocolVersion": 1, "operation": "sync.pair.cancel", "input": {} },
+    { "protocolVersion": 1, "operation": "sync.run", "input": {} },
+    { "protocolVersion": 1, "operation": "sync.device.rename", "input": { "deviceId": "device-id", "name": "Office Mac" } },
+    { "protocolVersion": 1, "operation": "sync.device.revoke", "input": { "deviceId": "device-id" } },
+    { "protocolVersion": 1, "operation": "sync.disconnect", "input": { "localOnly": false } }
   ],
   "responses": [
     { "protocolVersion": 1, "operation": "snapshot", "ok": true, "result": { "version": 2 } },

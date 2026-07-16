@@ -6,7 +6,7 @@ use std::{
 };
 use tauri::{
     menu::{MenuBuilder, SubmenuBuilder},
-    AppHandle,
+    AppHandle, Manager,
 };
 use tauri_plugin_shell::{process::CommandEvent, ShellExt};
 
@@ -303,6 +303,13 @@ fn user_home() -> Option<PathBuf> {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let handle = app.handle();

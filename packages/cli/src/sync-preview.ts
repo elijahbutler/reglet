@@ -124,7 +124,10 @@ export function registerSyncV2PreviewCommands(program: Command): void {
         return;
       }
       if (state === null) console.log('sync\tnot-configured');
-      else if (state.phase === 'pending') console.log(`sync\tpending\tdevice=${state.request.deviceName}`);
+      else if (state.phase === 'pending') {
+        const deviceName = state.method === 'pair' ? state.request.deviceName : state.deviceName;
+        console.log(`sync\tpending\tdevice=${deviceName}`);
+      }
       else console.log(`sync\tactive\tdevice=${state.deviceName}\tcursor=${state.cursor}\tepoch=${state.keyEpoch}`);
     });
 

@@ -220,7 +220,7 @@ export function createConnectionGrant(
     id,
     kind,
     status: 'open',
-    connectUrl: `${publicUrl.replace(/\/$/, '')}/connect#grant=${encodeURIComponent(token)}`,
+    connectUrl: `${publicUrl.replace(/\/$/, '')}/connect#grant=${encodeURIComponent(token)}&kind=${kind}`,
     fingerprint: null,
     expiresAt: new Date(timestamp.getTime() + grantLifetimeMs).toISOString(),
     token,

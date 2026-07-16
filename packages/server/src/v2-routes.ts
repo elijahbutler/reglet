@@ -369,9 +369,6 @@ export function registerSyncV2Routes(
     if (auth === null) return c.json(errorBody('unauthorized', 'unauthorized'), 401);
     const targetId = c.req.param('deviceId');
     if (!isIdentifier(targetId)) return c.json(errorBody('invalid_request', 'device id is invalid'), 400);
-    if (targetId === auth.deviceId) {
-      return c.json(errorBody('current_device', 'current device cannot revoke itself in the preview'), 409);
-    }
     const result = db.query(
       'update devices set revoked_at = ? where user_id = ? and sync_device_id = ? and revoked_at is null',
     ).run(now().toISOString(), auth.userId, targetId);

@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   ChevronRight,
   CheckCircle2,
+  Cloud,
   Download,
   FileText,
   FolderOpen,
@@ -24,11 +25,13 @@ import type {
   ManagerSnapshotV2,
 } from '@reglet/manager-protocol';
 import { jsonObject, type ManagerBridge, type UpdateCheckResult } from '../managerBridge.js';
+import { noConnectLinks, type ConnectLinkSource } from '../deepLinks.js';
 import { BrandMark } from './BrandMark.js';
 import { ModalDialog } from './ModalDialog.js';
 import { OnboardingWizard } from './OnboardingWizard.js';
+import { SyncView } from './sync/SyncView.js';
 
-const sections = ['Providers', 'Rules', 'Skills', 'MCP', 'Activity & Drift', 'Recovery'] as const;
+const sections = ['Providers', 'Rules', 'Skills', 'MCP', 'Sync', 'Activity & Drift', 'Recovery'] as const;
 type Section = (typeof sections)[number];
 type Dialog =
   | { kind: 'destructive'; title: string; body: string; actionLabel: string; run: () => Promise<void> }
@@ -69,6 +72,7 @@ const contentIds: ManagerContentId[] = ['rules', 'skills', 'mcp'];
 
 interface AppProps {
   bridge: ManagerBridge;
+  connectLinks?: ConnectLinkSource;
 }
 
 interface DraftState {
@@ -103,7 +107,7 @@ const initialDrafts: DraftState = {
   mcpSyncProviders: [],
 };
 
-export function App({ bridge }: AppProps) {
+export function App({ bridge, connectLinks = noConnectLinks }: AppProps) {
   const [section, setSection] = useState<Section>('Providers');
   const [snapshot, setSnapshot] = useState<ManagerSnapshotV2 | null>(null);
   const [loading, setLoading] = useState(true);
@@ -126,6 +130,7 @@ export function App({ bridge }: AppProps) {
   const [mcpServers, setMcpServers] = useState<McpServerSummary[]>([]);
   const [selectedMcpServer, setSelectedMcpServer] = useState<McpServerSummary | null>(null);
   const [showsOnboarding, setShowsOnboarding] = useState(false);
+  const [incomingConnectLink, setIncomingConnectLink] = useState<string | null>(null);
   const promptedForOnboarding = useRef(false);
 
   const refresh = useCallback(async () => {
@@ -175,6 +180,27 @@ export function App({ bridge }: AppProps) {
   useEffect(() => {
     if (autoUpdates) void checkForUpdates(true);
   }, [autoUpdates, checkForUpdates]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    const open = (url: string) => {
+      if (disposed) return;
+      setIncomingConnectLink(url);
+      setSection('Sync');
+    };
+    void connectLinks.current().then((url) => {
+      if (url !== null) open(url);
+    }).catch(() => undefined);
+    void connectLinks.listen(open).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    }).catch(() => undefined);
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [connectLinks]);
 
   useEffect(() => {
     if (section === 'Rules' && snapshot !== null && ruleDocuments.length === 0 && !busy) {
@@ -629,6 +655,14 @@ export function App({ bridge }: AppProps) {
                   onSave={() => void saveMcp()}
                   onOpenLocation={(path) => void openRuleLocation(path)}
                   busy={busy}
+                />
+              )}
+              {section === 'Sync' && (
+                <SyncView
+                  bridge={bridge}
+                  incomingLink={incomingConnectLink}
+                  onConsumedLink={() => setIncomingConnectLink(null)}
+                  onReview={() => setSection('Activity & Drift')}
                 />
               )}
               {section === 'Activity & Drift' && (
@@ -1155,6 +1189,7 @@ function sectionIcon(section: Section) {
   if (section === 'Rules') return <FileText {...props} />;
   if (section === 'Skills') return <Wrench {...props} />;
   if (section === 'MCP') return <Plug {...props} />;
+  if (section === 'Sync') return <Cloud {...props} />;
   if (section === 'Activity & Drift') return <GitCompare {...props} />;
   return <RotateCcw {...props} />;
 }

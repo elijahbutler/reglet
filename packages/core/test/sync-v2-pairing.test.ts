@@ -6,6 +6,7 @@ import {
   activeSyncV2CredentialId,
   approveSyncV2Pairing,
   bootstrapSyncV2,
+  completeSyncV2BootstrapConnection,
   completeSyncV2Pairing,
   listManagedSyncV2Devices,
   loadActiveSyncV2State,
@@ -13,7 +14,9 @@ import {
   logoutSyncV2,
   pendingSyncV2PairingStatus,
   pendingSyncV2CredentialId,
+  parseSyncV2ConnectLink,
   requestSyncV2Pairing,
+  startSyncV2BootstrapConnection,
   type SyncV2SecretStore,
 } from '../src/index.js';
 import { closeApp, createApp } from '../../server/src/app.js';
@@ -32,6 +35,78 @@ afterEach(async () => {
 });
 
 describe('sync protocol v2 pairing orchestration', () => {
+  test('retries an interrupted owner-approved first-device connection without changing its fingerprint', async () => {
+    const claimLinks: string[] = [];
+    const app = useApp(createApp({
+      publicUrl: 'https://reglet.test',
+      onOwnerClaimLink: (link) => claimLinks.push(link),
+      rateLimit: false,
+    }));
+    const claimToken = new URL(claimLinks[0]!).hash.slice('#claim='.length);
+    const claim = await app.request('/api/admin/v1/claim', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://reglet.test' },
+      body: JSON.stringify({ token: claimToken, email: 'owner@example.com', password: 'correct horse battery staple' }),
+    });
+    const cookie = claim.headers.get('set-cookie') ?? '';
+    const session = await claim.json() as { csrfToken: string };
+    const grantResponse = await app.request('/api/admin/v1/connections', {
+      method: 'POST',
+      headers: { cookie, origin: 'https://reglet.test', 'x-reglet-csrf': session.csrfToken },
+    });
+    const grant = await grantResponse.json() as { id: string; connectUrl: string };
+    expect(parseSyncV2ConnectLink(grant.connectUrl).kind).toBe('bootstrap');
+
+    const home = await tempDirectory();
+    const store = new MemorySecretStore();
+    const directFetch = appFetch(app);
+    let interrupt = true;
+    const interruptedFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      const response = await directFetch(request);
+      if (interrupt && request.method === 'POST' && new URL(request.url).pathname === '/v2/bootstrap/requests') {
+        interrupt = false;
+        throw new Error('connection dropped after server commit');
+      }
+      return response;
+    }) as typeof fetch;
+
+    await expect(startSyncV2BootstrapConnection({
+      connectUrl: grant.connectUrl,
+      deviceName: 'Owner Mac',
+      home,
+      fetchImpl: interruptedFetch,
+      secretStore: store,
+    })).rejects.toThrow('connection dropped');
+    const retried = await startSyncV2BootstrapConnection({
+      connectUrl: grant.connectUrl,
+      deviceName: 'Owner Mac',
+      home,
+      fetchImpl: directFetch,
+      secretStore: store,
+    });
+    const pending = await app.request('/api/admin/v1/connections', { headers: { cookie } });
+    expect(await pending.json()).toMatchObject({ connections: [{ id: grant.id, fingerprint: retried.fingerprint }] });
+
+    expect((await app.request(`/api/admin/v1/connections/${grant.id}/approve`, {
+      method: 'POST',
+      headers: { cookie, origin: 'https://reglet.test', 'x-reglet-csrf': session.csrfToken },
+    })).status).toBe(200);
+    await expect(completeSyncV2BootstrapConnection({
+      confirmedFingerprint: 'wrong fingerprint',
+      home,
+      fetchImpl: directFetch,
+      secretStore: store,
+    })).rejects.toThrow('does not match');
+    await completeSyncV2BootstrapConnection({
+      confirmedFingerprint: retried.fingerprint,
+      home,
+      fetchImpl: directFetch,
+      secretStore: store,
+    });
+    expect((await loadActiveSyncV2State(home)).deviceName).toBe('Owner Mac');
+  });
+
   test('bootstraps a Mac, pairs Windows after SAS comparison, and keeps secrets out of state files', async () => {
     const databasePath = path.join(await tempDirectory(), 'reglet.sqlite');
     const bootstrapToken = 'pairing-bootstrap-token-with-entropy-123';
@@ -158,6 +233,12 @@ describe('sync protocol v2 pairing orchestration', () => {
       }),
     ).rejects.toThrow('credentials exist but local sync state is missing');
     expect(await pairingStore.get(pendingSyncV2CredentialId(serverUrl))).toBe('recoverable-pending-credential');
+  });
+
+  test('rejects connection links with query secrets, insecure origins, or unexpected fragments', () => {
+    expect(() => parseSyncV2ConnectLink('https://sync.example/connect?grant=abcdefghijklmnopqrstuvwxyz')).toThrow('valid grant');
+    expect(() => parseSyncV2ConnectLink('http://sync.example/connect#grant=abcdefghijklmnopqrstuvwxyz')).toThrow('must use HTTPS');
+    expect(() => parseSyncV2ConnectLink('https://sync.example/connect#grant=abcdefghijklmnopqrstuvwxyz&redirect=evil')).toThrow('unexpected data');
   });
 });
 

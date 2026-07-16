@@ -69,6 +69,16 @@ export async function syncOnceV2(options: SyncV2OnceOptions = {}): Promise<SyncV
   const pullChanged = await pullEncryptedChanges(home, state, secrets, client, result);
   await pushEncryptedChanges(home, state, secrets, client, result);
   result.providerReviewRequired = pullChanged || result.merged.length > 0 || result.conflicts.length > 0;
+  state.lastSync = {
+    completedAt: new Date().toISOString(),
+    pulled: result.pulled.length,
+    pushed: result.pushed.length,
+    merged: result.merged.length,
+    conflicts: result.conflicts.length,
+    deleted: result.deleted.length,
+    providerReviewRequired: result.providerReviewRequired,
+  };
+  await saveSyncV2State(state, home);
   return result;
 }
 

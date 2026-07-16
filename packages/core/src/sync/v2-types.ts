@@ -115,6 +115,13 @@ export interface PendingSyncV2PairSecrets {
   signingSecretKey: string;
 }
 
+export interface PendingSyncV2BootstrapSecrets extends SyncV2DeviceSecrets {
+  connectionToken: string;
+  deviceId: string;
+  deviceName: string;
+  issuedAt: string;
+}
+
 export interface SyncV2ChangesResponse {
   changes: StoredSyncV2Envelope[];
   cursor: number;

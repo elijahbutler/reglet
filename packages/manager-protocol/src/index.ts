@@ -1,6 +1,7 @@
 export const managerProtocolVersion = 1 as const;
 
 export * from './snapshot-v2.js';
+export * from './sync.js';
 import {
   isManagerSnapshotV2,
   type ManagerContentId,
@@ -43,6 +44,19 @@ export const managerProtocolOperations = [
   'structured-preview.apply',
   'operation.restore',
   'legacy-state.clear',
+  'sync.preview.set',
+  'sync.snapshot',
+  'sync.bootstrap.start',
+  'sync.invitation.create',
+  'sync.pair.request',
+  'sync.pair.approve',
+  'sync.pair.status',
+  'sync.pair.complete',
+  'sync.pair.cancel',
+  'sync.run',
+  'sync.device.rename',
+  'sync.device.revoke',
+  'sync.disconnect',
 ] as const;
 
 export const managerProtocolErrorCodes = [
@@ -182,6 +196,15 @@ export type IdInput = JsonObject & {
   id: string;
 };
 
+export type SyncPreviewSetInput = JsonObject & { acknowledged: boolean };
+export type SyncConnectionStartInput = JsonObject & { connectUrl: string; deviceName: string };
+export type SyncPairRequestInput = JsonObject & { serverUrl?: string; connectUrl?: string; deviceName: string };
+export type SyncPairApproveInput = JsonObject & { code: string };
+export type SyncPairCompleteInput = JsonObject & { fingerprint: string };
+export type SyncDeviceRenameInput = JsonObject & { deviceId: string; name: string };
+export type SyncDeviceRevokeInput = JsonObject & { deviceId: string };
+export type SyncDisconnectInput = JsonObject & { localOnly?: boolean };
+
 export interface ManagerRpcInputs {
   snapshot: SnapshotInput;
   scan: JsonObject;
@@ -217,6 +240,19 @@ export interface ManagerRpcInputs {
   'structured-preview.apply': StructuredPreviewApplyInput;
   'operation.restore': IdInput;
   'legacy-state.clear': JsonObject;
+  'sync.preview.set': SyncPreviewSetInput;
+  'sync.snapshot': JsonObject;
+  'sync.bootstrap.start': SyncConnectionStartInput;
+  'sync.invitation.create': JsonObject;
+  'sync.pair.request': SyncPairRequestInput;
+  'sync.pair.approve': SyncPairApproveInput;
+  'sync.pair.status': JsonObject;
+  'sync.pair.complete': SyncPairCompleteInput;
+  'sync.pair.cancel': JsonObject;
+  'sync.run': JsonObject;
+  'sync.device.rename': SyncDeviceRenameInput;
+  'sync.device.revoke': SyncDeviceRevokeInput;
+  'sync.disconnect': SyncDisconnectInput;
 }
 
 export type ManagerRpcRequestFor<Operation extends ManagerProtocolOperation> = {
@@ -354,6 +390,19 @@ export const operationInputSchemas: Record<ManagerProtocolOperation, JsonObject>
   'structured-preview.apply': objectSchema({ ...providerSelectionProperties, digest: { type: 'string' } }, ['digest']),
   'operation.restore': objectSchema({ id: { type: 'string' } }, ['id']),
   'legacy-state.clear': objectSchema({}),
+  'sync.preview.set': objectSchema({ acknowledged: { type: 'boolean' } }, ['acknowledged']),
+  'sync.snapshot': objectSchema({}),
+  'sync.bootstrap.start': objectSchema({ connectUrl: { type: 'string' }, deviceName: { type: 'string' } }, ['connectUrl', 'deviceName']),
+  'sync.invitation.create': objectSchema({}),
+  'sync.pair.request': objectSchema({ serverUrl: { type: 'string' }, connectUrl: { type: 'string' }, deviceName: { type: 'string' } }, ['deviceName']),
+  'sync.pair.approve': objectSchema({ code: { type: 'string' } }, ['code']),
+  'sync.pair.status': objectSchema({}),
+  'sync.pair.complete': objectSchema({ fingerprint: { type: 'string' } }, ['fingerprint']),
+  'sync.pair.cancel': objectSchema({}),
+  'sync.run': objectSchema({}),
+  'sync.device.rename': objectSchema({ deviceId: { type: 'string' }, name: { type: 'string' } }, ['deviceId', 'name']),
+  'sync.device.revoke': objectSchema({ deviceId: { type: 'string' } }, ['deviceId']),
+  'sync.disconnect': objectSchema({ localOnly: { type: 'boolean' } }),
 };
 
 export const managerRpcRequestValidator: RuntimeValidator<ManagerRpcRequest> = {
@@ -505,6 +554,11 @@ function isOperationInput(operation: ManagerProtocolOperation, input: JsonObject
     case 'rules.merge-runners':
     case 'skills.list':
     case 'legacy-state.clear':
+    case 'sync.snapshot':
+    case 'sync.invitation.create':
+    case 'sync.pair.status':
+    case 'sync.pair.cancel':
+    case 'sync.run':
       return exact(input, []);
     case 'plan':
     case 'structured-preview.preview':
@@ -562,6 +616,24 @@ function isOperationInput(operation: ManagerProtocolOperation, input: JsonObject
       return isProviderSelection(input, ['digest']) && typeof input.digest === 'string';
     case 'operation.restore':
       return exact(input, ['id']) && typeof input.id === 'string';
+    case 'sync.preview.set':
+      return exact(input, ['acknowledged']) && typeof input.acknowledged === 'boolean';
+    case 'sync.bootstrap.start':
+      return exact(input, ['connectUrl', 'deviceName']) && typeof input.connectUrl === 'string' && typeof input.deviceName === 'string';
+    case 'sync.pair.request':
+      return exact(input, ['serverUrl', 'connectUrl', 'deviceName']) && optionalString(input.serverUrl) &&
+        optionalString(input.connectUrl) && (typeof input.serverUrl === 'string' || typeof input.connectUrl === 'string') &&
+        typeof input.deviceName === 'string';
+    case 'sync.pair.approve':
+      return exact(input, ['code']) && typeof input.code === 'string';
+    case 'sync.pair.complete':
+      return exact(input, ['fingerprint']) && typeof input.fingerprint === 'string';
+    case 'sync.device.rename':
+      return exact(input, ['deviceId', 'name']) && typeof input.deviceId === 'string' && typeof input.name === 'string';
+    case 'sync.device.revoke':
+      return exact(input, ['deviceId']) && typeof input.deviceId === 'string';
+    case 'sync.disconnect':
+      return exact(input, ['localOnly']) && optionalBoolean(input.localOnly);
   }
 }
 

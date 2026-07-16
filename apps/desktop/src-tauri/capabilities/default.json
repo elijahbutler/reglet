@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Reglet desktop default permissions",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "deep-link:default"]
 }
