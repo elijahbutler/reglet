@@ -21,6 +21,14 @@ Requirements:
 - Docker with Compose.
 - A public DNS name behind an HTTPS reverse proxy. Clients reject non-loopback HTTP.
 - A private loopback binding between the proxy and Reglet.
+- A tagged Reglet release or trusted source checkout.
+
+When deploying from source, pin the checkout before building:
+
+```bash
+git fetch --tags
+git checkout v0.1.18
+```
 
 Prepare the deployment:
 
@@ -40,7 +48,7 @@ REGLET_BIND_PORT=3100
 REGLET_BOOTSTRAP_TOKEN=
 ```
 
-`REGLET_PUBLIC_URL` must be the exact external HTTPS origin. It is used for secure same-origin owner sessions, CSRF checks, claim links, and connection invitations.
+`REGLET_PUBLIC_URL` must be the exact external HTTPS origin. It is used for secure same-origin owner sessions, CSRF checks, claim links, and connection invitations. Do not set it to the loopback bind address.
 
 Start the service and inspect its logs once:
 
@@ -55,7 +63,7 @@ The first startup prints one expiring `https://.../admin#claim=...` link. Open i
 docker compose exec reglet-sync bun packages/server/src/admin.ts owner-reset-link
 ```
 
-The service runs without root capabilities, keeps its root filesystem read-only, persists SQLite in `reglet-data`, writes backups only under the mounted `/backups` directory, and serves the locally bundled dashboard at `/admin`.
+The service runs without root capabilities, keeps its root filesystem read-only, disables registration and legacy protocol v1, persists SQLite in `reglet-data`, writes backups only under the mounted `/backups` directory, and serves the locally bundled dashboard at `/admin`.
 
 Point the TLS proxy at `127.0.0.1:3100`; do not expose that port publicly. Verify:
 
@@ -141,6 +149,16 @@ curl --fail https://sync.example.com/readyz
 Migrations are additive and forward-version guarded. Existing encrypted objects, checkpoints, vault identity, device credentials, and token-bootstrapped devices remain valid without re-pairing.
 
 `REGLET_BOOTSTRAP_TOKEN` is compatibility-only. An older server that was initialized with it may keep the value during the first upgrade. After an existing device successfully appears in the dashboard and completes a sync, clear the variable and recreate the container. New servers leave it empty and connect the first device through an owner-dashboard invitation.
+
+For source deployments, pin each upgrade to the target release tag before rebuilding:
+
+```bash
+git fetch --tags
+git checkout v0.1.18
+docker compose build --pull reglet-sync
+docker compose up -d --force-recreate reglet-sync
+curl --fail https://sync.example.com/readyz
+```
 
 ## Coolify deployment
 

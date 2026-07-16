@@ -4,7 +4,7 @@
 
 Reglet is a local-only CLI, with retained Swift macOS manager source and a cross-platform Tauri desktop manager under parity development, for global AI-agent rules, skills, and MCP configurations. It keeps one versionable master directory, renders it to the six supported providers, makes every provider write reviewable, and retains recovery data indefinitely.
 
-Public V1 has no account, device-linking, remote configuration, background network transfer, or network management commands. Its configuration path stays on the current machine. Desktop update checks are manual unless a user explicitly opts into automatic checks. macOS desktop artifacts are ad-hoc signed and unnotarized; Windows artifacts are unsigned. Linux GUI artifacts are deferred.
+The default Public V1 CLI has no account, device-linking, remote configuration, background network transfer, or network management commands. Its configuration path stays on the current machine. Encrypted sync is separate, explicitly gated desktop preview functionality for personal self-hosted testing. Desktop update checks are manual unless a user explicitly opts into automatic checks. macOS desktop artifacts are ad-hoc signed and unnotarized; Windows artifacts are unsigned. Linux GUI artifacts are deferred.
 
 ```text
 ~/.reglet/                 provider outputs
@@ -19,6 +19,7 @@ Public V1 has no account, device-linking, remote configuration, background netwo
 
 - Rules, shared skills, provider-scoped skills, and managed MCP entries for Claude Code, Codex CLI, Cursor, Gemini CLI, Windsurf, and OpenCode.
 - Retained native macOS manager source, frozen during Tauri parity, plus a Tauri desktop manager with Providers, Rules, Skills, MCP, Activity & Drift, and Recovery screens.
+- A gated encrypted sync preview for personal self-hosted desktop testing, with a same-origin owner dashboard, first-device approval, trusted-device pairing, manual sync, device access controls, server health checks, and verified SQLite backups.
 - Digest-backed Review & Apply plans with exact redacted diffs, drift checks, durable operation receipts, and explicit receipt restore.
 - Typed local MCP environment references. Raw credential strings are invalid and are never copied into previews, logs, diagnostics, journals, or receipts.
 - Owner-only Reglet state, journal, and snapshot permissions (`0700` directories and `0600` files).
@@ -99,7 +100,7 @@ If an older installation left pre-V1 network state behind, it is inert and never
 
 ## Self-host the encrypted sync preview
 
-Protocol v2 is an explicitly gated desktop preview for a personal homeserver and devices you control. It is not ready for production or multi-tenant use: automatic key rotation after revocation and offline key recovery are not implemented. Keep an independent copy of the Reglet Master and verified server backups while testing.
+Protocol v2 is an explicitly gated desktop preview for a personal homeserver and devices you control. It is not ready for production, teams, hosted administration, or multi-tenant use: automatic key rotation after revocation and offline key recovery are not implemented. Keep an independent copy of the Reglet Master and verified server backups while testing.
 
 The homeserver is an encrypted relay and device registry, not a central editor. It stores authenticated ciphertext and cannot read or apply your rules, skills, or MCP definitions. Each authorized Mac or Windows device remains an equal Reglet manager:
 
@@ -119,7 +120,14 @@ The included Compose deployment binds Reglet to `127.0.0.1:3100`, disables regis
 
 ### Start the server
 
-From a Reglet checkout on the homeserver:
+Deploy from a tagged Reglet release or a checkout you trust. When deploying from source, pin the checkout to the release you intend to run before building the container:
+
+```bash
+git fetch --tags
+git checkout v0.1.18
+```
+
+Then prepare the homeserver environment:
 
 ```bash
 cd deploy/homeserver
@@ -129,7 +137,7 @@ mkdir -p backups
 chmod 700 backups
 ```
 
-Set `REGLET_PUBLIC_URL=https://sync.example.com` in `.env`. Keep `REGLET_BOOTSTRAP_TOKEN` empty on new servers; it remains compatibility-only for servers bootstrapped by an older preview client. Then build and start the container:
+Set `REGLET_PUBLIC_URL=https://sync.example.com` in `.env`. It must be the exact public HTTPS origin that clients and the dashboard use. Keep `REGLET_BOOTSTRAP_TOKEN` empty on new servers; it remains compatibility-only for servers bootstrapped by an older preview client. Then build and start the container:
 
 ```bash
 docker compose up -d --build
@@ -137,7 +145,7 @@ docker compose ps
 docker compose logs reglet-sync
 ```
 
-Point an HTTPS reverse proxy at `127.0.0.1:3100`. Replace `sync.example.com` in [Caddyfile.example](deploy/homeserver/Caddyfile.example) with your DNS name and add it to your Caddy configuration. Do not publish port 3100 directly.
+Point an HTTPS reverse proxy at `127.0.0.1:3100`. Replace `sync.example.com` in [Caddyfile.example](deploy/homeserver/Caddyfile.example) with your DNS name and add it to your Caddy configuration. Do not publish port 3100 directly; the Compose file intentionally binds the service to loopback.
 
 Verify the public TLS endpoint:
 
@@ -146,11 +154,11 @@ curl --fail https://sync.example.com/readyz
 curl --fail https://sync.example.com/v2/compatibility
 ```
 
-The first startup log contains one expiring owner claim link. Open it directly and set the single owner account. The compatibility response must report protocol `2` and suite `reglet-xchacha20poly1305-ed25519-x25519-hkdfsha256-v1`.
+The first startup log contains one expiring owner claim link. Open it directly and set the single owner account. After claiming, use `/admin` for sign-in, device access, health, integrity, and backups. The compatibility response must report protocol `2` and suite `reglet-xchacha20poly1305-ed25519-x25519-hkdfsha256-v1`.
 
 ### Connect the first device
 
-Open `/admin`, create a device invitation, and open or paste it in the desktop **Sync** section. Compare the desktop and dashboard fingerprints before approving. Reglet generates and stores the vault keys and independent device credential locally.
+Open `/admin`, create a device invitation, and open or paste it in the desktop **Sync** section. Compare the desktop and dashboard fingerprints before approving. Reglet generates and stores the vault keys and independent device credential locally. Do not approve the request if the fingerprints differ.
 
 Later devices can join with a link/QR invitation from an authorized desktop or request an eight-character code from the server. In both cases, a trusted Reglet device must inspect and approve the request, and the new device must confirm the matching fingerprint.
 
@@ -158,7 +166,7 @@ Sync can move a newly adopted skill or imported Codex `AGENTS.md` from Windows t
 
 ### Back up and upgrade
 
-SQLite data lives in the `reglet-data` Docker volume. The dashboard serializes backup jobs, writes server-chosen files to `deploy/homeserver/backups`, verifies them with `quick_check`, and can check the live database. Equivalent host commands are:
+SQLite data lives in the `reglet-data` Docker volume. The dashboard serializes backup jobs, writes server-chosen files to `deploy/homeserver/backups`, verifies them with `quick_check`, lists verification status, and can check the live database. Equivalent host commands are:
 
 ```bash
 docker compose exec reglet-sync \
@@ -166,10 +174,13 @@ docker compose exec reglet-sync \
 docker compose exec reglet-sync bun packages/server/src/admin.ts check
 ```
 
-Create and verify a backup before upgrading, update the checkout, then rebuild the service and recheck readiness:
+Create and verify a backup before upgrading. Then move the checkout to the new release tag, recreate the service, and recheck readiness:
 
 ```bash
-docker compose up -d --build
+git fetch --tags
+git checkout v0.1.18
+docker compose build --pull reglet-sync
+docker compose up -d --force-recreate reglet-sync
 curl --fail https://sync.example.com/readyz
 ```
 
