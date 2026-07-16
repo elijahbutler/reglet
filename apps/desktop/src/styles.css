@@ -529,6 +529,26 @@
   }
 
   @media (max-width: 900px) {
+    .app-shell {
+      @apply grid-cols-1;
+    }
+
+    .app-nav {
+      @apply flex items-start gap-1 overflow-x-auto border-b border-r-0 px-3 py-2;
+    }
+
+    .app-nav .nav-button {
+      @apply mb-0 w-auto shrink-0 whitespace-nowrap;
+    }
+
+    .updates-panel {
+      @apply mt-0 min-w-52 shrink-0;
+    }
+
+    .snapshot-summary {
+      @apply grid-cols-2;
+    }
+
     .onboarding-header {
       @apply grid-cols-[1fr_auto];
     }
@@ -559,6 +579,16 @@
   }
 
   @media (max-width: 620px) {
+    .app-header,
+    .app-content {
+      @apply px-4;
+    }
+
+    .snapshot-summary,
+    .provider-content-grid {
+      @apply grid-cols-1;
+    }
+
     .provider-source-actions > button,
     .ai-draft-actions > div,
     .ai-draft-actions > div > * {
@@ -575,6 +605,13 @@
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .onboarding-footer {
+    @apply bg-reglet-panel;
+    backdrop-filter: none;
   }
 }
 

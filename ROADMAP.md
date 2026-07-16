@@ -1,49 +1,212 @@
-# Reglet public V1 roadmap
+# Reglet production roadmap
 
-## V1 boundary
+## Status
 
-Public V1 is a local-only CLI release for the existing six provider adapters. It manages rules, skills, and MCP configuration on the current machine. It does not ship accounts, device lifecycle, remote configuration, hosted services, self-hosted services, network-management commands, or a public macOS app artifact.
+Reglet is a local-first CLI and cross-platform Tauri desktop app for managing global AI-agent rules, Skills, and MCP configuration. The retained Swift app is frozen as a compatibility reference while Tauri becomes the only desktop implementation.
 
-The V1 promise is simple:
+The current public capability remains local-only. Multi-device sync exists as dormant source and tests, but it is not a supported public capability and must not be enabled until the security and recovery gates in this roadmap are complete.
 
-> Select a local scope, inspect a redacted exact plan, apply it safely, and recover it without relying on terminal memory.
+The target product is:
 
-Remote and team capabilities remain unsupported internal source for a later security redesign. They are not a public product capability, artifact, or documentation surface.
+> One private, reviewable Master for local AI-agent configuration, with optional end-to-end encrypted synchronization between explicitly paired devices.
 
-## Completed product work
+## Production definition
 
-- [x] Local master directory and six provider adapters.
-- [x] Immutable public-release capability boundary; the CLI has no `login`, `register`, `pair`, or `sync` command and the macOS manager has no Sync destination.
-- [x] Typed MCP process-environment references, missing-variable blocking, redacted review output, and non-reversible secret fingerprints in plan freshness checks.
-- [x] Owner-only state, journals, receipts, and recovery snapshots, with fail-closed permission checks.
-- [x] Digest-backed transaction plans, atomic sibling staging, durable journals, cross-provider rollback, automatic interruption recovery, and indefinitely retained receipts/snapshots.
-- [x] Receipt list/show/restore interfaces and compatibility `restore`/`revert` commands.
-- [x] Scoped Stop Managing that preserves provider content and removes the generated rules header when applicable.
-- [x] Native macOS manager source for review/apply, Activity, recovery, scoped lifecycle, search, unsaved-edit confirmation, and one redacted manager snapshot response.
-- [x] Manual update checks with automatic checks disabled by default.
+Reglet is production-ready only when all of the following are true:
 
-## Release gates
+- A user can install, onboard, edit, review, apply, detect drift, detach, and recover without terminal knowledge.
+- Every provider mutation uses a fresh digest-backed plan, snapshots existing content, and creates a durable receipt.
+- Network-originated changes can update only the local Master draft. They never write provider files without a separate local Review & Apply action.
+- The sync service cannot read Master content or resolved MCP credential values.
+- Lost or compromised devices can be listed and revoked without rotating every healthy device.
+- Supported macOS and Windows artifacts are signed, reproducibly tested, and covered by keyboard and screen-reader evidence.
+- The CLI remains a fully supported local automation surface.
+- Release documentation describes actual shipped behavior and contains no stale product boundaries.
 
-The code and release automation enforce the following public CLI gates. Source-level macOS manager checks remain in CI, but the app is not a public release artifact.
+## Non-negotiable trust boundaries
 
-- [x] Bun, lint, typecheck, and macOS-native Swift tests run in CI.
-- [x] Release packaging produces CLI binaries for macOS arm64, macOS x64, and Windows x64 with checksums, provenance, and GitHub attestation.
-- [x] Public release publishing is blocked unless `HOMEBREW_TAP_TOKEN` updates `Formula/reglet.rb` in `elijahbutler/homebrew-reglet`.
-- [x] Privacy, recovery, security-reporting, release-integrity, and V1-limitations documentation is published with the source.
-- [ ] Validate the CLI release on macOS and Windows: install/download → scan → preview → apply → drift → receipt recovery → detach.
-- [ ] Record source-level keyboard-only, VoiceOver, contrast, motion, transparency, and text-size evidence before any future public app decision.
+1. **Local-first:** editing and applying work without an account or server.
+2. **Explicit network consent:** no account creation, pairing, sync, telemetry, or update check runs without an explicit user choice.
+3. **No remote apply:** pulls create a reviewable Master revision; provider output is always a separate local transaction.
+4. **End-to-end encryption:** hosted storage contains ciphertext and minimal routing metadata, not plaintext rules, Skills, MCP definitions, or credentials.
+5. **Typed secrets:** MCP credentials remain process-environment references. Resolved values never enter sync payloads.
+6. **Recoverability:** sync conflicts, local provider drift, provider apply, and receipt restoration remain distinct operations.
+7. **Fail closed:** unknown protocol versions, invalid paths, invalid ciphertext, stale revisions, missing variables, and insecure local permissions block mutation.
 
-## Public V1 limitations
+## Current foundation
 
-- Public artifacts are CLI-only for macOS arm64, macOS x64, and Windows x64.
-- Global provider configuration only; project-scoped configuration is not yet managed.
-- Rules are not supported for Cursor and skills are not supported for Windsurf.
-- Provider rendering can preserve only the structures each provider format supports; see [Providers](docs/providers.md).
-- Recovery snapshots are intentionally never auto-pruned in V1.
+- [x] Six provider adapters and a versionable local Master.
+- [x] Digest-backed preview/apply with stale-plan rejection.
+- [x] Durable journals, rollback, receipts, restoration, and scoped Stop Managing.
+- [x] Provider-scoped rules, Skills, and MCP definitions.
+- [x] Typed MCP environment references and redacted Manager contracts.
+- [x] Tauri desktop shell with Providers, Rules, Skills, MCP, Activity & Drift, Recovery, onboarding, and update controls.
+- [x] Cross-platform frontend, protocol, Rust bridge, and retained Swift tests in CI.
+- [x] Dormant revision-based sync prototype with accounts, device pairing, conflicts, and SQLite persistence.
 
-## Deferred after V1
+The sync prototype is evidence, not a production baseline. The containment pass now validates one shared path contract, prevents remote provider apply, preserves edit/delete conflicts, synchronizes tombstones and provider-scoped MCP files, stores private state atomically, and provides basic device lifecycle controls. Protocol v1 still stores plaintext and remains disabled pending the protocol-v2 cryptographic and recovery work.
 
-- A separately released native macOS Manager following the phased [macOS Manager product and delivery roadmap](docs/macos-manager-roadmap.md).
-- Remote collaboration, self-hosted deployment, hosted service, accounts, device lifecycle, and team features.
-- Project scope, advanced history views, richer bulk workflows, and additional providers.
-- Any future networked design will begin with a new public security and recovery model rather than re-enabling legacy code.
+## Phase 0 — contain risk and make the plan truthful
+
+Goal: remove known release blockers and make repository documentation describe one product.
+
+- [x] Validate every remote path on the client before any read, write, or delete; add malicious-server traversal tests.
+- [x] Remove automatic provider apply after a sync pull.
+- [x] Store sync state and merge bases atomically with owner-only permissions.
+- [x] Propagate local deletions and provider-scoped MCP definitions correctly.
+- [x] Upgrade vulnerable development dependencies and make dependency audits a CI gate.
+- [x] Replace the stale native-macOS implementation plan with this roadmap and archive it as historical context.
+- [x] Split server routing, persistence, security, validation, and rate limiting into reviewable modules.
+- [x] Record the sync threat model and protocol-v2 decisions before exposing a command or UI.
+
+Exit criteria:
+
+- A malicious or compromised server cannot escape `~/.reglet`, trigger provider writes, or persist unsafe state.
+- All existing checks pass and new security regression tests fail against the previous implementation.
+- Public commands and screens still report sync as unavailable.
+
+## Superseded or retired work
+
+These items should not return as open roadmap tasks:
+
+- Completing the retained native Swift app. It remains only a tested compatibility reference until Tauri release acceptance permits removal.
+- Shipping or incrementally polishing plaintext sync protocol v1. It is now only a disposable local development harness; production work starts at encrypted protocol v2.
+- Applying provider outputs automatically after a pull. This contradicts the product trust boundary and is permanently excluded.
+- Building separate modal behavior per screen. The desktop now has one shared accessible dialog boundary; remaining work is native acceptance evidence.
+- Splitting the protocol-v1 server coordinator or adding its basic revision, tombstone, pairing-claim, and device controls. Those foundations are complete; further server work belongs to encryption, hosted operations, quotas, and recovery.
+- Expanding provider count before the existing six-provider lifecycle matrix is complete.
+
+## Phase 1 — complete and simplify the desktop app
+
+Goal: make the Tauri app a complete, maintainable daily-use product.
+
+### Architecture
+
+- [ ] Reduce `App.tsx` to an application coordinator; move views, dialogs, parsing, and mutations into focused modules.
+- [ ] Split onboarding state/commands from step presentation and keep each step independently testable.
+- [ ] Split the CLI command registry, Manager RPC dispatch, snapshot construction, and AI drafting out of the monolithic CLI entry point.
+- [ ] Generate or centrally validate Manager operation results instead of repeating ad-hoc JSON parsing in the UI.
+- [ ] Replace repeated sidecar process launches with bounded batch operations where one user action currently launches several commands.
+
+### Product lifecycle
+
+- [ ] Persist and resume onboarding drafts without touching provider files.
+- [x] Disable unsupported provider/content cells in every surface.
+- [ ] Complete Rules, Skills, and MCP create, edit, rename, move-scope, delete, import, and conflict workflows.
+- [ ] Add three-way drift review with Adopt to Master, Keep Local & Stop Managing, and Restore Master.
+- [ ] Preview receipt restoration through the same fresh-plan boundary used by apply.
+- [ ] Add redacted diagnostics export and a single Reveal Local Data action.
+- [ ] Preserve one clear next action for blocked, drifted, changed, and healthy states.
+
+### Interface quality
+
+- [ ] Replace the four-card status strip with a quieter task-oriented summary.
+- [ ] Remove repeated card nesting and decorative uppercase labels where they do not improve scanning.
+- [x] Add a shared accessible dialog primitive; trap focus, restore focus, and make nested confirmations inert-safe.
+- [ ] Verify layouts at the minimum window size, Windows scaling, large text, Increase Contrast, Reduce Motion, and Reduce Transparency.
+- [ ] Record keyboard, VoiceOver, and Narrator walkthroughs for every primary workflow.
+
+Exit criteria:
+
+- The cross-content lifecycle matrix passes for every advertised provider/content capability.
+- No production UI module combines global coordination, transport parsing, and full-screen presentation.
+- Native acceptance is recorded for macOS arm64/x64 and Windows 10/11 x64.
+
+## Phase 2 — secure multi-device sync protocol
+
+Goal: replace the plaintext prototype with a versioned, end-to-end encrypted protocol.
+
+### Client protocol
+
+- [x] Define protocol v2 with authenticated encryption, opaque object identifiers, authenticated metadata, bounded payloads, idempotency keys, and explicit version negotiation.
+- [ ] Generate encryption keys on-device and transfer them only through an authenticated pairing flow.
+- [ ] Keep device credentials in the platform credential store; keep only non-secret sync metadata in `~/.reglet/.state`.
+- [ ] Encrypt Master objects before upload and decrypt only after integrity, identity, size, revision, and path validation.
+- [ ] Sync shared and provider-scoped rules, Skills, MCP definitions, tombstones, and enrollment metadata; exclude provider outputs, receipts, snapshots, merge bases, resolved secrets, and machine-local settings.
+- [ ] Stage pulled objects as a Master revision with a sync receipt and conflict inbox. Never invoke provider apply.
+- [ ] Support manual sync first. Any later background pull is separately opt-in and still cannot auto-apply.
+
+### Account and device lifecycle
+
+- [x] Normalize and validate account identifiers and enforce a documented password policy.
+- [x] Move password verification to asynchronous memory-hard scrypt.
+- [ ] Version password-hash parameters and complete a production parameter review.
+- [x] Add device list, rename, last-seen, token rotation, and revoke.
+- [ ] Add logout, expired-session cleanup, key epochs, and encrypted device recovery.
+- [x] Make development pairing codes short-lived, rate-limited, and single-use through an atomic claim.
+- [ ] Replace development pairing codes with an authenticated flow bound to a pending cryptographic device identity.
+- [x] Require TLS for non-loopback clients and document reverse-proxy trust configuration.
+- [x] Keep self-hosted single-user mode closed by default; do not expose public registration in that mode.
+
+Exit criteria:
+
+- Server/database compromise does not reveal Master plaintext.
+- Revoked devices cannot read new ciphertext or upload new revisions.
+- Replay, concurrent-write, malicious-path, malformed-ciphertext, oversized-payload, and downgrade tests pass.
+- Two clean devices can pair, exchange changes, surface conflicts, and recover without provider writes.
+
+## Phase 3 — production sync service
+
+Goal: make the server deployable, observable, recoverable, and safe under concurrency.
+
+- [x] Separate routing, authentication, sync storage, validation, and rate limiting behind typed interfaces.
+- [x] Make revision comparison, sequence allocation, write/tombstone persistence, history, and pairing claims transactional.
+- [x] Add bounded pagination and stable cursors for changes.
+- [ ] Add bounded pagination and stable cursors for device lists.
+- [x] Ignore forwarded client addresses unless proxy trust is explicitly configured.
+- [ ] Add persistent/distributed rate limiting for hosted deployments.
+- [x] Add transactional schema migrations, indexes, foreign keys, and WAL/busy-timeout policy for SQLite.
+- [ ] Add forward-version startup compatibility, migration rollback rehearsals, and a hosted-store path before horizontal scaling.
+- [ ] Add quotas for users, devices, object count, object size, total storage, history, and request rate.
+- [ ] Add structured secret-free logs, request IDs, metrics, health/readiness endpoints, and audit events for authentication and device lifecycle.
+- [ ] Add backup, restore, corruption detection, retention, and disaster-recovery rehearsals.
+- [ ] Publish hardened container and single-node self-hosting instructions with TLS requirements.
+
+Exit criteria:
+
+- Fault-injection covers concurrent writes, process interruption, database lock/contention, migration rollback, partial storage failure, and restore from backup.
+- Load tests meet documented latency and storage targets without unbounded memory or database growth.
+- Operational logs and metrics contain no plaintext Master content, credentials, tokens, ciphertext keys, or password material.
+
+## Phase 4 — signed release candidate
+
+Goal: produce release artifacts that can be trusted without bypassing platform protections.
+
+- [ ] Sign and notarize macOS app archives and disk images.
+- [ ] Sign Windows installers and application binaries.
+- [ ] Verify update metadata and downloads cryptographically; keep automatic checks opt-in.
+- [ ] Publish SBOMs, checksums, provenance, privacy documentation, recovery documentation, sync protocol documentation, and a support policy.
+- [ ] Run clean-install and upgrade matrices across supported operating systems and provider versions.
+- [ ] Run dependency, static analysis, secret scanning, malicious-server, and release-binary smoke tests in CI.
+- [ ] Rehearse rollback of both a failed provider transaction and a bad application/server release.
+
+Exit criteria:
+
+- All desktop, CLI, server, security, accessibility, and recovery gates have evidence tied to release checksums.
+- No known P0/P1 finding remains open.
+- The frozen Swift app can be removed after Tauri acceptance and migration evidence are complete.
+
+## Phase 5 — general availability
+
+- [ ] Enable sync commands and desktop controls only for protocol-v2-capable builds.
+- [ ] Roll out through an opt-in preview, then a limited beta, then general availability with rollback controls.
+- [ ] Publish service status, incident response, data deletion, account recovery, and deprecation policies.
+- [ ] Review security, privacy, dependency, accessibility, and recovery evidence for every release.
+
+## Deferred
+
+- Teams, shared organization policy, and collaborative editing.
+- Project-scoped provider configuration.
+- Automatic semantic merging or automatic conflict resolution.
+- Automatic provider apply, background provider watchers, or silent drift adoption.
+- Additional providers until the existing capability matrix is complete.
+- Linux desktop publishing until macOS and Windows acceptance is stable.
+
+## Measures
+
+- Zero provider writes without a locally reviewed current digest.
+- Zero plaintext Master content or resolved credentials in server storage and operational telemetry.
+- Zero open P0/P1 findings at a release candidate.
+- 100% pass rate for supported lifecycle, malicious-server, recovery, keyboard, and screen-reader matrices.
+- Bounded sync request size, storage, history, and latency with published targets.
+- Core coordinators stay small enough to review: application/command entry points under 500 lines unless an explicit design note justifies otherwise.

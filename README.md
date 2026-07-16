@@ -109,6 +109,8 @@ If an older installation left pre-V1 network state behind, it is inert and never
 - [Release verification](docs/release.md)
 - [Release notes](docs/release-notes.md)
 - [Roadmap](ROADMAP.md)
+- [Proposed end-to-end encrypted sync protocol](docs/sync-protocol-v2.md)
+- [Dormant sync-server development notes](docs/sync-server.md)
 
 ## Development
 

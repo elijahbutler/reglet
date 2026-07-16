@@ -25,6 +25,7 @@ import type {
 } from '@reglet/manager-protocol';
 import { jsonObject, type ManagerBridge, type UpdateCheckResult } from '../managerBridge.js';
 import { BrandMark } from './BrandMark.js';
+import { ModalDialog } from './ModalDialog.js';
 import { OnboardingWizard } from './OnboardingWizard.js';
 
 const sections = ['Providers', 'Rules', 'Skills', 'MCP', 'Activity & Drift', 'Recovery'] as const;
@@ -499,7 +500,7 @@ export function App({ bridge }: AppProps) {
 
   return (
     <main className="min-h-screen bg-reglet-bg text-reglet-text">
-      <header className="border-b border-reglet-line bg-reglet-panel/95 px-6 py-4">
+      <header className="app-header border-b border-reglet-line bg-reglet-panel/95 px-6 py-4">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <BrandMark />
@@ -517,8 +518,8 @@ export function App({ bridge }: AppProps) {
         </div>
       </header>
 
-      <div className="grid min-h-[calc(100vh-73px)] grid-cols-[230px_1fr]">
-        <nav className="border-r border-reglet-line bg-reglet-panel px-3 py-4" aria-label="Reglet sections">
+      <div className="app-shell grid min-h-[calc(100vh-73px)] grid-cols-[230px_1fr]">
+        <nav className="app-nav border-r border-reglet-line bg-reglet-panel px-3 py-4" aria-label="Reglet sections">
           {sections.map((item) => (
             <button
               key={item}
@@ -530,7 +531,7 @@ export function App({ bridge }: AppProps) {
               <span>{item}</span>
             </button>
           ))}
-          <div className="mt-6 rounded-md border border-reglet-line bg-reglet-panel2 p-3 text-xs text-reglet-muted">
+          <div className="updates-panel mt-6 rounded-md border border-reglet-line bg-reglet-panel2 p-3 text-xs text-reglet-muted">
             <p className="font-medium text-reglet-text">Updates</p>
             <label className="mt-3 flex items-center gap-2">
               <input
@@ -556,7 +557,7 @@ export function App({ bridge }: AppProps) {
           </div>
         </nav>
 
-        <section className="overflow-auto px-6 py-5" aria-live="polite">
+        <section className="app-content min-w-0 overflow-auto px-6 py-5" aria-live="polite">
           {error !== null && <Banner tone="error" text={error} />}
           {notice !== null && <Banner tone="info" text={notice} onDismiss={() => setNotice(null)} />}
           {loading && <LoadingState />}
@@ -710,18 +711,26 @@ function ProvidersView(props: {
                 <span className="ml-2 text-sm text-reglet-muted">{provider.enabled ? 'Managed' : 'Not managed'}</span>
               </span>
             </label>
-            <div className="mt-3 grid grid-cols-3 gap-2">
+            <div className="provider-content-grid mt-3 grid grid-cols-3 gap-2">
               {contentIds.map((content) => {
                 const cell = provider.cells[content];
+                const available = cell.capability.state === 'supported' && cell.destinationPath !== null;
+                const reason = cell.capability.state === 'supported'
+                  ? 'No destination is available.'
+                  : cell.capability.reason;
                 return (
                   <button
                     key={content}
                     className="secondary-button justify-start"
+                    disabled={props.busy || !available}
+                    title={available ? undefined : reason}
                     onClick={() => props.onEnrollment(cell.enrolled ? 'unenroll' : 'enroll', { provider: provider.provider, content }, cell.enrolled ? 'Stopped managing content.' : 'Content enrolled.')}
-                    aria-label={`${cell.enrolled ? 'Unenroll' : 'Enroll'} ${provider.displayName} ${content}`}
+                    aria-label={available
+                      ? `${cell.enrolled ? 'Unenroll' : 'Enroll'} ${provider.displayName} ${content}`
+                      : `${provider.displayName} ${content} unavailable: ${reason}`}
                   >
                     <StatusDot state={cell.capability.state} />
-                    {content}: {cell.enrolled ? 'on' : 'off'}
+                    {content}: {available ? (cell.enrolled ? 'on' : 'off') : 'unavailable'}
                   </button>
                 );
               })}
@@ -1043,46 +1052,14 @@ function ReceiptDetails({ detail }: { detail: ManagerSnapshotV2['receipts']['det
 
 function ConfirmDialog({ dialog, onClose }: { dialog: Dialog; onClose: () => void }) {
   const [working, setWorking] = useState(false);
-  const modalRef = useRef<HTMLDivElement>(null);
-  const cancelRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    cancelRef.current?.focus();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !working) {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const focusable = Array.from(modalRef.current?.querySelectorAll<HTMLElement>('button:not([disabled])') ?? []);
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last?.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first?.focus();
-      }
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      previouslyFocused?.focus();
-    };
-  }, [onClose, working]);
   const confirm = async () => {
     setWorking(true);
-    if (dialog.kind === 'unsaved') {
-      dialog.run();
+    try {
+      await dialog.run();
       onClose();
-      return;
+    } finally {
+      setWorking(false);
     }
-    await dialog.run();
-    setWorking(false);
-    onClose();
   };
   const title = dialog.kind === 'ai-consent'
     ? 'Allow AI runner'
@@ -1100,22 +1077,20 @@ function ConfirmDialog({ dialog, onClose }: { dialog: Dialog; onClose: () => voi
         ? 'Discard edits'
         : dialog.actionLabel;
   return (
-    <div className="modal-backdrop" role="presentation">
-      <div ref={modalRef} className="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-body">
+    <ModalDialog labelledBy="confirm-title" describedBy="confirm-body" onClose={onClose} closeDisabled={working}>
         <h2 id="confirm-title" className="text-lg font-semibold">{title}</h2>
         <p id="confirm-body" className="mt-2 text-sm text-reglet-muted">{body}</p>
         <div className="mt-5 flex justify-end gap-2">
-          <button ref={cancelRef} className="secondary-button" onClick={onClose} disabled={working}>Cancel</button>
+          <button data-dialog-autofocus className="secondary-button" onClick={onClose} disabled={working}>Cancel</button>
           <button className={dialog.kind === 'ai-consent' ? 'primary-button' : 'danger-button'} onClick={() => void confirm()} disabled={working}>{label}</button>
         </div>
-      </div>
-    </div>
+    </ModalDialog>
   );
 }
 
 function SnapshotSummary({ snapshot }: { snapshot: ManagerSnapshotV2 }) {
   return (
-    <div className="mb-5 grid grid-cols-4 gap-3">
+    <div className="snapshot-summary mb-5 grid grid-cols-4 gap-3">
       <Metric label="Reglet home" value={snapshot.regletHome} />
       <Metric label="Providers" value={`${snapshot.providerDiscovery.filter((item) => item.detected).length}/${snapshot.providerDiscovery.length} detected`} />
       <Metric label="Drift" value={`${snapshot.driftInbox.length} items`} />

@@ -4,6 +4,7 @@
   "type": "module",
   "main": "src/index.ts",
   "dependencies": {
+    "@reglet/core": "workspace:*",
     "hono": "^4.6.0"
   }
 }

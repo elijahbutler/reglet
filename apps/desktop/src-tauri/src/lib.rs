@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::Path;
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use tauri::{
     menu::{MenuBuilder, SubmenuBuilder},
     AppHandle,
@@ -10,6 +13,11 @@ use tauri_plugin_shell::{process::CommandEvent, ShellExt};
 const SIDECAR_NAME: &str = "reglet";
 const FIXED_ARGS: [&str; 4] = ["manager", "rpc", "--json", "--protocol-version=1"];
 const MAX_ERROR_CHARS: usize = 160;
+const MAX_RPC_REQUEST_BYTES: usize = 8 * 1024 * 1024;
+const MAX_RPC_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_SIDECAR_STDERR_BYTES: usize = 64 * 1024;
+const SIDECAR_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const UPDATE_TIMEOUT: Duration = Duration::from_secs(15);
 const RELEASE_API_URL: &str = "https://api.github.com/repos/elijahbutler/reglet/releases/latest";
 const RELEASE_PAGE_URL: &str = "https://github.com/elijahbutler/reglet/releases/latest";
 const BUILD_VERSION: &str = match option_env!("REGLET_VERSION") {
@@ -64,6 +72,18 @@ async fn manager_rpc(app: AppHandle, request: Value) -> Result<Value, ManagerRpc
         ));
     }
 
+    let mut payload = serde_json::to_vec(&request)
+        .map_err(|error| sidecar_error(&operation, "MALFORMED_REQUEST", error, false))?;
+    if payload.len() > MAX_RPC_REQUEST_BYTES {
+        return Err(bridge_error(
+            &operation,
+            "REQUEST_TOO_LARGE",
+            "Reglet rejected an oversized Manager request.",
+            false,
+        ));
+    }
+    payload.push(b'\n');
+
     let command = app
         .shell()
         .sidecar(SIDECAR_NAME)
@@ -73,41 +93,81 @@ async fn manager_rpc(app: AppHandle, request: Value) -> Result<Value, ManagerRpc
         .spawn()
         .map_err(|error| sidecar_error(&operation, "SIDECAR_UNAVAILABLE", error, false))?;
 
-    let mut payload = serde_json::to_vec(&request)
-        .map_err(|error| sidecar_error(&operation, "MALFORMED_REQUEST", error, false))?;
-    payload.push(b'\n');
     child
         .write(&payload)
         .map_err(|error| sidecar_error(&operation, "SIDECAR_IO", error, true))?;
-    drop(child);
 
     let mut exit_code = None;
     let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    while let Some(event) = events.recv().await {
+    let mut stderr_bytes = 0usize;
+    loop {
+        let event = match tokio::time::timeout(SIDECAR_IDLE_TIMEOUT, events.recv()).await {
+            Ok(event) => event,
+            Err(_) => {
+                let error = bridge_error(
+                    &operation,
+                    "SIDECAR_TIMEOUT",
+                    "Reglet stopped an unresponsive sidecar.",
+                    true,
+                );
+                let _ = child.kill();
+                return Err(error);
+            }
+        };
+        let Some(event) = event else { break };
         match event {
             CommandEvent::Stdout(bytes) => {
+                if stdout.len().saturating_add(bytes.len() + 1) > MAX_RPC_RESPONSE_BYTES {
+                    let error = bridge_error(
+                        &operation,
+                        "RESPONSE_TOO_LARGE",
+                        "Reglet stopped a sidecar that returned an oversized response.",
+                        true,
+                    );
+                    let _ = child.kill();
+                    return Err(error);
+                }
                 stdout.extend(bytes);
                 stdout.push(b'\n');
             }
             CommandEvent::Stderr(bytes) => {
-                stderr.extend(bytes);
-                stderr.push(b'\n');
+                stderr_bytes = stderr_bytes.saturating_add(bytes.len() + 1);
+                if stderr_bytes > MAX_SIDECAR_STDERR_BYTES {
+                    let error = bridge_error(
+                        &operation,
+                        "SIDECAR_FAILED",
+                        "Reglet stopped a sidecar that produced excessive diagnostic output.",
+                        true,
+                    );
+                    let _ = child.kill();
+                    return Err(error);
+                }
             }
             CommandEvent::Terminated(payload) => exit_code = payload.code,
             CommandEvent::Error(error) => {
-                return Err(sidecar_error(&operation, "SIDECAR_IO", error, true));
+                let failure = sidecar_error(&operation, "SIDECAR_IO", error, true);
+                let _ = child.kill();
+                return Err(failure);
             }
             _ => {}
         }
     }
 
-    parse_sidecar_output(exit_code, &stdout, &stderr, &operation)
+    parse_sidecar_output(exit_code, &stdout, &[], &operation)
 }
 
 #[tauri::command]
 async fn check_for_updates() -> Result<UpdateCheckResult, ManagerRpcError> {
-    let release = reqwest::Client::new()
+    let client = reqwest::Client::builder()
+        .timeout(UPDATE_TIMEOUT)
+        .build()
+        .map_err(|_| {
+            update_error(
+                "UPDATE_CHECK_FAILED",
+                "Reglet could not prepare the update check.",
+            )
+        })?;
+    let release = client
         .get(RELEASE_API_URL)
         .header("Accept", "application/vnd.github+json")
         .header("User-Agent", "Reglet-Desktop")
@@ -171,8 +231,17 @@ fn open_release(app: AppHandle) -> Result<(), ManagerRpcError> {
 
 #[tauri::command]
 fn open_file_location(app: AppHandle, path: String) -> Result<(), ManagerRpcError> {
-    let target = Path::new(&path);
-    let location = target.parent().unwrap_or(target);
+    let target = allowed_file_target(Path::new(&path)).ok_or_else(|| {
+        update_error(
+            "OPEN_FILE_LOCATION_REJECTED",
+            "Reglet rejected a file location outside managed local data.",
+        )
+    })?;
+    let location = if target.is_dir() {
+        target.as_path()
+    } else {
+        target.parent().unwrap_or(target.as_path())
+    };
     #[allow(deprecated)]
     app.shell()
         .open(location.to_string_lossy(), None)
@@ -182,6 +251,54 @@ fn open_file_location(app: AppHandle, path: String) -> Result<(), ManagerRpcErro
                 "Reglet could not open the file location.",
             )
         })
+}
+
+fn allowed_file_target(target: &Path) -> Option<PathBuf> {
+    if !target.is_absolute() {
+        return None;
+    }
+    let canonical_target = target.canonicalize().ok()?;
+    let home = user_home()?;
+    let provider_home = absolute_environment_path("REGLET_PROVIDER_HOME").unwrap_or(home.clone());
+    let reglet_home =
+        absolute_environment_path("REGLET_HOME").unwrap_or_else(|| home.join(".reglet"));
+    let roots = [
+        reglet_home,
+        provider_home.join(".claude"),
+        provider_home.join(".codex"),
+        provider_home.join(".cursor"),
+        provider_home.join(".gemini"),
+        provider_home.join(".codeium").join("windsurf"),
+        provider_home.join(".config").join("opencode"),
+    ];
+    let canonical_roots = roots
+        .iter()
+        .filter_map(|root| root.canonicalize().ok())
+        .collect::<Vec<_>>();
+    let exact_files = [provider_home.join(".claude.json")];
+    let canonical_files = exact_files
+        .iter()
+        .filter_map(|file| file.canonicalize().ok())
+        .collect::<Vec<_>>();
+    if target_matches_allowed(&canonical_target, &canonical_roots, &canonical_files) {
+        return Some(canonical_target);
+    }
+    None
+}
+
+fn target_matches_allowed(target: &Path, roots: &[PathBuf], exact_files: &[PathBuf]) -> bool {
+    roots.iter().any(|root| target.starts_with(root))
+        || exact_files.iter().any(|file| target == file)
+}
+
+fn absolute_environment_path(name: &str) -> Option<PathBuf> {
+    let value = std::env::var_os(name)?;
+    let path = PathBuf::from(value);
+    path.is_absolute().then_some(path)
+}
+
+fn user_home() -> Option<PathBuf> {
+    absolute_environment_path("HOME").or_else(|| absolute_environment_path("USERPROFILE"))
 }
 
 pub fn run() {
@@ -418,5 +535,26 @@ mod tests {
     #[test]
     fn build_version_is_semver() {
         assert!(semver::Version::parse(BUILD_VERSION.trim_start_matches('v')).is_ok());
+    }
+
+    #[test]
+    fn file_reveal_targets_stay_inside_managed_roots_or_exact_files() {
+        let base = PathBuf::from("managed");
+        let exact = PathBuf::from("provider.json");
+        assert!(target_matches_allowed(
+            &base.join("rules").join("00-general.md"),
+            std::slice::from_ref(&base),
+            std::slice::from_ref(&exact),
+        ));
+        assert!(target_matches_allowed(
+            &exact,
+            std::slice::from_ref(&base),
+            std::slice::from_ref(&exact),
+        ));
+        assert!(!target_matches_allowed(
+            Path::new("outside/private.txt"),
+            &[base],
+            &[exact],
+        ));
     }
 }

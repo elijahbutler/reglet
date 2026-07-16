@@ -1,11 +1,13 @@
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { writePrivateJson } from '../fsutil.js';
 import { regletHome } from '../paths.js';
 
 export interface SyncFileState {
   revision: number;
   hash: string;
   deleted?: boolean;
+  conflicted?: boolean;
 }
 
 export interface SyncState {
@@ -44,10 +46,7 @@ export async function loadSyncState(home = regletHome()): Promise<SyncState> {
 }
 
 export async function saveSyncState(state: SyncState, home = regletHome()): Promise<void> {
-  const targetPath = syncStatePath(home);
-  await mkdir(path.dirname(targetPath), { recursive: true });
-  await writeFile(targetPath, `${JSON.stringify(state, null, 2)}\n`);
-  await chmod(targetPath, 0o600);
+  await writePrivateJson(syncStatePath(home), state);
 }
 
 function normalizeSyncState(value: unknown): SyncState {
@@ -76,7 +75,8 @@ function isSyncFileState(value: unknown): value is SyncFileState {
     isRecord(value) &&
     typeof value.revision === 'number' &&
     typeof value.hash === 'string' &&
-    (value.deleted === undefined || typeof value.deleted === 'boolean')
+    (value.deleted === undefined || typeof value.deleted === 'boolean') &&
+    (value.conflicted === undefined || typeof value.conflicted === 'boolean')
   );
 }
 

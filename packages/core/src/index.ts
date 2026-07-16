@@ -20,3 +20,4 @@ export * from './providers/types.js';
 export * from './release.js';
 export * from './revisions.js';
 export * from './skills.js';
+export * from './sync/path.js';

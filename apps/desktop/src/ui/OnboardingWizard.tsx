@@ -23,6 +23,7 @@ import type {
 } from '@reglet/manager-protocol';
 import { jsonObject, type ManagerBridge } from '../managerBridge.js';
 import { BrandMark } from './BrandMark.js';
+import { ModalDialog } from './ModalDialog.js';
 
 type WizardStep = 'welcome' | 'choose' | 'instructions' | 'skills' | 'preview' | 'changes' | 'done';
 type ChangeKind = 'New' | 'Updated' | 'Removed';
@@ -122,7 +123,7 @@ export function OnboardingWizard({ bridge, snapshot, onClose, onStateChanged }: 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
-  const shellRef = useRef<HTMLElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   const selectedUnmanagedSkills = useMemo(
     () => uniqueSkills(unmanagedSkills.filter((skill) => selectedProviders.includes(skill.provider))),
@@ -132,18 +133,8 @@ export function OnboardingWizard({ bridge, snapshot, onClose, onStateChanged }: 
   const currentIndex = steps.findIndex((item) => item.id === step);
 
   useEffect(() => {
-    shellRef.current?.querySelector<HTMLElement>('.onboarding-content button:not([disabled])')?.focus();
+    contentRef.current?.querySelector<HTMLElement>('button:not([disabled])')?.focus();
   }, [step]);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || busy || confirmAction !== null || step === 'done') return;
-      event.preventDefault();
-      onClose();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [busy, confirmAction, onClose, step]);
 
   const continueFromSelection = async () => {
     setBusy(true);
@@ -319,8 +310,15 @@ export function OnboardingWizard({ bridge, snapshot, onClose, onStateChanged }: 
   };
 
   return (
-    <div className="onboarding-backdrop" role="presentation">
-      <section ref={shellRef} className="onboarding-shell" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+    <>
+      <ModalDialog
+        backdropClassName="onboarding-backdrop"
+        dialogClassName="onboarding-shell"
+        labelledBy="onboarding-title"
+        onClose={onClose}
+        closeDisabled={busy || confirmAction !== null || step === 'done'}
+        hidden={confirmAction !== null}
+      >
         <header className="onboarding-header">
           <div className="flex items-center gap-3">
             <BrandMark />
@@ -337,7 +335,7 @@ export function OnboardingWizard({ bridge, snapshot, onClose, onStateChanged }: 
           )}
         </header>
 
-        <div className="onboarding-content">
+        <div ref={contentRef} className="onboarding-content">
           {error !== null && <div className="banner banner-error" role="alert">{error}</div>}
           {step === 'welcome' && <WelcomeStep onContinue={() => setStep('choose')} />}
           {step === 'choose' && (
@@ -417,9 +415,9 @@ export function OnboardingWizard({ bridge, snapshot, onClose, onStateChanged }: 
           )}
           {step === 'done' && <DoneStep providers={selectedProviders} onDone={onClose} />}
         </div>
-      </section>
+      </ModalDialog>
       {confirmAction !== null && <WizardConfirmation action={confirmAction} onClose={() => setConfirmAction(null)} />}
-    </div>
+    </>
   );
 }
 
@@ -427,7 +425,11 @@ function StepRail({ currentIndex }: { currentIndex: number }) {
   return (
     <ol className="onboarding-rail" aria-label={`Setup step ${currentIndex + 1} of ${steps.length}`}>
       {steps.map((step, index) => (
-        <li key={step.id} className={index === currentIndex ? 'onboarding-step-active' : index < currentIndex ? 'onboarding-step-complete' : ''}>
+        <li
+          key={step.id}
+          className={index === currentIndex ? 'onboarding-step-active' : index < currentIndex ? 'onboarding-step-complete' : ''}
+          aria-current={index === currentIndex ? 'step' : undefined}
+        >
           <span className="onboarding-step-marker">{index < currentIndex ? <Check size={12} aria-hidden="true" /> : index + 1}</span>
           <span className="onboarding-step-label">{step.label}</span>
         </li>
@@ -837,22 +839,36 @@ function StepLayout({ title, body, children, footer }: { title: string; body: st
 }
 
 function StepActions({ onBack, onContinue, continueLabel, disabled = false, busy = false }: { onBack: () => void; onContinue: () => void; continueLabel: string; disabled?: boolean; busy?: boolean }) {
-  return <div className="flex w-full items-center justify-between"><button className="secondary-button" onClick={onBack} disabled={busy}><ArrowLeft size={16} aria-hidden="true" /> Back</button><button className="primary-button" onClick={onContinue} disabled={disabled}>{busy ? 'Working…' : continueLabel} <ArrowRight size={16} aria-hidden="true" /></button></div>;
+  return <div className="flex w-full items-center justify-between"><button className="secondary-button" onClick={onBack} disabled={busy}><ArrowLeft size={16} aria-hidden="true" /> Back</button><button className="primary-button" onClick={onContinue} disabled={disabled || busy}>{busy ? 'Working…' : continueLabel} <ArrowRight size={16} aria-hidden="true" /></button></div>;
 }
 
 function WizardConfirmation({ action, onClose }: { action: ConfirmAction; onClose: () => void }) {
   const [working, setWorking] = useState(false);
+  const confirm = async () => {
+    setWorking(true);
+    try {
+      await action.run();
+      onClose();
+    } finally {
+      setWorking(false);
+    }
+  };
   return (
-    <div className="modal-backdrop z-50" role="presentation">
-      <div className="modal" role="alertdialog" aria-modal="true" aria-labelledby="wizard-confirm-title" aria-describedby="wizard-confirm-body">
+    <ModalDialog
+      role="alertdialog"
+      backdropClassName="modal-backdrop z-50"
+      labelledBy="wizard-confirm-title"
+      describedBy="wizard-confirm-body"
+      onClose={onClose}
+      closeDisabled={working}
+    >
         <h2 id="wizard-confirm-title" className="text-lg font-semibold">{action.title}</h2>
         <p id="wizard-confirm-body" className="mt-2 text-sm text-reglet-muted">{action.body}</p>
         <div className="mt-5 flex justify-end gap-2">
-          <button className="secondary-button" onClick={onClose} disabled={working}>Cancel</button>
-          <button className="primary-button" disabled={working} onClick={() => { setWorking(true); void action.run().finally(() => setWorking(false)); }}>{working ? 'Working…' : action.label}</button>
+          <button data-dialog-autofocus className="secondary-button" onClick={onClose} disabled={working}>Cancel</button>
+          <button className="primary-button" disabled={working} onClick={() => void confirm()}>{working ? 'Working…' : action.label}</button>
         </div>
-      </div>
-    </div>
+    </ModalDialog>
   );
 }
 

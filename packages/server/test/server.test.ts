@@ -26,18 +26,18 @@ async function tempDbPath(): Promise<string> {
 
 describe('sync server API', () => {
   test('registers, logs in, pairs, stores files, reports conflicts, changes, and deletes', async () => {
-    const app = useApp(createApp({ dbPath: await tempDbPath() }));
+    const app = useApp(createApp({ dbPath: await tempDbPath(), allowRegistration: true }));
 
     const register = await postJson(app, '/v1/auth/register', {
       email: 'user@example.test',
-      password: 'secret',
+      password: 'secret-password',
     });
     expect(register.status).toBe(200);
     expect(typeof register.body.sessionToken).toBe('string');
 
     const login = await postJson(app, '/v1/auth/login', {
       email: 'user@example.test',
-      password: 'secret',
+      password: 'secret-password',
     });
     expect(login.status).toBe(200);
     const sessionToken = String(login.body.sessionToken);
@@ -48,7 +48,7 @@ describe('sync server API', () => {
     });
     expect(pair.status).toBe(200);
     const pairBody = (await pair.json()) as { code: string };
-    expect(pairBody.code).toHaveLength(6);
+    expect(pairBody.code).toHaveLength(8);
 
     const claim = await postJson(app, '/v1/pair/claim', {
       code: pairBody.code,
@@ -72,6 +72,8 @@ describe('sync server API', () => {
     expect(conflict.body).toEqual({
       error: { code: 'conflict', message: 'file revision conflict' },
       headRevision: 1,
+      headHash: expect.any(String),
+      headDeleted: false,
       contentBase64,
     });
 
@@ -82,6 +84,7 @@ describe('sync server API', () => {
     const changesBody = (await changes.json()) as {
       changes: Array<{ path: string; revision: number; deleted: boolean; seq: number }>;
       cursor: number;
+      hasMore: boolean;
     };
     expect(changesBody.changes).toEqual([
       {
@@ -93,6 +96,7 @@ describe('sync server API', () => {
       },
     ]);
     expect(changesBody.cursor).toBe(1);
+    expect(changesBody.hasMore).toBe(false);
 
     const file = await app.request('/v1/files/rules/00-general.md', {
       headers: { authorization: `Bearer ${deviceToken}` },
@@ -123,7 +127,42 @@ describe('sync server API', () => {
         },
       ],
       cursor: 2,
+      hasMore: false,
     });
+  });
+
+  test('paginates the change feed and validates cursors', async () => {
+    const app = useApp(createApp({ dbPath: await tempDbPath(), singleUserToken: strongSingleUserToken }));
+    for (let index = 0; index < 101; index += 1) {
+      const response = await putJson(
+        app,
+        `/v1/files/rules/file-${index}.md`,
+        { baseRevision: 0, contentBase64: Buffer.from(String(index)).toString('base64') },
+        strongSingleUserToken,
+      );
+      expect(response.status).toBe(200);
+    }
+
+    const first = await app.request('/v1/changes?since=0', {
+      headers: { authorization: `Bearer ${strongSingleUserToken}` },
+    });
+    const firstBody = (await first.json()) as { changes: unknown[]; cursor: number; hasMore: boolean };
+    expect(firstBody.changes).toHaveLength(100);
+    expect(firstBody.cursor).toBe(100);
+    expect(firstBody.hasMore).toBe(true);
+
+    const second = await app.request(`/v1/changes?since=${firstBody.cursor}`, {
+      headers: { authorization: `Bearer ${strongSingleUserToken}` },
+    });
+    const secondBody = (await second.json()) as { changes: unknown[]; cursor: number; hasMore: boolean };
+    expect(secondBody.changes).toHaveLength(1);
+    expect(secondBody.cursor).toBe(101);
+    expect(secondBody.hasMore).toBe(false);
+
+    const invalid = await app.request('/v1/changes?since=-1', {
+      headers: { authorization: `Bearer ${strongSingleUserToken}` },
+    });
+    expect(invalid.status).toBe(400);
   });
 
   test('accepts single-user token mode without registration', async () => {
@@ -142,6 +181,77 @@ describe('sync server API', () => {
       headers: { authorization: 'Bearer wrong-token' },
     });
     expect(unauthorized.status).toBe(401);
+  });
+
+  test('lists and revokes paired devices', async () => {
+    const app = useApp(createApp({ dbPath: await tempDbPath(), singleUserToken: strongSingleUserToken }));
+    const list = await app.request('/v1/devices', {
+      headers: { authorization: `Bearer ${strongSingleUserToken}` },
+    });
+    expect(list.status).toBe(200);
+    const body = (await list.json()) as {
+      currentDeviceId: number;
+      devices: Array<{ id: number; name: string; revokedAt: string | null }>;
+    };
+    expect(body.devices).toHaveLength(1);
+    expect(body.devices[0]).toMatchObject({ name: 'single-user-token', revokedAt: null });
+
+    const rename = await requestJson(
+      app,
+      `/v1/devices/${body.currentDeviceId}`,
+      'PATCH',
+      { name: 'renamed device' },
+      strongSingleUserToken,
+    );
+    expect(rename).toEqual({
+      status: 200,
+      body: { renamed: true, id: body.currentDeviceId, name: 'renamed device' },
+    });
+
+    const rotate = await app.request('/v1/devices/current/token/rotate', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${strongSingleUserToken}` },
+    });
+    expect(rotate.status).toBe(200);
+    const rotatedToken = String(((await rotate.json()) as { deviceToken: string }).deviceToken);
+    expect(rotatedToken).not.toBe(strongSingleUserToken);
+    const oldTokenDenied = await app.request('/v1/devices', {
+      headers: { authorization: `Bearer ${strongSingleUserToken}` },
+    });
+    expect(oldTokenDenied.status).toBe(401);
+
+    const revoke = await app.request(`/v1/devices/${body.currentDeviceId}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${rotatedToken}` },
+    });
+    expect(revoke.status).toBe(200);
+    expect(await revoke.json()).toEqual({ revoked: true, id: body.currentDeviceId });
+
+    const denied = await app.request('/v1/changes?since=0', {
+      headers: { authorization: `Bearer ${rotatedToken}` },
+    });
+    expect(denied.status).toBe(401);
+  });
+
+  test('keeps account registration closed unless explicitly enabled', async () => {
+    const app = useApp(createApp({ dbPath: await tempDbPath() }));
+    const response = await postJson(app, '/v1/auth/register', {
+      email: 'user@example.test',
+      password: 'secret-password',
+    });
+    expect(response.status).toBe(403);
+    expect(response.body).toEqual({
+      error: { code: 'registration_disabled', message: 'account registration is disabled' },
+    });
+  });
+
+  test('does not allow single-user mode to expose account registration', async () => {
+    const dbPath = await tempDbPath();
+    expect(() => createApp({
+      dbPath,
+      singleUserToken: strongSingleUserToken,
+      allowRegistration: true,
+    })).toThrow('cannot enable public account registration');
   });
 
   test('serves health and root endpoints', async () => {
@@ -201,6 +311,18 @@ describe('sync server API', () => {
     }
   });
 
+  test('accepts provider-scoped MCP paths from the shared sync path contract', async () => {
+    const app = useApp(createApp({ dbPath: await tempDbPath(), singleUserToken: strongSingleUserToken }));
+    const response = await putJson(
+      app,
+      '/v1/files/mcp/providers/claude/servers.json',
+      { baseRevision: 0, contentBase64: Buffer.from('{"mcpServers":{}}').toString('base64') },
+      strongSingleUserToken,
+    );
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ revision: 1 });
+  });
+
   test('enforces configurable request body limits with structured 413 errors', async () => {
     const app = useApp(createApp({ dbPath: await tempDbPath(), singleUserToken: strongSingleUserToken, bodyLimitBytes: 32 }));
 
@@ -252,6 +374,43 @@ describe('sync server API', () => {
     });
   });
 
+  test('commits one winner for concurrent writes at the same base revision', async () => {
+    const app = useApp(createApp({ dbPath: await tempDbPath(), singleUserToken: strongSingleUserToken }));
+    const writes = await Promise.all([
+      putJson(
+        app,
+        '/v1/files/rules/00-general.md',
+        { baseRevision: 0, contentBase64: Buffer.from('first').toString('base64') },
+        strongSingleUserToken,
+      ),
+      putJson(
+        app,
+        '/v1/files/rules/00-general.md',
+        { baseRevision: 0, contentBase64: Buffer.from('second').toString('base64') },
+        strongSingleUserToken,
+      ),
+    ]);
+    expect(writes.map((result) => result.status).sort()).toEqual([200, 409]);
+  });
+
+  test('claims a pairing code exactly once under concurrent requests', async () => {
+    const app = useApp(createApp({ dbPath: await tempDbPath(), allowRegistration: true }));
+    const registration = await postJson(app, '/v1/auth/register', {
+      email: 'pair@example.test',
+      password: 'secret-password',
+    });
+    const pair = await app.request('/v1/pair/start', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${String(registration.body.sessionToken)}` },
+    });
+    const code = String(((await pair.json()) as { code: string }).code);
+    const claims = await Promise.all([
+      postJson(app, '/v1/pair/claim', { code, deviceName: 'first' }),
+      postJson(app, '/v1/pair/claim', { code, deviceName: 'second' }),
+    ]);
+    expect(claims.map((result) => result.status).sort()).toEqual([200, 404]);
+  });
+
   test('rejects weak single-user tokens during app creation', async () => {
     const dbPath = await tempDbPath();
 
@@ -287,6 +446,20 @@ describe('sync server API', () => {
     timestamp += 1_000;
     const resetAuth = await postJson(app, '/v1/auth/login', { email: 'missing@example.test', password: 'bad' });
     expect(resetAuth.status).toBe(401);
+  });
+
+  test('does not trust forwarded client addresses unless explicitly configured', async () => {
+    const app = useApp(createApp({
+      dbPath: await tempDbPath(),
+      rateLimit: { max: 1, windowMs: 60_000 },
+    }));
+    const request = (forwarded: string) => app.request('/v1/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': forwarded },
+      body: JSON.stringify({ email: 'missing@example.test', password: 'bad-password' }),
+    });
+    expect((await request('198.51.100.1')).status).toBe(401);
+    expect((await request('198.51.100.2')).status).toBe(429);
   });
 });
 
