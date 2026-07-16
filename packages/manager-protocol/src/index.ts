@@ -34,9 +34,11 @@ export const managerProtocolOperations = [
   'skills.delete-file',
   'skills.rename-file',
   'skills.adopt',
+  'skills.update-sync',
   'mcp.list',
   'mcp.upsert',
   'mcp.delete',
+  'mcp.update-sync',
   'structured-preview.preview',
   'structured-preview.apply',
   'operation.restore',
@@ -162,6 +164,16 @@ export type McpDeleteInput = ScopedInput & {
   id: string;
 };
 
+export type SkillSyncInput = JsonObject & {
+  name: string;
+  providers: ManagerProviderId[];
+};
+
+export type McpSyncInput = JsonObject & {
+  id: string;
+  providers: ManagerProviderId[];
+};
+
 export type StructuredPreviewApplyInput = ProviderContentSelectionInput & {
   digest: string;
 };
@@ -196,9 +208,11 @@ export interface ManagerRpcInputs {
   'skills.delete-file': SkillPathInput;
   'skills.rename-file': SkillRenameFileInput;
   'skills.adopt': SkillAdoptInput;
+  'skills.update-sync': SkillSyncInput;
   'mcp.list': McpListInput;
   'mcp.upsert': McpUpsertInput;
   'mcp.delete': McpDeleteInput;
+  'mcp.update-sync': McpSyncInput;
   'structured-preview.preview': ProviderContentSelectionInput;
   'structured-preview.apply': StructuredPreviewApplyInput;
   'operation.restore': IdInput;
@@ -331,9 +345,11 @@ export const operationInputSchemas: Record<ManagerProtocolOperation, JsonObject>
   'skills.delete-file': objectSchema({ ...scopedProperties, name: { type: 'string' }, path: { type: 'string' } }, ['name', 'path']),
   'skills.rename-file': objectSchema({ ...scopedProperties, name: { type: 'string' }, path: { type: 'string' }, newPath: { type: 'string' } }, ['name', 'path', 'newPath']),
   'skills.adopt': objectSchema({ provider: { enum: providerIds }, name: { type: 'string' }, scope: { enum: ['shared', 'provider'] }, overwrite: { type: 'boolean' } }, ['provider', 'name', 'scope']),
+  'skills.update-sync': objectSchema({ name: { type: 'string' }, providers: { type: 'array', items: { enum: providerIds } } }, ['name', 'providers']),
   'mcp.list': objectSchema({ ...scopedProperties, effectiveProvider: { enum: providerIds } }),
   'mcp.upsert': objectSchema({ ...scopedProperties, id: { type: 'string' }, displayName: { type: 'string' }, server: { type: 'object' } }, ['id', 'server']),
   'mcp.delete': objectSchema({ ...scopedProperties, id: { type: 'string' } }, ['id']),
+  'mcp.update-sync': objectSchema({ id: { type: 'string' }, providers: { type: 'array', items: { enum: providerIds } } }, ['id', 'providers']),
   'structured-preview.preview': objectSchema(providerSelectionProperties),
   'structured-preview.apply': objectSchema({ ...providerSelectionProperties, digest: { type: 'string' } }, ['digest']),
   'operation.restore': objectSchema({ id: { type: 'string' } }, ['id']),
@@ -531,6 +547,8 @@ function isOperationInput(operation: ManagerProtocolOperation, input: JsonObject
     case 'skills.adopt':
       return exact(input, ['provider', 'name', 'scope', 'overwrite']) && isProvider(input.provider) &&
         typeof input.name === 'string' && (input.scope === 'shared' || input.scope === 'provider') && optionalBoolean(input.overwrite);
+    case 'skills.update-sync':
+      return exact(input, ['name', 'providers']) && typeof input.name === 'string' && isProviderArray(input.providers);
     case 'mcp.list':
       return exact(input, ['scope', 'provider', 'effectiveProvider']) && isValidScope(input) && optionalProvider(input.effectiveProvider);
     case 'mcp.upsert':
@@ -538,6 +556,8 @@ function isOperationInput(operation: ManagerProtocolOperation, input: JsonObject
         typeof input.id === 'string' && optionalString(input.displayName) && isJsonObject(input.server);
     case 'mcp.delete':
       return exact(input, ['scope', 'provider', 'id']) && isValidScope(input) && typeof input.id === 'string';
+    case 'mcp.update-sync':
+      return exact(input, ['id', 'providers']) && typeof input.id === 'string' && isProviderArray(input.providers);
     case 'structured-preview.apply':
       return isProviderSelection(input, ['digest']) && typeof input.digest === 'string';
     case 'operation.restore':

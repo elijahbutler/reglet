@@ -95,7 +95,7 @@ async function applyAllWithHome(opts: ApplyAllOptions, home: string): Promise<Ap
       if (selectedContents.includes('skills')) {
         results.push(
           ...(providerConfig.skills
-            ? await applySkills(adapter, master, home, dryRun, operation, opts, revisions.masterRevision, revisions.compositionRevisions[adapter.id].skills)
+            ? await applySkills(adapter, master, config, home, dryRun, operation, opts, revisions.masterRevision, revisions.compositionRevisions[adapter.id].skills)
             : [skipped(adapter, 'skills', `${adapter.id}:skills unenrolled`)]),
         );
       }
@@ -227,6 +227,7 @@ interface SkillApplyEntry {
 async function applySkills(
   adapter: ProviderAdapter,
   master: MasterDir,
+  config: Awaited<ReturnType<typeof loadConfig>>,
   home: string,
   dryRun: boolean,
   operation: OperationContext | undefined,
@@ -239,7 +240,7 @@ async function applySkills(
     return [skipped(adapter, 'skills', `${adapter.id}:skills unsupported`)];
   }
 
-  const skills = resolveSkillsForProvider(master, adapter.id, home);
+  const skills = resolveSkillsForProvider(master, config, adapter.id, home);
   const masterSkillNames = new Set(skills.map((skill) => skill.name));
   const results: ApplyResult[] = [];
 
@@ -280,10 +281,16 @@ async function applySkills(
   return results.length === 0 ? [skipped(adapter, 'skills', `${adapter.id}:skills no master skills`)] : results;
 }
 
-function resolveSkillsForProvider(master: MasterDir, provider: ProviderId, home: string): SkillApplyEntry[] {
+function resolveSkillsForProvider(
+  master: MasterDir,
+  config: Awaited<ReturnType<typeof loadConfig>>,
+  provider: ProviderId,
+  home: string,
+): SkillApplyEntry[] {
   const resolved = new Map<string, SkillApplyEntry>();
 
   for (const skill of master.skills) {
+    if (!config.contentSync.skills[skill.name]?.includes(provider) && config.contentSync.skills[skill.name] !== undefined) continue;
     resolved.set(skill.name, {
       name: skill.name,
       sourceDir: path.join(home, 'skills', skill.name),

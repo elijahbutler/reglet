@@ -16,7 +16,15 @@ export interface ProviderConfig {
 
 export interface RegletConfig {
   providers: Record<ProviderName, ProviderConfig>;
+  contentSync: ContentSyncConfig;
 }
+
+export interface ContentSyncConfig {
+  skills: Record<string, ProviderName[]>;
+  mcp: Record<string, ProviderName[]>;
+}
+
+export type SyncableContent = keyof ContentSyncConfig;
 
 type TomlValue = string | number | boolean | Date | TomlValue[] | { readonly [key: string]: TomlValue };
 
@@ -32,7 +40,26 @@ export function defaultConfig(): RegletConfig {
     providers: Object.fromEntries(
       providerNames.map((name) => [name, { ...defaultProviderConfig }]),
     ) as Record<ProviderName, ProviderConfig>,
+    contentSync: { skills: {}, mcp: {} },
   };
+}
+
+export function syncProvidersFor(
+  config: RegletConfig,
+  content: SyncableContent,
+  id: string,
+): ProviderName[] {
+  return config.contentSync[content][id] ?? [...providerNames];
+}
+
+export function setSyncProviders(
+  config: RegletConfig,
+  content: SyncableContent,
+  id: string,
+  providers: readonly ProviderName[],
+): void {
+  const normalized = providerNames.filter((provider) => providers.includes(provider));
+  config.contentSync[content][id] = normalized;
 }
 
 export function configPath(home = regletHome()): string {
@@ -68,6 +95,7 @@ function normalizeConfig(value: unknown): RegletConfig {
   }
 
   const providers = isRecord(value.providers) ? value.providers : {};
+  const contentSync = isRecord(value.contentSync) ? value.contentSync : {};
   return {
     providers: Object.fromEntries(
       providerNames.map((name) => {
@@ -83,7 +111,21 @@ function normalizeConfig(value: unknown): RegletConfig {
         ];
       }),
     ) as Record<ProviderName, ProviderConfig>,
+    contentSync: {
+      skills: readSyncRecord(contentSync.skills),
+      mcp: readSyncRecord(contentSync.mcp),
+    },
   };
+}
+
+function readSyncRecord(value: unknown): Record<string, ProviderName[]> {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([id, providers]) => {
+      if (!Array.isArray(providers) || !providers.every((provider) => typeof provider === 'string')) return [];
+      return [[id, providerNames.filter((provider) => providers.includes(provider))]];
+    }),
+  );
 }
 
 function readBoolean(value: unknown, fallback: boolean): boolean {

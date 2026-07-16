@@ -8,6 +8,7 @@ import {
 
 let home: string | undefined;
 let providerHome: string | undefined;
+const allProviderNames = ['claude', 'codex', 'cursor', 'gemini', 'windsurf', 'opencode'];
 
 afterEach(async () => {
   if (home !== undefined) await rm(home, { recursive: true, force: true });
@@ -126,12 +127,14 @@ describe('skills overview', () => {
         path: path.join(paths.home, 'skills', 'alpha'),
         fileCount: 1,
         shadowedBy: [],
+        syncProviders: allProviderNames,
       },
       {
         name: 'beta',
         path: path.join(paths.home, 'skills', 'beta'),
         fileCount: 2,
         shadowedBy: [],
+        syncProviders: allProviderNames,
       },
     ]);
     expect(overview.providerScoped).toEqual([]);
@@ -157,6 +160,7 @@ describe('skills overview', () => {
         path: path.join(paths.home, 'skills', 'shared'),
         fileCount: 1,
         shadowedBy: ['claude', 'windsurf'],
+        syncProviders: allProviderNames,
       },
     ]);
     expect(overview.providerScoped).toEqual([
@@ -203,6 +207,7 @@ describe('skills overview', () => {
         path: path.join(paths.home, 'skills', 'managed-shared'),
         fileCount: 1,
         shadowedBy: [],
+        syncProviders: allProviderNames,
       },
     ]);
     expect(overview.providerScoped).toEqual([

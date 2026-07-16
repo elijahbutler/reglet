@@ -129,6 +129,32 @@
     @apply rounded-xl border border-reglet-line bg-reglet-panel2 p-4;
   }
 
+  .disclosure > summary,
+  .advanced-settings > summary {
+    @apply flex cursor-pointer list-none items-center gap-3;
+  }
+
+  .disclosure > summary::-webkit-details-marker,
+  .advanced-settings > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .disclosure > summary > svg {
+    @apply shrink-0 text-reglet-muted transition-transform;
+  }
+
+  .disclosure[open] > summary > svg {
+    transform: rotate(90deg);
+  }
+
+  .advanced-settings {
+    @apply rounded-lg border border-reglet-line bg-reglet-bg px-3 py-2;
+  }
+
+  .advanced-settings > summary {
+    @apply text-sm text-reglet-muted;
+  }
+
   .review-entry {
     @apply rounded-lg border border-reglet-line bg-reglet-bg p-3;
   }

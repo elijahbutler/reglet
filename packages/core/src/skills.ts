@@ -1,6 +1,6 @@
 import { cp, mkdir, lstat, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { loadConfig } from './config.js';
+import { loadConfig, saveConfig, setSyncProviders, syncProvidersFor } from './config.js';
 import { loadManifest } from './manifest.js';
 import { loadMasterDir } from './master.js';
 import { regletHome } from './paths.js';
@@ -44,6 +44,7 @@ export interface SharedSkillSummary {
   path: string;
   fileCount: number;
   shadowedBy: ProviderId[];
+  syncProviders: ProviderId[];
 }
 
 export interface ProviderScopedSkillSummary {
@@ -104,7 +105,7 @@ export interface SkillFileMutationResult extends SkillMutationResult {
 }
 
 export async function listSkills(home = regletHome()): Promise<SkillsOverview> {
-  const [master, unmanaged] = await Promise.all([loadMasterDir(home), listUnmanagedSkills(home)]);
+  const [master, unmanaged, config] = await Promise.all([loadMasterDir(home), listUnmanagedSkills(home), loadConfig(home)]);
   const sharedNames = new Set(master.skills.map((skill) => skill.name));
   const shadowedBy = new Map<string, ProviderId[]>();
   const providerScoped: ProviderScopedSkillSummary[] = [];
@@ -131,6 +132,7 @@ export async function listSkills(home = regletHome()): Promise<SkillsOverview> {
       path: path.join(home, 'skills', skill.name),
       fileCount: skill.files.length,
       shadowedBy: shadowedBy.get(skill.name) ?? [],
+      syncProviders: syncProvidersFor(config, 'skills', skill.name),
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
 
@@ -141,6 +143,17 @@ export async function listSkills(home = regletHome()): Promise<SkillsOverview> {
     ),
     unmanaged,
   };
+}
+
+export async function updateSkillSyncProviders(
+  name: string,
+  providers: readonly ProviderId[],
+  home = regletHome(),
+): Promise<ProviderId[]> {
+  const config = await loadConfig(home);
+  setSyncProviders(config, 'skills', name, providers);
+  await saveConfig(config, home);
+  return syncProvidersFor(config, 'skills', name);
 }
 
 export async function listManagedSkillTrees(home = regletHome()): Promise<ManagedSkillDetail[]> {

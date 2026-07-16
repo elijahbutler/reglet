@@ -3,7 +3,7 @@ import { providerNames, type ProviderName, type RegletConfig } from './config.js
 import { sha256String } from './fsutil.js';
 import type { ManagedContent } from './manifest.js';
 import type { MasterDir, MasterSkill } from './master.js';
-import { effectiveMcpEnvironmentDigest, redactMcpServers, resolveEffectiveMcpDefinitions } from './mcp.js';
+import { effectiveMcpEnvironmentDigest, filterMcpDefinitionsForProvider, redactMcpServers, resolveEffectiveMcpDefinitions } from './mcp.js';
 
 export interface MasterRevisionSet {
   masterRevision: string;
@@ -58,9 +58,19 @@ export async function deriveMasterRevisions(
         providerNames.map((provider) => [provider, canonicalMcpDefinitions(master.providerMcpDefinitions[provider])]),
       ),
     },
+    contentSync: config.contentSync,
     enrollment: canonicalEnrollment(config),
   };
   const masterRevision = digest(canonicalMaster);
+  const sharedSkillsByProvider = Object.fromEntries(
+    await Promise.all(providerNames.map(async (provider) => [
+      provider,
+      await canonicalSkills(master.skills.filter((skill) => {
+        const syncProviders = config.contentSync.skills[skill.name];
+        return syncProviders === undefined || syncProviders.includes(provider);
+      })),
+    ] as const)),
+  ) as Record<ProviderName, unknown[]>;
   const compositionRevisions = Object.fromEntries(
     providerNames.map((provider) => [
       provider,
@@ -78,7 +88,7 @@ export async function deriveMasterRevisions(
           provider,
           content: 'skills',
           enrollment: contentEnrollment(config, provider, 'skills'),
-          sharedSkills: canonicalMaster.skills.shared,
+          sharedSkills: sharedSkillsByProvider[provider],
           providerSkills: canonicalMaster.skills.providers[provider],
         }),
         mcp: digest({
@@ -86,7 +96,11 @@ export async function deriveMasterRevisions(
           provider,
           content: 'mcp',
           enrollment: contentEnrollment(config, provider, 'mcp'),
-          servers: resolveEffectiveMcpDefinitions(master.mcpDefinitions, master.providerMcpDefinitions[provider], provider).map((entry) => ({
+          servers: resolveEffectiveMcpDefinitions(
+            filterMcpDefinitionsForProvider(master.mcpDefinitions, config, provider),
+            master.providerMcpDefinitions[provider],
+            provider,
+          ).map((entry) => ({
             id: entry.id,
             displayName: entry.displayName,
             scope: entry.scope,
@@ -95,7 +109,11 @@ export async function deriveMasterRevisions(
             conflictStatus: entry.conflictStatus,
           })),
           environmentFingerprint: effectiveMcpEnvironmentDigest(
-            resolveEffectiveMcpDefinitions(master.mcpDefinitions, master.providerMcpDefinitions[provider], provider),
+            resolveEffectiveMcpDefinitions(
+              filterMcpDefinitionsForProvider(master.mcpDefinitions, config, provider),
+              master.providerMcpDefinitions[provider],
+              provider,
+            ),
             env,
           ),
         }),
