@@ -16,7 +16,7 @@ export interface RateLimitOptions {
 }
 
 export interface RateLimiter {
-  check: (request: Request, bucket: 'auth' | 'pair') => { ok: true } | { ok: false };
+  check: (request: Request, bucket: 'auth' | 'pair' | 'admin') => { ok: true } | { ok: false };
 }
 
 const defaultRateLimitWindowMs = 60 * 1000;

@@ -1,5 +1,9 @@
 import { Database } from 'bun:sqlite';
+import path from 'node:path';
 import { Hono } from 'hono';
+import { registerAdminRoutes } from './admin-routes.js';
+import { issueOwnerClaim } from './admin-storage.js';
+import { registerConnectionRoutes } from './connection-routes.js';
 import {
   createRateLimiter,
   errorBody,
@@ -26,6 +30,7 @@ import {
   claimPairCode,
   commitFileRevision,
   createSession,
+  currentSchemaVersion,
   ensureSingleUser,
   initializeSchema,
   renameDevice,
@@ -46,6 +51,9 @@ export interface CreateAppOptions {
   rateLimit?: RateLimitOptions | false;
   allowRegistration?: boolean;
   enableLegacyV1?: boolean;
+  publicUrl?: string;
+  adminAssetsPath?: string;
+  onOwnerClaimLink?: (link: string) => void;
 }
 
 interface RegisterBody {
@@ -77,7 +85,7 @@ interface RenameDeviceBody {
 }
 
 const appDatabases = new WeakMap<Hono, Database>();
-const serviceVersion = '0.1.0';
+const serviceVersion = '0.3.0';
 const protocolVersion = 1;
 const defaultBodyLimitBytes = 256 * 1024;
 const changesPageSize = 100;
@@ -97,11 +105,16 @@ export function createApp(options: CreateAppOptions = {}): Hono {
   }
   const allowRegistration = options.allowRegistration === true;
   const enableLegacyV1 = options.enableLegacyV1 ?? true;
+  const publicUrl = requirePublicUrl(options.publicUrl ?? 'https://localhost');
   const rateLimiter = createRateLimiter(options.rateLimit, now);
   try {
     initializeSchema(db);
     if (options.singleUserToken !== undefined) {
       ensureSingleUser(db, options.singleUserToken);
+    }
+    const ownerClaimToken = issueOwnerClaim(db, now);
+    if (ownerClaimToken !== null) {
+      options.onOwnerClaimLink?.(`${publicUrl}/admin#claim=${encodeURIComponent(ownerClaimToken)}`);
     }
   } catch (error) {
     db.close();
@@ -111,7 +124,22 @@ export function createApp(options: CreateAppOptions = {}): Hono {
   const app = new Hono();
   appDatabases.set(app, db);
 
+  app.use('*', async (c, next) => {
+    await next();
+    c.header('X-Content-Type-Options', 'nosniff');
+    c.header('X-Frame-Options', 'DENY');
+    c.header('Referrer-Policy', 'no-referrer');
+    c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    c.header(
+      'Content-Security-Policy',
+      "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; script-src 'self'; style-src 'self'; connect-src 'self'",
+    );
+  });
+
+  registerAdminRoutes(app, db, { now, bodyLimitBytes, rateLimiter, publicUrl, serviceVersion });
+  registerConnectionRoutes(app, db, { now, bodyLimitBytes, rateLimiter, publicUrl });
   registerSyncV2Routes(app, db, { now, bodyLimitBytes, rateLimiter });
+  registerAdminAssets(app, options.adminAssetsPath ?? path.resolve('apps/server-admin/dist'));
 
   if (!enableLegacyV1) {
     app.use('/v1/*', async (c, next) => {
@@ -149,7 +177,7 @@ export function createApp(options: CreateAppOptions = {}): Hono {
 
   app.get('/readyz', (c) => {
     const row = db.query('select max(version) as version from schema_migrations').get() as { version: number | null };
-    return row.version === 4
+    return row.version === currentSchemaVersion
       ? c.json({ ready: true })
       : c.json(errorBody('not_ready', 'database schema is not ready'), 503);
   });
@@ -447,6 +475,73 @@ export function createApp(options: CreateAppOptions = {}): Hono {
   app.notFound((c) => c.json(errorBody('not_found', 'not found'), 404));
 
   return app;
+}
+
+function registerAdminAssets(app: Hono, assetsPath: string): void {
+  const indexPath = path.join(assetsPath, 'index.html');
+  app.get('/admin', async () => serveAdminFile(indexPath, fallbackAdminHtml()));
+  app.get('/admin/*', async (c) => {
+    const pathname = new URL(c.req.url).pathname;
+    const relative = pathname.slice('/admin/'.length);
+    if (relative.length > 0 && !relative.includes('..') && !relative.includes('\\')) {
+      const candidate = path.resolve(assetsPath, relative);
+      if (candidate.startsWith(`${path.resolve(assetsPath)}${path.sep}`)) {
+        const response = await serveExistingFile(candidate);
+        if (response !== null) return response;
+      }
+    }
+    return serveAdminFile(indexPath, fallbackAdminHtml());
+  });
+  app.get('/connect', async () => serveAdminFile(indexPath, fallbackConnectHtml()));
+}
+
+async function serveAdminFile(
+  filePath: string,
+  fallback: string,
+): Promise<Response> {
+  return (await serveExistingFile(filePath)) ?? new Response(fallback, {
+    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+  });
+}
+
+async function serveExistingFile(filePath: string): Promise<Response | null> {
+  const file = Bun.file(filePath);
+  if (!(await file.exists())) return null;
+  return new Response(file, { headers: { 'Content-Type': contentType(filePath) } });
+}
+
+function contentType(filePath: string): string {
+  if (filePath.endsWith('.html')) return 'text/html; charset=utf-8';
+  if (filePath.endsWith('.js')) return 'text/javascript; charset=utf-8';
+  if (filePath.endsWith('.css')) return 'text/css; charset=utf-8';
+  if (filePath.endsWith('.svg')) return 'image/svg+xml';
+  if (filePath.endsWith('.png')) return 'image/png';
+  return 'application/octet-stream';
+}
+
+function fallbackAdminHtml(): string {
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Reglet server</title></head><body><main><h1>Reglet server dashboard</h1><p>The dashboard assets are not installed in this server build.</p></main></body></html>';
+}
+
+function fallbackConnectHtml(): string {
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Connect Reglet</title></head><body><main><h1>Connect Reglet</h1><p>Open this invitation with the Reglet desktop app or paste the complete link there.</p></main></body></html>';
+}
+
+function requirePublicUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error('REGLET_PUBLIC_URL must be an absolute URL');
+  }
+  const loopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1';
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
+    throw new Error('REGLET_PUBLIC_URL must use HTTPS except on loopback');
+  }
+  if (url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '') {
+    throw new Error('REGLET_PUBLIC_URL must not contain credentials, a query, or a fragment');
+  }
+  return url.toString().replace(/\/$/, '');
 }
 
 export function closeApp(app: Hono): void {

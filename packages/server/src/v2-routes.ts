@@ -79,8 +79,16 @@ export function registerSyncV2Routes(
 
   app.get('/v2/compatibility', (c) =>
     c.json({
-      service: { name: 'reglet-sync-server', version: '0.2.0' },
+      service: { name: 'reglet-sync-server', version: '0.3.0' },
       protocol: { current: syncV2ProtocolVersion, supported: [syncV2ProtocolVersion], suites: [syncV2Suite] },
+      capabilities: {
+        bootstrapToken: true,
+        bootstrapConnectionGrant: true,
+        pairingRequestCode: true,
+        pairingInvitation: true,
+        pairingCancellation: true,
+        backgroundSync: false,
+      },
     }),
   );
 
@@ -240,7 +248,7 @@ export function registerSyncV2Routes(
     return c.json({
       request: publicPairRequest(request),
       status: request.claimedAt !== null ? 'claimed' : request.approval === null ? 'pending' : 'approved',
-      approval: request.approval,
+      approval: request.claimedAt === null ? request.approval : null,
     });
   });
 

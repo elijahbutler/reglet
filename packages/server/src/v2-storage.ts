@@ -38,6 +38,7 @@ export interface CreatePairRequestInput {
   deviceName: string;
   agreementPublicKey: string;
   signingPublicKey: string;
+  invitationId?: string;
 }
 
 export interface SyncV2PairRequestWithToken {
@@ -50,6 +51,18 @@ export interface PairRequestRow extends SyncV2PairRequest {
   requestTokenHash: string;
   approval: SyncV2PairApproval | null;
   claimedAt: string | null;
+  invitationId: string | null;
+}
+
+export interface BootstrapConnectionInput {
+  vaultId: string;
+  deviceId: string;
+  deviceName: string;
+  deviceTokenHash: string;
+  agreementPublicKey: string;
+  signingPublicKey: string;
+  certificate: SyncV2DeviceCertificate;
+  authorityPublicKey: string;
 }
 
 export type SyncV2CommitResult =
@@ -127,6 +140,56 @@ export function bootstrapSyncV2Vault(
   return bootstrap();
 }
 
+export function approveBootstrapConnection(
+  db: Database,
+  grantId: string,
+  userId: number,
+  input: BootstrapConnectionInput,
+  now: () => Date,
+): 'created' | 'replayed' | 'conflict' {
+  const approve = db.transaction((): 'created' | 'replayed' | 'conflict' => {
+    const grant = db.query(
+      `select status from connection_grants
+       where id = ? and user_id = ? and kind = 'bootstrap' and expires_at >= ?`,
+    ).get(grantId, userId, now().getTime()) as { status: string } | null;
+    if (grant?.status === 'approved' || grant?.status === 'claimed') {
+      const existing = db.query(
+        `select v.id as vault_id, d.sync_device_id from sync_vaults v
+         join devices d on d.user_id = v.user_id where v.user_id = ? and d.token_hash = ?`,
+      ).get(userId, input.deviceTokenHash) as { vault_id: string; sync_device_id: string | null } | null;
+      return existing?.vault_id === input.vaultId && existing.sync_device_id === input.deviceId ? 'replayed' : 'conflict';
+    }
+    if (grant?.status !== 'pending') return 'conflict';
+    if ((db.query('select id from sync_vaults where user_id = ?').get(userId) as { id: string } | null) !== null) {
+      return 'conflict';
+    }
+    db.query(
+      `insert into sync_vaults
+       (id, user_id, suite, authority_public_key, current_epoch, sequence, checkpoint, created_at)
+       values (?, ?, ?, ?, 1, 0, ?, ?)`,
+    ).run(input.vaultId, userId, syncV2Suite, input.authorityPublicKey, initialCheckpoint().digest, now().toISOString());
+    db.query(
+      `insert into devices
+       (user_id, name, token_hash, created_at, sync_device_id, agreement_public_key, signing_public_key, certificate_json)
+       values (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      userId,
+      input.deviceName,
+      input.deviceTokenHash,
+      now().toISOString(),
+      input.deviceId,
+      input.agreementPublicKey,
+      input.signingPublicKey,
+      canonicalJson(input.certificate),
+    );
+    const updated = db.query(
+      "update connection_grants set status = 'approved', approved_at = ? where id = ? and status = 'pending'",
+    ).run(now().toISOString(), grantId);
+    return updated.changes === 1 ? 'created' : 'conflict';
+  });
+  return approve();
+}
+
 export function requireSyncV2Device(
   db: Database,
   authorization: string | undefined,
@@ -196,8 +259,8 @@ export function createSyncV2PairRequest(
   db.query(
     `insert into sync_pair_requests
      (id, code_hash, request_token_hash, device_token_hash, device_id, device_name,
-      agreement_public_key, signing_public_key, expires_at)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      agreement_public_key, signing_public_key, expires_at, invitation_id)
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     input.requestId,
     hashToken(code),
@@ -208,6 +271,7 @@ export function createSyncV2PairRequest(
     input.agreementPublicKey,
     input.signingPublicKey,
     timestamp + pairLifetimeMs,
+    input.invitationId ?? null,
   );
   return {
     requestToken,
@@ -227,7 +291,8 @@ export function pairRequestByCode(db: Database, code: string, now: () => Date): 
   return pairRequestFromRow(
     db.query(
       `select id, request_token_hash, device_token_hash, device_id, device_name, agreement_public_key,
-              signing_public_key, expires_at, approval_json, claimed_at
+              signing_public_key, expires_at, approval_json, claimed_at,
+              invitation_id, cancelled_at
        from sync_pair_requests where code_hash = ?`,
     ).get(hashToken(code)) as RawPairRequestRow | null,
     code,
@@ -244,7 +309,8 @@ export function pairRequestByToken(
   return pairRequestFromRow(
     db.query(
       `select id, request_token_hash, device_token_hash, device_id, device_name, agreement_public_key,
-              signing_public_key, expires_at, approval_json, claimed_at
+              signing_public_key, expires_at, approval_json, claimed_at,
+              invitation_id, cancelled_at
        from sync_pair_requests where id = ? and request_token_hash = ?`,
     ).get(requestId, hashToken(requestToken)) as RawPairRequestRow | null,
     '',
@@ -264,10 +330,22 @@ export function approveSyncV2PairRequest(
       'select count(*) as count from devices where user_id = ? and revoked_at is null and sync_device_id is not null',
     ).get(auth.userId) as { count: number };
     if (deviceCount.count >= maximumDevicesPerVault) return false;
+    const binding = db.query(
+      `select g.user_id, g.created_by_device_id
+       from sync_pair_requests r join connection_grants g on g.id = r.invitation_id
+       where r.id = ?`,
+    ).get(requestId) as { user_id: number; created_by_device_id: number | null } | null;
+    if (
+      binding !== null &&
+      (binding.user_id !== auth.userId ||
+        (binding.created_by_device_id !== null && binding.created_by_device_id !== auth.deviceRowId))
+    ) {
+      return false;
+    }
     const result = db.query(
       `update sync_pair_requests
        set approved_at = ?, user_id = ?, vault_id = ?, approver_device_id = ?, approval_json = ?
-       where id = ? and approval_json is null and claimed_at is null and expires_at >= ?`,
+       where id = ? and approval_json is null and claimed_at is null and cancelled_at is null and expires_at >= ?`,
     ).run(
       now().toISOString(),
       auth.userId,
@@ -277,7 +355,12 @@ export function approveSyncV2PairRequest(
       requestId,
       now().getTime(),
     );
-    return result.changes === 1;
+    if (result.changes !== 1) return false;
+    db.query(
+      `update connection_grants set status = 'approved', approved_at = ?
+       where id = (select invitation_id from sync_pair_requests where id = ?) and status = 'pending'`,
+    ).run(now().toISOString(), requestId);
+    return true;
   });
   return approve();
 }
@@ -290,11 +373,13 @@ export function claimSyncV2PairRequest(
   if (row.approval === null || row.claimedAt !== null) return false;
   const claim = db.transaction(() => {
     const pending = db.query(
-      'select user_id, vault_id, approval_json from sync_pair_requests where id = ? and claimed_at is null and expires_at >= ?',
+      `select user_id, vault_id, approval_json, invitation_id from sync_pair_requests
+       where id = ? and claimed_at is null and cancelled_at is null and expires_at >= ?`,
     ).get(row.requestId, now().getTime()) as {
       user_id: number | null;
       vault_id: string | null;
       approval_json: string | null;
+      invitation_id: string | null;
     } | null;
     if (pending?.user_id === null || pending?.user_id === undefined || pending.vault_id === null || pending.approval_json === null) {
       return false;
@@ -314,12 +399,43 @@ export function claimSyncV2PairRequest(
       row.signingPublicKey,
       canonicalJson(approval.certificate),
     );
-    return db.query('update sync_pair_requests set claimed_at = ? where id = ? and claimed_at is null').run(
+    const claimed = db.query('update sync_pair_requests set claimed_at = ? where id = ? and claimed_at is null').run(
       now().toISOString(),
       row.requestId,
     ).changes === 1;
+    if (claimed && pending.invitation_id !== null) {
+      db.query(
+        "update connection_grants set status = 'claimed', claimed_at = ? where id = ? and status = 'approved'",
+      ).run(now().toISOString(), pending.invitation_id);
+    }
+    return claimed;
   });
   return claim();
+}
+
+export function cancelSyncV2PairRequest(
+  db: Database,
+  requestId: string,
+  requestToken: string,
+  now: () => Date,
+): boolean {
+  const cancel = db.transaction(() => {
+    const row = db.query(
+      `select invitation_id from sync_pair_requests
+       where id = ? and request_token_hash = ? and claimed_at is null and cancelled_at is null and expires_at >= ?`,
+    ).get(requestId, hashToken(requestToken), now().getTime()) as { invitation_id: string | null } | null;
+    if (row === null) return false;
+    const changed = db.query(
+      'update sync_pair_requests set cancelled_at = ? where id = ? and cancelled_at is null',
+    ).run(now().toISOString(), requestId).changes === 1;
+    if (changed && row.invitation_id !== null) {
+      db.query(
+        "update connection_grants set status = 'cancelled', cancelled_at = ? where id = ? and status in ('open', 'pending', 'approved')",
+      ).run(now().toISOString(), row.invitation_id);
+    }
+    return changed;
+  });
+  return cancel();
 }
 
 export function commitSyncV2Envelope(
@@ -457,6 +573,8 @@ interface RawPairRequestRow {
   expires_at: number;
   approval_json: string | null;
   claimed_at: string | null;
+  invitation_id: string | null;
+  cancelled_at: string | null;
 }
 
 interface RawHistoryRow {
@@ -491,7 +609,7 @@ interface RawDeviceRow {
 }
 
 function pairRequestFromRow(row: RawPairRequestRow | null, code: string, now: () => Date): PairRequestRow | null {
-  if (row === null || row.expires_at < now().getTime()) return null;
+  if (row === null || row.expires_at < now().getTime() || row.cancelled_at !== null) return null;
   let approval: SyncV2PairApproval | null = null;
   try {
     approval = row.approval_json === null ? null : JSON.parse(row.approval_json) as SyncV2PairApproval;
@@ -510,6 +628,7 @@ function pairRequestFromRow(row: RawPairRequestRow | null, code: string, now: ()
     requestTokenHash: row.request_token_hash,
     approval,
     claimedAt: row.claimed_at,
+    invitationId: row.invitation_id,
   };
 }
 
