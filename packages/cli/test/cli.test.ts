@@ -817,6 +817,24 @@ describe('reglet CLI', () => {
     expect(mcpSync.result.providers).toEqual(['claude', 'codex']);
   });
 
+  test('encrypted sync snapshot performs no state or network work before local preview opt-in', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await mkdir(path.join(home, '.state'), { recursive: true });
+    await writeFile(path.join(home, '.state', 'sync-v2.json'), '{ invalid encrypted sync state');
+    const response = JSON.parse((await runRpc({
+      protocolVersion: 1,
+      operation: 'sync.snapshot',
+      input: {},
+    }, home, providerHome)).stdout) as {
+      ok: true;
+      result: { previewAcknowledged: boolean; phase: string; serverUrl: string | null };
+    };
+    expect(response).toMatchObject({
+      ok: true,
+      result: { previewAcknowledged: false, phase: 'disabled', serverUrl: null },
+    });
+  });
+
   test('manager rpc reads only a provider rules source and does not expose its path', async () => {
     const { home, providerHome } = await useTempHomes();
     const claudeRules = path.join(providerHome, '.claude', 'CLAUDE.md');

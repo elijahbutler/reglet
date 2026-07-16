@@ -5,6 +5,7 @@
     { "path": "packages/core" },
     { "path": "packages/cli" },
     { "path": "packages/server" },
-    { "path": "apps/desktop" }
+    { "path": "apps/desktop" },
+    { "path": "apps/server-admin" }
   ]
 }

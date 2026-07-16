@@ -79,8 +79,16 @@ export function registerSyncV2Routes(
 
   app.get('/v2/compatibility', (c) =>
     c.json({
-      service: { name: 'reglet-sync-server', version: '0.2.0' },
+      service: { name: 'reglet-sync-server', version: '0.3.0' },
       protocol: { current: syncV2ProtocolVersion, supported: [syncV2ProtocolVersion], suites: [syncV2Suite] },
+      capabilities: {
+        bootstrapToken: true,
+        bootstrapConnectionGrant: true,
+        pairingRequestCode: true,
+        pairingInvitation: true,
+        pairingCancellation: true,
+        backgroundSync: false,
+      },
     }),
   );
 
@@ -240,7 +248,7 @@ export function registerSyncV2Routes(
     return c.json({
       request: publicPairRequest(request),
       status: request.claimedAt !== null ? 'claimed' : request.approval === null ? 'pending' : 'approved',
-      approval: request.approval,
+      approval: request.claimedAt === null ? request.approval : null,
     });
   });
 
@@ -361,9 +369,6 @@ export function registerSyncV2Routes(
     if (auth === null) return c.json(errorBody('unauthorized', 'unauthorized'), 401);
     const targetId = c.req.param('deviceId');
     if (!isIdentifier(targetId)) return c.json(errorBody('invalid_request', 'device id is invalid'), 400);
-    if (targetId === auth.deviceId) {
-      return c.json(errorBody('current_device', 'current device cannot revoke itself in the preview'), 409);
-    }
     const result = db.query(
       'update devices set revoked_at = ? where user_id = ? and sync_device_id = ? and revoked_at is null',
     ).run(now().toISOString(), auth.userId, targetId);

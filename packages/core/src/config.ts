@@ -17,6 +17,11 @@ export interface ProviderConfig {
 export interface RegletConfig {
   providers: Record<ProviderName, ProviderConfig>;
   contentSync: ContentSyncConfig;
+  encryptedSyncPreview: EncryptedSyncPreviewConfig;
+}
+
+export interface EncryptedSyncPreviewConfig {
+  acknowledged: boolean;
 }
 
 export interface ContentSyncConfig {
@@ -41,6 +46,7 @@ export function defaultConfig(): RegletConfig {
       providerNames.map((name) => [name, { ...defaultProviderConfig }]),
     ) as Record<ProviderName, ProviderConfig>,
     contentSync: { skills: {}, mcp: {} },
+    encryptedSyncPreview: { acknowledged: false },
   };
 }
 
@@ -96,6 +102,7 @@ function normalizeConfig(value: unknown): RegletConfig {
 
   const providers = isRecord(value.providers) ? value.providers : {};
   const contentSync = isRecord(value.contentSync) ? value.contentSync : {};
+  const encryptedSyncPreview = isRecord(value.encryptedSyncPreview) ? value.encryptedSyncPreview : {};
   return {
     providers: Object.fromEntries(
       providerNames.map((name) => {
@@ -114,6 +121,9 @@ function normalizeConfig(value: unknown): RegletConfig {
     contentSync: {
       skills: readSyncRecord(contentSync.skills),
       mcp: readSyncRecord(contentSync.mcp),
+    },
+    encryptedSyncPreview: {
+      acknowledged: readBoolean(encryptedSyncPreview.acknowledged, false),
     },
   };
 }

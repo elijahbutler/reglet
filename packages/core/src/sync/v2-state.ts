@@ -25,16 +25,44 @@ export interface ActiveSyncV2State {
   checkpoint: SyncV2Checkpoint;
   credentialId: string;
   files: Record<string, SyncV2FileState>;
+  lastSync?: SyncV2LastRun;
+  keyRotationRequired?: boolean;
 }
 
-export interface PendingSyncV2State {
+export interface PendingSyncV2PairState {
   version: 2;
   phase: 'pending';
+  method: 'pair';
   serverUrl: string;
   credentialId: string;
   request: SyncV2PairRequest;
 }
 
+export interface PendingSyncV2BootstrapState {
+  version: 2;
+  phase: 'pending';
+  method: 'bootstrap';
+  serverUrl: string;
+  credentialId: string;
+  grantId: string;
+  fingerprint: string;
+  expiresAt: string;
+  vaultId: string;
+  deviceId: string;
+  deviceName: string;
+}
+
+export interface SyncV2LastRun {
+  completedAt: string;
+  pulled: number;
+  pushed: number;
+  merged: number;
+  conflicts: number;
+  deleted: number;
+  providerReviewRequired: boolean;
+}
+
+export type PendingSyncV2State = PendingSyncV2PairState | PendingSyncV2BootstrapState;
 export type SyncV2State = ActiveSyncV2State | PendingSyncV2State;
 
 export function syncV2StatePath(home = regletHome()): string {
@@ -59,6 +87,18 @@ export async function loadActiveSyncV2State(home = regletHome()): Promise<Active
 export async function loadPendingSyncV2State(home = regletHome()): Promise<PendingSyncV2State> {
   const state = await loadSyncV2State(home);
   if (state?.phase !== 'pending') throw new Error('This device has no pending encrypted pairing request');
+  return state;
+}
+
+export async function loadPendingSyncV2PairState(home = regletHome()): Promise<PendingSyncV2PairState> {
+  const state = await loadPendingSyncV2State(home);
+  if (state.method !== 'pair') throw new Error('This device has no pending encrypted pairing request');
+  return state;
+}
+
+export async function loadPendingSyncV2BootstrapState(home = regletHome()): Promise<PendingSyncV2BootstrapState> {
+  const state = await loadPendingSyncV2State(home);
+  if (state.method !== 'bootstrap') throw new Error('This device has no pending first-device connection');
   return state;
 }
 
@@ -92,13 +132,34 @@ function normalizeSyncV2State(value: unknown): SyncV2State {
   if (!isRecord(value) || value.version !== 2 || typeof value.serverUrl !== 'string' || typeof value.credentialId !== 'string') {
     throw new Error('Encrypted sync state is invalid');
   }
-  if (value.phase === 'pending' && isPairRequest(value.request)) {
+  if (value.phase === 'pending' && (value.method === undefined || value.method === 'pair') && isPairRequest(value.request)) {
     return {
       version: 2,
       phase: 'pending',
+      method: 'pair',
       serverUrl: value.serverUrl,
       credentialId: value.credentialId,
       request: value.request,
+    };
+  }
+  if (
+    value.phase === 'pending' && value.method === 'bootstrap' &&
+    typeof value.grantId === 'string' && typeof value.fingerprint === 'string' &&
+    typeof value.expiresAt === 'string' && typeof value.vaultId === 'string' &&
+    typeof value.deviceId === 'string' && typeof value.deviceName === 'string'
+  ) {
+    return {
+      version: 2,
+      phase: 'pending',
+      method: 'bootstrap',
+      serverUrl: value.serverUrl,
+      credentialId: value.credentialId,
+      grantId: value.grantId,
+      fingerprint: value.fingerprint,
+      expiresAt: value.expiresAt,
+      vaultId: value.vaultId,
+      deviceId: value.deviceId,
+      deviceName: value.deviceName,
     };
   }
   if (
@@ -131,7 +192,16 @@ function normalizeSyncV2State(value: unknown): SyncV2State {
     checkpoint: value.checkpoint,
     credentialId: value.credentialId,
     files,
+    ...(isLastSync(value.lastSync) ? { lastSync: value.lastSync } : {}),
+    ...(value.keyRotationRequired === true ? { keyRotationRequired: true } : {}),
   };
+}
+
+function isLastSync(value: unknown): value is SyncV2LastRun {
+  return isRecord(value) && typeof value.completedAt === 'string' &&
+    isNonNegativeSafeInteger(value.pulled) && isNonNegativeSafeInteger(value.pushed) &&
+    isNonNegativeSafeInteger(value.merged) && isNonNegativeSafeInteger(value.conflicts) &&
+    isNonNegativeSafeInteger(value.deleted) && typeof value.providerReviewRequired === 'boolean';
 }
 
 function isPairRequest(value: unknown): value is SyncV2PairRequest {

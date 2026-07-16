@@ -25,5 +25,8 @@ This release establishes Reglet as a local-only CLI for rules, skills, and MCP c
 ### Desktop manager
 
 - The Tauri Rules tab now opens the unified Reglet markdown by default, exposes provider-scoped markdown files only when they exist, and focuses editing on content with refresh, save, and open-file-location actions.
+- **Encrypted Sync (Preview)** adds explicit machine-local opt-in, owner-invitation bootstrap, trusted-device invitations and request codes, manual sync summaries, device management, deep links, and guarded disconnect flows.
+- The same-origin owner dashboard adds claim/login recovery, health and schema status, first-device fingerprint approval, device access management, live integrity checks, and verified server-native backups without exposing vault content or keys.
+- Revocation still requires vault-key rotation and re-encryption before encrypted sync can leave Preview. macOS artifacts remain ad-hoc signed and unnotarized; Windows artifacts remain unsigned.
 
 See [Release integrity and V1 certification](release.md) before distributing a tagged build.

@@ -8,11 +8,14 @@ const maximumDeviceNameLength = 80;
 export async function hashSecret(secret: string): Promise<string> {
   const salt = randomBytes(16).toString('hex');
   const hash = (await deriveSecret(secret, salt)).toString('hex');
-  return `${salt}:${hash}`;
+  return `v1$scrypt$${salt}$${hash}`;
 }
 
 export async function verifySecret(secret: string, stored: string): Promise<boolean> {
-  const [salt, hash] = stored.split(':');
+  const versioned = stored.split('$');
+  const [salt, hash] = versioned.length === 4 && versioned[0] === 'v1' && versioned[1] === 'scrypt'
+    ? [versioned[2], versioned[3]]
+    : stored.split(':');
   if (salt === undefined || hash === undefined) return false;
   const expected = Buffer.from(hash, 'hex');
   const actual = await deriveSecret(secret, salt);

@@ -23,6 +23,7 @@ export type FileCommitResult =
 
 const singleUserEmail = 'single-user@reglet.local';
 const singleUserPassword = 'single-user';
+export const currentSchemaVersion = 5;
 
 export function initializeSchema(db: Database): void {
   db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
@@ -35,9 +36,9 @@ create table if not exists schema_migrations (
   const newestSchema = db.query('select max(version) as version from schema_migrations').get() as {
     version: number | null;
   };
-  if (newestSchema.version !== null && newestSchema.version > 4) {
+  if (newestSchema.version !== null && newestSchema.version > currentSchemaVersion) {
     throw new Error(
-      `Database schema version ${newestSchema.version} is newer than this server supports (maximum 4)`,
+      `Database schema version ${newestSchema.version} is newer than this server supports (maximum ${currentSchemaVersion})`,
     );
   }
   const current = db.query('select version from schema_migrations where version = 1').get() as
@@ -216,6 +217,86 @@ create index if not exists sync_history_vault_sequence on sync_history (vault_id
 create index if not exists sync_pair_requests_expiry on sync_pair_requests (expires_at);
 `);
       db.query('insert into schema_migrations (version, applied_at) values (?, ?)').run(4, new Date().toISOString());
+    });
+    migrate();
+  }
+
+  const ownerDashboard = db.query('select version from schema_migrations where version = 5').get() as
+    | { version: number }
+    | null;
+  if (ownerDashboard === null) {
+    const migrate = db.transaction(() => {
+      if (!hasColumn(db, 'sync_pair_requests', 'invitation_id')) {
+        db.exec('alter table sync_pair_requests add column invitation_id text');
+      }
+      if (!hasColumn(db, 'sync_pair_requests', 'cancelled_at')) {
+        db.exec('alter table sync_pair_requests add column cancelled_at text');
+      }
+      db.exec(`
+create table if not exists admin_owners (
+  id integer primary key autoincrement,
+  user_id integer not null unique,
+  email text not null unique,
+  password_hash text not null,
+  created_at text not null,
+  updated_at text not null,
+  foreign key (user_id) references users(id)
+);
+create table if not exists admin_sessions (
+  token_hash text primary key,
+  owner_id integer not null,
+  csrf_hash text not null,
+  created_at text not null,
+  expires_at integer not null,
+  foreign key (owner_id) references admin_owners(id)
+);
+create table if not exists admin_claims (
+  token_hash text primary key,
+  kind text not null check (kind in ('claim', 'reset')),
+  owner_id integer,
+  created_at text not null,
+  expires_at integer not null,
+  consumed_at text,
+  foreign key (owner_id) references admin_owners(id)
+);
+create table if not exists connection_grants (
+  id text primary key,
+  token_hash text not null unique,
+  user_id integer not null,
+  owner_id integer,
+  created_by_device_id integer,
+  kind text not null check (kind in ('bootstrap', 'pair')),
+  status text not null check (status in ('open', 'pending', 'approved', 'cancelled', 'claimed')),
+  request_json text,
+  request_fingerprint text,
+  created_at text not null,
+  expires_at integer not null,
+  approved_at text,
+  claimed_at text,
+  cancelled_at text,
+  foreign key (user_id) references users(id),
+  foreign key (owner_id) references admin_owners(id),
+  foreign key (created_by_device_id) references devices(id)
+);
+create table if not exists admin_audit_events (
+  id integer primary key autoincrement,
+  user_id integer not null,
+  owner_id integer,
+  action text not null,
+  target_type text not null,
+  target_id text,
+  metadata_json text not null,
+  created_at text not null,
+  foreign key (user_id) references users(id),
+  foreign key (owner_id) references admin_owners(id)
+);
+create index if not exists admin_sessions_expiry on admin_sessions (expires_at);
+create index if not exists admin_claims_expiry on admin_claims (expires_at);
+create index if not exists connection_grants_user_expiry on connection_grants (user_id, expires_at);
+create index if not exists admin_audit_user_created on admin_audit_events (user_id, created_at);
+create index if not exists sync_pair_requests_invitation on sync_pair_requests (invitation_id);
+`);
+      db.query('insert into schema_migrations (version, applied_at) values (?, ?)').run(5, new Date().toISOString());
     });
     migrate();
   }

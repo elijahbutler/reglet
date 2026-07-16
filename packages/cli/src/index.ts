@@ -21,6 +21,8 @@ import {
   type ManagerProtocolOperation,
   type ManagerRpcRequest,
   type ManagerRpcResponse,
+  type SyncRunResult,
+  type SyncSnapshot,
 } from '@reglet/manager-protocol';
 import {
   applyAll,
@@ -113,6 +115,21 @@ import {
   updateMcpSyncProviders,
   updateSkillSyncProviders,
   writeSkillFile,
+  approveSyncV2Pairing,
+  cancelPendingSyncV2Connection,
+  completeSyncV2BootstrapConnection,
+  completeSyncV2Pairing,
+  createManagedSyncV2Invitation,
+  disconnectSyncV2,
+  listManagedSyncV2Devices,
+  loadSyncV2State,
+  pendingSyncV2ConnectionStatus,
+  renameManagedSyncV2Device,
+  requestSyncV2Pairing,
+  revokeManagedSyncV2Device,
+  saveSyncV2State,
+  startSyncV2BootstrapConnection,
+  syncOnceV2,
 } from '@reglet/core';
 import { allAdapters } from '@reglet/core';
 import {
@@ -1309,6 +1326,200 @@ async function dispatchManagerRpc(request: ManagerRpcRequest): Promise<unknown> 
       return { version: 1, actions: await restoreOperationReceipt(readString(input, 'id')) };
     case 'legacy-state.clear':
       return { version: 1, legacyNetworkState: await clearLegacySyncState() };
+    case 'sync.preview.set': {
+      const config = await loadConfig();
+      config.encryptedSyncPreview.acknowledged = readBoolean(input, 'acknowledged');
+      await saveConfig(config);
+      return buildSyncSnapshot();
+    }
+    case 'sync.snapshot':
+      return buildSyncSnapshot();
+    case 'sync.bootstrap.start':
+      await requireSyncPreviewAcknowledged();
+      return {
+        version: 1,
+        ...await startSyncV2BootstrapConnection({
+          connectUrl: readString(input, 'connectUrl'),
+          deviceName: readString(input, 'deviceName'),
+        }),
+      };
+    case 'sync.invitation.create':
+      await requireSyncPreviewAcknowledged();
+      return createManagedSyncV2Invitation();
+    case 'sync.pair.request':
+      await requireSyncPreviewAcknowledged();
+      return requestSyncV2Pairing({
+        serverUrl: readOptionalString(input, 'serverUrl'),
+        connectUrl: readOptionalString(input, 'connectUrl'),
+        deviceName: readString(input, 'deviceName'),
+      });
+    case 'sync.pair.approve':
+      await requireSyncPreviewAcknowledged();
+      return approveSyncV2Pairing({ code: readString(input, 'code') });
+    case 'sync.pair.status': {
+      await requireSyncPreviewAcknowledged();
+      const status = await pendingSyncV2ConnectionStatus();
+      return { ...status, code: status.method === 'pair' ? status.code : null };
+    }
+    case 'sync.pair.complete': {
+      await requireSyncPreviewAcknowledged();
+      const state = await loadSyncV2State();
+      if (state?.phase !== 'pending') throw new Error('This device has no pending encrypted sync connection');
+      if (state.method === 'bootstrap') {
+        await completeSyncV2BootstrapConnection({ confirmedFingerprint: readString(input, 'fingerprint') });
+      } else {
+        await completeSyncV2Pairing({ confirmedSas: readString(input, 'fingerprint') });
+      }
+      return buildSyncSnapshot();
+    }
+    case 'sync.pair.cancel':
+      await requireSyncPreviewAcknowledged();
+      await cancelPendingSyncV2Connection();
+      return buildSyncSnapshot();
+    case 'sync.run': {
+      await requireSyncPreviewAcknowledged();
+      const result = await syncOnceV2();
+      const state = await loadSyncV2State();
+      const run: SyncRunResult = {
+        completedAt: state?.phase === 'active' && state.lastSync !== undefined
+          ? state.lastSync.completedAt
+          : new Date().toISOString(),
+        ...result,
+      };
+      return run;
+    }
+    case 'sync.device.rename':
+      await requireSyncPreviewAcknowledged();
+      await renameManagedSyncV2Device({ deviceId: readString(input, 'deviceId'), name: readString(input, 'name') });
+      return { renamed: true, deviceId: readString(input, 'deviceId'), name: readString(input, 'name') };
+    case 'sync.device.revoke':
+      await requireSyncPreviewAcknowledged();
+      return revokeManagedSyncV2Device({ deviceId: readString(input, 'deviceId') });
+    case 'sync.disconnect':
+      await requireSyncPreviewAcknowledged();
+      await disconnectSyncV2({ localOnly: readOptionalBoolean(input, 'localOnly') });
+      return buildSyncSnapshot();
+  }
+}
+
+async function requireSyncPreviewAcknowledged(): Promise<void> {
+  if (!(await loadConfig()).encryptedSyncPreview.acknowledged) {
+    throw new Error('Encrypted Sync (Preview) must be acknowledged before making a network request');
+  }
+}
+
+async function buildSyncSnapshot(): Promise<SyncSnapshot> {
+  const previewAcknowledged = (await loadConfig()).encryptedSyncPreview.acknowledged;
+  const empty: Pick<SyncSnapshot, 'devices' | 'lastSync' | 'pending' | 'keyRotationRequired'> = {
+    devices: [],
+    lastSync: null,
+    pending: null,
+    keyRotationRequired: false,
+  };
+  if (!previewAcknowledged) {
+    return {
+      version: 1,
+      previewAcknowledged,
+      phase: 'disabled',
+      serverUrl: null,
+      serverHost: null,
+      compatibility: 'unknown',
+      currentDeviceId: null,
+      currentDeviceName: null,
+      ...empty,
+    };
+  }
+  const state = await loadSyncV2State();
+  if (state === null) {
+    return {
+      version: 1,
+      previewAcknowledged,
+      phase: 'disconnected',
+      serverUrl: null,
+      serverHost: null,
+      compatibility: 'unknown',
+      currentDeviceId: null,
+      currentDeviceName: null,
+      ...empty,
+    };
+  }
+  const serverHost = new URL(state.serverUrl).host;
+  if (state.phase === 'pending') {
+    return {
+      version: 1,
+      previewAcknowledged,
+      phase: 'pending',
+      serverUrl: state.serverUrl,
+      serverHost,
+      compatibility: 'unknown',
+      currentDeviceId: state.method === 'bootstrap' ? state.deviceId : state.request.deviceId,
+      currentDeviceName: state.method === 'bootstrap' ? state.deviceName : state.request.deviceName,
+      pending: state.method === 'bootstrap'
+        ? {
+            method: 'bootstrap',
+            status: 'pending',
+            deviceName: state.deviceName,
+            code: null,
+            fingerprint: state.fingerprint,
+            expiresAt: state.expiresAt,
+          }
+        : {
+            method: 'pair',
+            status: 'pending',
+            deviceName: state.request.deviceName,
+            code: state.request.code,
+            fingerprint: null,
+            expiresAt: state.request.expiresAt,
+          },
+      devices: [],
+      lastSync: null,
+      keyRotationRequired: false,
+    };
+  }
+  try {
+    const response = await listManagedSyncV2Devices();
+    return {
+      version: 1,
+      previewAcknowledged,
+      phase: 'connected',
+      serverUrl: state.serverUrl,
+      serverHost,
+      compatibility: 'compatible',
+      currentDeviceId: state.deviceId,
+      currentDeviceName: state.deviceName,
+      pending: null,
+      devices: response.devices.map((device) => ({
+        id: device.deviceId,
+        name: device.deviceName,
+        current: device.deviceId === response.currentDeviceId,
+        status: device.revokedAt === null ? 'active' : 'revoked',
+        createdAt: device.createdAt,
+        lastSeenAt: device.lastSeenAt,
+        revokedAt: device.revokedAt,
+      })),
+      lastSync: state.lastSync ?? null,
+      keyRotationRequired: state.keyRotationRequired === true,
+    };
+  } catch (error) {
+    const revoked = error instanceof Error && error.message.includes('failed: 401');
+    if (revoked && state.keyRotationRequired !== true) {
+      state.keyRotationRequired = true;
+      await saveSyncV2State(state);
+    }
+    return {
+      version: 1,
+      previewAcknowledged,
+      phase: 'connected',
+      serverUrl: state.serverUrl,
+      serverHost,
+      compatibility: revoked ? 'revoked' : 'unreachable',
+      currentDeviceId: state.deviceId,
+      currentDeviceName: state.deviceName,
+      pending: null,
+      devices: [],
+      lastSync: state.lastSync ?? null,
+      keyRotationRequired: state.keyRotationRequired === true || revoked,
+    };
   }
 }
 
@@ -1398,6 +1609,12 @@ function readOptionalNumber(input: JsonObject, key: string): number | undefined 
 function readOptionalBoolean(input: JsonObject, key: string): boolean | undefined {
   const value = input[key];
   if (value === undefined) return undefined;
+  if (typeof value !== 'boolean') throw new InvalidArgumentError(`${key} must be a boolean`);
+  return value;
+}
+
+function readBoolean(input: JsonObject, key: string): boolean {
+  const value = input[key];
   if (typeof value !== 'boolean') throw new InvalidArgumentError(`${key} must be a boolean`);
   return value;
 }

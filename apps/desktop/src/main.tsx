@@ -2,6 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './ui/App.js';
 import { tauriBridge } from './managerBridge.js';
+import { tauriConnectLinks } from './deepLinks.js';
 import './styles.css';
 
 const root = document.getElementById('root');
@@ -11,6 +12,6 @@ if (root === null) {
 
 createRoot(root).render(
   <React.StrictMode>
-    <App bridge={tauriBridge} />
+    <App bridge={tauriBridge} connectLinks={tauriConnectLinks} />
   </React.StrictMode>,
 );

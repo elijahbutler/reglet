@@ -1,73 +1,28 @@
-# Encrypted sync preview and homeserver runbook
+# Encrypted sync preview homeserver
 
-Protocol v2 is ready for a constrained two-device homeserver test. It is an opt-in CLI preview, not a production or multi-tenant service. The desktop UI and public release capability remain disabled.
+Reglet encrypted sync is an opt-in desktop preview for a personal, single-owner homeserver. The server relays authenticated ciphertext and tracks device access. Vault keys, plaintext Master content, provider configuration, and resolved MCP secrets remain device-only.
 
-## Product model
+Sync remains manual. A pull changes the local Reglet Master, never provider files; use local Review & Apply before changing provider destinations.
 
-The server is an encrypted relay and device registry. It is not the canonical editor and cannot read or apply Reglet content.
+## Security and recovery boundary
 
-Every paired Mac or Windows device is an equal Reglet manager:
+- The owner dashboard can claim the server, inspect health, create connection grants, rename or revoke device access, and create verified database backups.
+- The dashboard cannot decrypt content, transfer vault keys, or approve a later device into the encrypted vault. A trusted Reglet device must approve every later device.
+- Device revocation blocks future server access. Automatic epoch rotation and re-encryption are not implemented, so rotate-and-reencrypt remains a production gate.
+- Losing every authorized device loses the vault keys. Backups preserve ciphertext and registry state, not offline key recovery.
+- Live restore, Docker control, Coolify credentials, background sync, teams, OIDC, and hosted administration are not part of this preview.
 
-1. The device imports, adopts, or edits local content into its own Reglet Master.
-2. `reglet sync run` uploads authenticated ciphertext only.
-3. Another device manually pulls the encrypted changes into its local Master.
-4. That device reviews a fresh structured plan before applying anything to its local providers.
+Keep another copy of the Reglet Master and periodically rehearse an offline restore from a verified backup.
 
-Any authorized device can approve a new device, list devices, rename them, and revoke a remote device. Content management does not have to happen on the server. The server has no content-editing API by design.
-
-Operational administration—TLS, upgrades, backup, restore, and database checks—stays on the homeserver. Device-registry administration happens from any authorized client; there is intentionally no browser-based server control panel in this preview.
-
-For example, a Windows PC can adopt a provider-local skill and push it; a Mac can then pull the skill, review it, and apply it to whichever Mac providers are enrolled. `AGENTS.md` follows the same path through Reglet rules: import it into the Windows Master, sync, then review and apply it on the Mac.
-
-Machine-local enrollment and server settings in `reglet.toml` do not sync. Provider outputs, resolved environment values, receipts, snapshots, merge bases, conflicts, and credentials also remain local.
-
-## What is implemented
-
-- XChaCha20-Poly1305 object encryption with random 192-bit nonces.
-- HKDF-separated content and opaque path-index keys.
-- Ed25519 device certificates and object signatures.
-- X25519 pairing-key transport with a fingerprint compared on both devices.
-- OS credential storage: macOS Keychain and Windows Credential Manager.
-- Opaque server object identifiers; plaintext Master paths and contents never enter protocol-v2 tables.
-- Signed checkpoint chains, optimistic revisions, idempotency keys, nonce-reuse rejection, bounded requests, bounded pages, and object/device/history quotas.
-- Manual rules, Skills, provider-scoped Skills, shared MCP, and provider-scoped MCP sync.
-- Tombstones, three-way text merge, local conflict artifacts, and no provider apply during pull.
-- Device listing, rename, server-access revocation, last-seen timestamps, and paginated device lists.
-- Closed registration, legacy `/v1` disabled in the server process, forward-version refusal, readiness checks, verified SQLite backups, and a hardened single-node container.
-
-## Preview limits
-
-Use this only for personal testing with devices and a homeserver you control:
-
-- Device revocation blocks server access immediately, but automatic epoch rotation and re-encryption are not implemented. A previously authorized device that retained the epoch key could decrypt later ciphertext if it obtained that ciphertext elsewhere.
-- Offline recovery packages are not implemented. Losing every authorized device loses the encryption keys permanently.
-- Rate limiting is process-local. There are no hosted-service metrics, persistent audit events, automated retention, restore rehearsals, or horizontal-store support.
-- Sync is manual and CLI-only. There is no background sync or desktop device UI.
-- Release binaries and the server image are not yet signed release artifacts.
-
-Keep another copy of the Master and a verified database backup while testing.
-
-## Build preview clients
-
-The preview is source-gated and does not yet have signed release artifacts. From this checkout on the Mac, build the matching Mac client and the Windows x64 client, then transfer the Windows executable through a trusted channel:
-
-```bash
-bun install --frozen-lockfile
-bun run build:binaries
-shasum -a 256 dist/reglet-darwin-* dist/reglet-windows-x64.exe
-```
-
-Use the binary matching the Mac architecture as `reglet`. On Windows, confirm the transferred hash with `Get-FileHash .\reglet-windows-x64.exe -Algorithm SHA256`, then use it as `reglet.exe` in the examples below. These binaries are suitable for this controlled preview only; they are not signed or notarized release artifacts.
-
-## Homeserver deployment
+## Compose deployment
 
 Requirements:
 
 - Docker with Compose.
-- A DNS name and HTTPS reverse proxy. Reglet clients reject non-loopback HTTP.
-- The server port must remain bound to loopback; expose only the TLS proxy.
+- A public DNS name behind an HTTPS reverse proxy. Clients reject non-loopback HTTP.
+- A private loopback binding between the proxy and Reglet.
 
-Prepare the preview:
+Prepare the deployment:
 
 ```bash
 cd deploy/homeserver
@@ -75,139 +30,136 @@ cp .env.example .env
 chmod 600 .env
 mkdir -p backups
 chmod 700 backups
-openssl rand -base64 36
 ```
 
-Put the generated value in `REGLET_BOOTSTRAP_TOKEN` in `.env`, then start the service:
+Set the canonical public origin in `.env`:
+
+```dotenv
+REGLET_PUBLIC_URL=https://sync.example.com
+REGLET_BIND_PORT=3100
+REGLET_BOOTSTRAP_TOKEN=
+```
+
+`REGLET_PUBLIC_URL` must be the exact external HTTPS origin. It is used for secure same-origin owner sessions, CSRF checks, claim links, and connection invitations.
+
+Start the service and inspect its logs once:
 
 ```bash
 docker compose up -d --build
-docker compose ps
+docker compose logs reglet-sync
 ```
 
-The Compose file binds the service to `127.0.0.1:3100`, drops Linux capabilities, uses a read-only root filesystem, runs as the unprivileged `bun` user, disables registration and protocol v1, and persists SQLite in a named volume.
+The first startup prints one expiring `https://.../admin#claim=...` link. Open it directly, set the single owner email and password, then discard the link. It is single-use. If owner access is lost, generate a new one-time reset link inside the container:
 
-Point an existing reverse proxy at `127.0.0.1:3100`. [Caddyfile.example](../deploy/homeserver/Caddyfile.example) shows the minimal Caddy configuration. Do not publish port 3100 directly.
+```bash
+docker compose exec reglet-sync bun packages/server/src/admin.ts owner-reset-link
+```
 
-Verify the TLS boundary:
+The service runs without root capabilities, keeps its root filesystem read-only, persists SQLite in `reglet-data`, writes backups only under the mounted `/backups` directory, and serves the locally bundled dashboard at `/admin`.
+
+Point the TLS proxy at `127.0.0.1:3100`; do not expose that port publicly. Verify:
 
 ```bash
 curl --fail https://sync.example.com/readyz
 curl --fail https://sync.example.com/v2/compatibility
 ```
 
-The compatibility response must report protocol `2` and the `reglet-xchacha20poly1305-ed25519-x25519-hkdfsha256-v1` suite.
+## Connect the first device
 
-### Bootstrap the first Mac
+1. Open `https://sync.example.com/admin` and choose **Add device**.
+2. Open or paste the invitation in the desktop **Sync** section.
+3. Reglet generates the vault, device keys, and an independent device credential locally.
+4. Compare the fingerprint in the desktop and owner dashboard.
+5. Approve in the dashboard, confirm the matching fingerprint in the desktop, and finish the connection.
 
-Preview commands exist only when the explicit environment gate is set. Transfer the one-time bootstrap token to the first Mac through a secure channel, then run:
+An interrupted request can be retried with the same invitation. Reglet preserves the pending identity in the operating-system credential store so the fingerprint remains stable. Never approve when the fingerprints differ.
 
-```bash
-export REGLET_EXPERIMENTAL_SYNC=1
-export REGLET_BOOTSTRAP_TOKEN='<the generated value>'
-reglet sync bootstrap --server https://sync.example.com --device-name 'MacBook'
-unset REGLET_BOOTSTRAP_TOKEN
-```
+## Add later devices
 
-Bootstrap is idempotent, so the same command and token can be retried after an interrupted response. The device token and vault keys are stored in macOS Keychain; `.state/sync-v2.json` contains only non-secret identifiers and cursors.
+Later devices have two supported paths. Both require approval from a trusted Reglet device, not the dashboard.
 
-After bootstrap succeeds, clear `REGLET_BOOTSTRAP_TOKEN` in the homeserver `.env` and recreate the container:
+### Invitation link or QR
 
-```bash
-docker compose up -d --force-recreate
-```
+On a connected device, open **Sync**, choose **Add device**, and share the expiring link or QR code. Open it on the new device, compare the displayed fingerprint, then approve the request on a connected device.
 
-The stored token hash continues to authorize the Mac; the plaintext bootstrap token no longer needs to exist on the server.
+### Eight-character request code
 
-### Pair a Windows PC
+On the new device, select **Request a code**, enter the server URL and device name, and submit. On a connected device, enter that eight-character code in **Approve by code**. Complete only after both devices display the same fingerprint.
 
-On Windows PowerShell:
+Connection grants and codes expire after ten minutes. Pending requests can be cancelled from the requesting device. The server binds an invitation to one request and rejects expiry, cancellation, replay, and identity substitution.
 
-```powershell
-$env:REGLET_EXPERIMENTAL_SYNC = "1"
-reglet.exe sync pair --server https://sync.example.com --device-name "Windows PC"
-```
+## Manual sync and local review
 
-On the already authorized Mac, approve the printed eight-character code:
+Use **Sync now** on each device. The result reports pulled, pushed, merged, deleted, and conflicted paths. When pulled content requires provider review, use **Review & Apply** to create a fresh digest-backed local plan.
 
-```bash
-reglet sync approve ABCD1234
-```
+No provider files are changed by sync, and no sync runs in the background. Closing the waiting connection screen stops its status polling.
 
-The Mac prints a six-group fingerprint. On Windows:
+## Devices and revocation
 
-```powershell
-reglet.exe sync pair-status
-reglet.exe sync pair-complete --sas "THE SIX GROUP FINGERPRINT"
-```
+The desktop and owner dashboard show the same server device registry. A connected desktop can create invitations, approve codes, rename devices, revoke another device, and disconnect itself. The dashboard can list, rename, or revoke server access but cannot approve encrypted membership.
 
-Do not complete pairing unless the fingerprint shown on Windows exactly matches the Mac through a channel you trust. The server pair code alone is not proof of device identity.
+**Disconnect this device** revokes it remotely before deleting local credentials. **Remove locally only** is an explicit offline fallback and leaves the remote device authorized until it is revoked elsewhere.
 
-Either device can now inspect the signed registry:
+After any revocation, Reglet keeps a visible key-rotation warning. Server access is blocked immediately, but a device may retain keys and ciphertext it already received.
 
-```bash
-reglet sync devices
-reglet sync rename-device <device-id> 'New name'
-```
+## Backups and integrity
 
-Revocation is available for a lost test device, but reports `key-rotation-required` because epoch rotation is a remaining production gate:
+The dashboard **Host operations** section can:
+
+- run `quick_check` against the live database;
+- create a uniquely named SQLite snapshot in `REGLET_BACKUP_DIR`;
+- list backup timestamp, size, and current verification state.
+
+Backup jobs are serialized. The server chooses every filename, refuses symlinks and overwrites, and verifies each completed backup with `quick_check`. The routes accept no filesystem path, upload, or restore input.
+
+The equivalent host commands remain available:
 
 ```bash
-reglet sync revoke-device <device-id>
-```
-
-## Windows-to-Mac content flow
-
-For a new provider-local Windows skill:
-
-```powershell
-reglet.exe skills unmanaged
-reglet.exe skills adopt codex my-skill --scope shared
-reglet.exe sync run
-```
-
-For a changed Windows Codex `AGENTS.md`:
-
-```powershell
-reglet.exe import codex:rules
-reglet.exe sync run
-```
-
-On the Mac:
-
-```bash
-reglet sync run
-reglet skills list
-reglet apply-structured preview --provider claude codex --content rules skills
-reglet apply-structured apply --digest <reviewed-digest> --provider claude codex --content rules skills
-```
-
-The pull changes only the Mac Master. Provider files do not change until the digest-backed apply command succeeds. If both devices edited the same content, Reglet retains the local choice and creates a named `.conflict-<device>` artifact for manual resolution. Merge the chosen content into the canonical Master file, delete the conflict artifact, review the result, and run sync again.
-
-## Backup and integrity checks
-
-Create an online SQLite backup and verify it before reporting success:
-
-```bash
+docker compose exec reglet-sync bun packages/server/src/admin.ts check
 docker compose exec reglet-sync \
   bun packages/server/src/admin.ts backup /backups/reglet-$(date +%Y%m%d-%H%M%S).sqlite
 ```
 
-Backups appear in `deploy/homeserver/backups`. Check either the live database or a backup:
+Restore remains offline and operator-controlled:
+
+1. Stop the service.
+2. Preserve the current database plus any WAL/SHM files.
+3. Replace the database from a verified backup without following symlinks.
+4. Start the service and require `/readyz` to succeed.
+5. Confirm the device registry and complete a two-device sync round trip before deleting the preserved copy.
+
+## Upgrade an existing preview server
+
+Before upgrading, create and verify a backup. Retain the existing data volume and public origin, update the checkout or image, then recreate the service:
 
 ```bash
-docker compose exec reglet-sync bun packages/server/src/admin.ts check
-docker compose run --rm -e REGLET_DB=/backups/<backup.sqlite> \
-  reglet-sync bun packages/server/src/admin.ts check
+docker compose build --pull reglet-sync
+docker compose up -d --force-recreate reglet-sync
+curl --fail https://sync.example.com/readyz
 ```
 
-A production release still requires a documented restore rehearsal. For the preview, stop the service before replacing the named-volume database, retain the old database and WAL files, start the service, and require `/readyz` plus a two-device round trip before deleting the old copy.
+Migrations are additive and forward-version guarded. Existing encrypted objects, checkpoints, vault identity, device credentials, and token-bootstrapped devices remain valid without re-pairing.
 
-## Troubleshooting boundary
+`REGLET_BOOTSTRAP_TOKEN` is compatibility-only. An older server that was initialized with it may keep the value during the first upgrade. After an existing device successfully appears in the dashboard and completes a sync, clear the variable and recreate the container. New servers leave it empty and connect the first device through an owner-dashboard invitation.
 
-- `Encrypted sync request failed: 404`: verify the server process has protocol v2 and the reverse proxy is reaching this container.
-- `requires HTTPS`: use the TLS hostname, not the homeserver LAN IP over HTTP.
-- `pairing has not been approved`: approve the current code before its ten-minute expiry.
-- Fingerprints differ: stop. Cancel/logout the pending device and create a new request.
-- `changed on another device while uploading`: run sync again. Reglet retained local content and will pull the competing change first.
-- A pull reports `provider-apply=required`: review the Master and use structured preview/apply; this is expected.
+## Coolify deployment
+
+Use the repository Dockerfile `Dockerfile.sync` with persistent storage mounted at `/data` and `/backups`. Configure:
+
+```dotenv
+PORT=3000
+REGLET_DB=/data/reglet.sqlite
+REGLET_BACKUP_DIR=/backups
+REGLET_PUBLIC_URL=https://sync.example.com
+REGLET_ENABLE_LEGACY_V1=0
+REGLET_ALLOW_REGISTRATION=0
+REGLET_TRUST_PROXY=1
+```
+
+Expose port `3000` only through Coolify's HTTPS proxy. Mark both storage mounts persistent, enable the `/readyz` health check, and use Coolify's normal deploy/restart controls for upgrades.
+
+Do not mount the Docker socket into Reglet and do not provide Coolify API credentials to the container. The dashboard intentionally provides health, access, integrity, and backup operations only. Read the first claim link from the application logs, then use `/admin` for ongoing owner access.
+
+## Release status
+
+The visible Preview label is intentional. macOS application artifacts are ad-hoc signed and unnotarized; Windows artifacts are unsigned and may trigger platform warnings. Validate release checksums before installation.

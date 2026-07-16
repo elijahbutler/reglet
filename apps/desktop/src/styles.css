@@ -597,6 +597,256 @@
   }
 }
 
+@layer components {
+  .sync-view {
+    @apply overflow-hidden rounded-lg border border-reglet-line bg-reglet-panel;
+  }
+
+  .sync-titlebar {
+    @apply flex items-center justify-between border-b border-reglet-line px-5 py-4;
+  }
+
+  .sync-titlebar h2 {
+    @apply mt-0.5 text-lg font-semibold;
+  }
+
+  .sync-eyebrow {
+    @apply flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-reglet-info;
+  }
+
+  .sync-guided {
+    @apply mx-auto grid w-full max-w-2xl gap-5 px-6 py-10;
+  }
+
+  .sync-guided h3,
+  .sync-section h3 {
+    @apply text-base font-semibold;
+  }
+
+  .sync-guided p,
+  .sync-section p {
+    @apply mt-1 text-sm leading-6 text-reglet-muted;
+  }
+
+  .sync-guided-icon {
+    @apply grid h-11 w-11 place-items-center rounded-lg border border-reglet-line bg-reglet-panel2 text-reglet-info;
+  }
+
+  .sync-ack {
+    @apply flex max-w-xl items-start gap-3 rounded-md border border-reglet-line bg-reglet-panel2 px-3 py-3 text-sm leading-5;
+  }
+
+  .sync-ack input {
+    @apply mt-0.5;
+  }
+
+  .sync-mode {
+    @apply inline-flex w-fit rounded-md border border-reglet-line bg-reglet-bg p-1;
+  }
+
+  .sync-mode button {
+    @apply inline-flex min-h-9 items-center gap-2 rounded px-3 text-sm text-reglet-muted hover:text-reglet-text;
+  }
+
+  .sync-mode button.active {
+    @apply bg-reglet-graphite text-reglet-text;
+  }
+
+  .sync-form {
+    @apply grid gap-4;
+  }
+
+  .sync-pending-heading {
+    @apply flex items-start gap-3;
+  }
+
+  .sync-code,
+  .sync-fingerprint {
+    @apply block w-fit rounded-md border border-reglet-line bg-reglet-bg px-4 py-3 font-mono font-semibold;
+  }
+
+  .sync-code {
+    @apply text-2xl tracking-[0.16em];
+  }
+
+  .sync-fingerprint {
+    @apply break-all text-base leading-7 text-reglet-info;
+  }
+
+  .sync-connected {
+    @apply grid gap-0;
+  }
+
+  .sync-health {
+    @apply grid grid-cols-4 border-b border-reglet-line;
+  }
+
+  .sync-health > div {
+    @apply min-w-0 border-r border-reglet-line px-4 py-3 last:border-r-0;
+  }
+
+  .sync-health span,
+  .sync-run span {
+    @apply block text-[11px] font-medium uppercase tracking-wider text-reglet-muted;
+  }
+
+  .sync-health strong {
+    @apply mt-1 block truncate text-sm;
+  }
+
+  .sync-health-compatible { @apply text-reglet-green; }
+  .sync-health-unreachable,
+  .sync-health-revoked { @apply text-reglet-warning; }
+
+  .sync-actions {
+    @apply flex flex-wrap gap-2 border-b border-reglet-line px-5 py-4;
+  }
+
+  .sync-run {
+    @apply grid grid-cols-5 border-b border-reglet-line bg-reglet-bg;
+  }
+
+  .sync-run > div {
+    @apply border-r border-reglet-line px-4 py-3 last:border-r-0;
+  }
+
+  .sync-run strong {
+    @apply mt-1 block text-lg;
+  }
+
+  .sync-section {
+    @apply px-5 py-5;
+  }
+
+  .sync-section + .sync-section {
+    @apply border-t border-reglet-line;
+  }
+
+  .sync-section-heading,
+  .sync-disconnect {
+    @apply flex items-start justify-between gap-4;
+  }
+
+  .sync-code-entry {
+    @apply my-4 grid grid-cols-[minmax(220px,360px)_auto] items-end gap-2;
+  }
+
+  .sync-ledger {
+    @apply overflow-hidden rounded-md border border-reglet-line;
+  }
+
+  .sync-ledger-row {
+    @apply grid min-h-[70px] grid-cols-[auto_minmax(180px,1fr)_auto_auto] items-center gap-3 bg-reglet-panel2 px-4 py-3;
+  }
+
+  .sync-ledger-row + .sync-ledger-row {
+    @apply border-t border-reglet-line;
+  }
+
+  .sync-ledger-primary {
+    @apply min-w-0;
+  }
+
+  .sync-ledger-primary strong,
+  .sync-ledger-primary span {
+    @apply block truncate;
+  }
+
+  .sync-ledger-primary span {
+    @apply mt-1 text-xs text-reglet-muted;
+  }
+
+  .sync-ledger-primary form {
+    @apply flex max-w-md gap-2;
+  }
+
+  .sync-device-status {
+    @apply rounded border border-reglet-line px-2 py-1 text-[11px] font-semibold uppercase tracking-wider;
+  }
+
+  .sync-device-status.active { @apply text-reglet-green; }
+  .sync-device-status.revoked { @apply text-reglet-muted; }
+
+  .sync-row-actions {
+    @apply flex gap-1;
+  }
+
+  .sync-danger-icon {
+    @apply text-reglet-red;
+  }
+
+  .sync-invitation {
+    @apply my-4 grid grid-cols-[144px_minmax(0,1fr)] gap-4 rounded-md border border-reglet-info/50 bg-reglet-info/5 p-4;
+  }
+
+  .sync-invitation code {
+    @apply mt-2 block max-h-16 overflow-auto break-all rounded bg-reglet-bg p-2 text-xs text-reglet-muted;
+  }
+
+  .sync-qr {
+    @apply grid h-36 w-36 place-items-center rounded bg-white;
+  }
+
+  .sync-warning,
+  .sync-error {
+    @apply m-4 flex items-start gap-3 rounded-md border px-3 py-3 text-sm;
+  }
+
+  .sync-warning {
+    @apply border-reglet-warning/60 bg-reglet-warning/10 text-reglet-warning;
+  }
+
+  .sync-warning p {
+    @apply mt-1 text-reglet-text;
+  }
+
+  .sync-error {
+    @apply border-reglet-error bg-reglet-error/10 text-reglet-red;
+  }
+
+  .sync-error button {
+    @apply ml-auto underline;
+  }
+
+  .sync-empty {
+    @apply flex items-center gap-2 p-5 text-sm text-reglet-muted;
+  }
+
+  @media (max-width: 900px) {
+    .sync-health,
+    .sync-run {
+      @apply grid-cols-2;
+    }
+
+    .sync-health > div,
+    .sync-run > div {
+      @apply border-b border-reglet-line;
+    }
+
+    .sync-ledger-row {
+      @apply grid-cols-[auto_minmax(0,1fr)_auto];
+    }
+
+    .sync-row-actions {
+      @apply col-start-2;
+    }
+  }
+
+  @media (max-width: 620px) {
+    .sync-health,
+    .sync-run,
+    .sync-code-entry,
+    .sync-invitation {
+      @apply grid-cols-1;
+    }
+
+    .sync-section-heading,
+    .sync-disconnect {
+      @apply flex-col;
+    }
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

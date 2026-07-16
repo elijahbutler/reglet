@@ -16,6 +16,8 @@
     "desktop:test": "bun run --cwd apps/desktop test",
     "desktop:cargo:check": "cd apps/desktop/src-tauri && cargo check",
     "desktop:cargo:test": "cd apps/desktop/src-tauri && cargo test",
+    "server-admin:typecheck": "bun run --cwd apps/server-admin typecheck",
+    "server-admin:lint": "bun run --cwd apps/server-admin lint",
     "typecheck": "tsc --build",
     "lint": "eslint .",
     "test": "bun test packages"

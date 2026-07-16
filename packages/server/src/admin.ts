@@ -2,11 +2,23 @@
 import { Database } from 'bun:sqlite';
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { issueOwnerReset } from './admin-storage.js';
+import { initializeSchema } from './storage.js';
 
 const databasePath = path.resolve(process.env.REGLET_DB ?? './reglet.sqlite');
 const command = process.argv[2];
 
-if (command === 'check') {
+if (command === 'owner-reset-link') {
+  const publicUrl = new URL(process.env.REGLET_PUBLIC_URL ?? 'http://127.0.0.1:3000');
+  const database = new Database(databasePath);
+  try {
+    initializeSchema(database);
+    const token = issueOwnerReset(database, () => new Date());
+    console.log(`${publicUrl.toString().replace(/\/$/, '')}/admin#reset=${encodeURIComponent(token)}`);
+  } finally {
+    database.close();
+  }
+} else if (command === 'check') {
   const database = new Database(databasePath, { readonly: true });
   try {
     const result = database.query('pragma quick_check').get() as { quick_check: string } | null;
@@ -44,7 +56,7 @@ if (command === 'check') {
   }
   console.log(`backup\tverified\t${destination}`);
 } else {
-  throw new Error('Usage: admin.ts <check|backup> [destination.sqlite]');
+  throw new Error('Usage: admin.ts <owner-reset-link|check|backup> [destination.sqlite]');
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
