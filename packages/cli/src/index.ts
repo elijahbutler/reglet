@@ -125,6 +125,7 @@ import {
   stopDaemon,
   uninstallDaemon,
 } from './daemon.js';
+import { registerSyncV2PreviewCommands } from './sync-preview.js';
 
 const providerIds = ['claude', 'codex', 'cursor', 'gemini', 'windsurf', 'opencode'] as const;
 const contentIds = ['rules', 'skills', 'mcp'] as const;
@@ -818,6 +819,10 @@ mcp
     if (options.json === true) printJson({ version: 1, server });
     else console.log(`mcp\tdeleted\t${id}`);
   });
+
+if (process.env.REGLET_EXPERIMENTAL_SYNC === '1') {
+  registerSyncV2PreviewCommands(program);
+}
 
 const daemon = program.command('daemon').description('Run or manage the background daemon');
 

@@ -1,0 +1,31 @@
+services:
+  reglet-sync:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.sync
+    image: reglet-sync:preview-v2
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    environment:
+      REGLET_DB: /data/reglet.sqlite
+      REGLET_TOKEN: ${REGLET_BOOTSTRAP_TOKEN:-}
+      REGLET_ENABLE_LEGACY_V1: "0"
+      REGLET_ALLOW_REGISTRATION: "0"
+      REGLET_TRUST_PROXY: "0"
+      PORT: "3000"
+    ports:
+      - 127.0.0.1:${REGLET_BIND_PORT:-3100}:3000
+    volumes:
+      - reglet-data:/data
+      - ./backups:/backups
+    stop_grace_period: 15s
+
+volumes:
+  reglet-data:

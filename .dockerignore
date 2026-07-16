@@ -1,0 +1,12 @@
+.git
+.context
+node_modules
+dist
+**/dist
+**/target
+**/.build
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+deploy/homeserver/data
+deploy/homeserver/backups
