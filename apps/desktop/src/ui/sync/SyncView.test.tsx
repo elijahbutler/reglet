@@ -38,6 +38,26 @@ describe('encrypted sync view', () => {
     clearIntervalSpy.mockRestore();
   });
 
+  test('recovers an approved first-device connection after invitation expiry', async () => {
+    let snapshotCalls = 0;
+    const rpc = vi.fn().mockImplementation(async (operation: ManagerProtocolOperation) => {
+      if (operation === 'sync.snapshot') return snapshotCalls++ === 0 ? expiredBootstrapSnapshot() : connectedSnapshot();
+      if (operation === 'sync.pair.status') return { ...expiredBootstrapSnapshot().pending, status: 'approved' };
+      if (operation === 'sync.pair.complete') return connectedSnapshot();
+      throw new Error(`unexpected operation: ${operation}`);
+    });
+    renderView(bridge(rpc));
+
+    expect(await screen.findByText('Approval received')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /fingerprint matches/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Finish connection' }));
+
+    await waitFor(() => expect(rpc).toHaveBeenCalledWith('sync.pair.complete', {
+      fingerprint: expiredBootstrapSnapshot().pending?.fingerprint,
+    }));
+    expect(await screen.findByText('sync.example')).toBeInTheDocument();
+  });
+
   test('requires destructive confirmation before disconnecting', async () => {
     const rpc = vi.fn().mockImplementation(async (operation: ManagerProtocolOperation) => {
       if (operation === 'sync.snapshot') return connectedSnapshot();
@@ -108,6 +128,24 @@ function pendingSnapshot(): SyncSnapshot {
       code: 'AB12CD34',
       fingerprint: null,
       expiresAt: '2099-01-01T00:00:00.000Z',
+    },
+  });
+}
+
+function expiredBootstrapSnapshot(): SyncSnapshot {
+  return baseSnapshot({
+    phase: 'pending',
+    serverUrl: 'https://sync.example',
+    serverHost: 'sync.example',
+    currentDeviceId: 'device-new',
+    currentDeviceName: 'Mac',
+    pending: {
+      method: 'bootstrap',
+      status: 'pending',
+      deviceName: 'Mac',
+      code: null,
+      fingerprint: '1111 2222 3333 4444',
+      expiresAt: '2020-01-01T00:00:00.000Z',
     },
   });
 }

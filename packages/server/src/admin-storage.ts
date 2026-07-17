@@ -7,7 +7,7 @@ import type { AdminSession, ConnectionGrant, DeviceSummary, PendingConnection } 
 export const adminSessionCookie = 'reglet_admin_session';
 const claimLifetimeMs = 30 * 60 * 1000;
 const sessionLifetimeMs = 12 * 60 * 60 * 1000;
-const grantLifetimeMs = 10 * 60 * 1000;
+export const connectionGrantLifetimeMs = 10 * 60 * 1000;
 
 export interface AdminAuth extends AdminSession {
   tokenHash: string;
@@ -204,7 +204,7 @@ export function createConnectionGrant(
     auth.deviceRowId ?? null,
     kind,
     timestamp.toISOString(),
-    timestamp.getTime() + grantLifetimeMs,
+    timestamp.getTime() + connectionGrantLifetimeMs,
   );
   audit(
     db,
@@ -222,7 +222,7 @@ export function createConnectionGrant(
     status: 'open',
     connectUrl: `${publicUrl.replace(/\/$/, '')}/connect#grant=${encodeURIComponent(token)}&kind=${kind}`,
     fingerprint: null,
-    expiresAt: new Date(timestamp.getTime() + grantLifetimeMs).toISOString(),
+    expiresAt: new Date(timestamp.getTime() + connectionGrantLifetimeMs).toISOString(),
     token,
   };
 }
@@ -235,6 +235,40 @@ export function connectionGrantByToken(db: Database, token: string, now: () => D
   ).get(hashToken(token)) as RawGrant | null;
   if (row === null || row.expires_at < now().getTime() || row.cancelled_at !== null || row.status === 'cancelled') return null;
   return grantFromRow(row);
+}
+
+export function resetEmptySyncVault(db: Database, now: () => Date): { vaultId: string; removedDevices: number } {
+  const owner = db.query('select id, user_id from admin_owners limit 1').get() as {
+    id: number;
+    user_id: number;
+  } | null;
+  if (owner === null) throw new Error('The server owner has not been configured');
+  const vault = db.query('select id, sequence from sync_vaults where user_id = ?').get(owner.user_id) as {
+    id: string;
+    sequence: number;
+  } | null;
+  if (vault === null) throw new Error('The server has no encrypted sync vault to reset');
+  const content = db.query(
+    `select
+       (select count(*) from sync_objects where vault_id = ?) as objects,
+       (select count(*) from sync_history where vault_id = ?) as history,
+       (select count(*) from sync_mutations m join devices d on d.id = m.device_row_id where d.user_id = ?) as mutations`,
+  ).get(vault.id, vault.id, owner.user_id) as { objects: number; history: number; mutations: number };
+  if (vault.sequence !== 0 || content.objects !== 0 || content.history !== 0 || content.mutations !== 0) {
+    throw new Error('Refusing to reset a vault that contains encrypted sync data');
+  }
+
+  const reset = db.transaction(() => {
+    db.query('delete from sync_pair_requests where user_id = ? or vault_id = ?').run(owner.user_id, vault.id);
+    db.query('delete from connection_grants where user_id = ?').run(owner.user_id);
+    const devices = db.query('delete from devices where user_id = ? and sync_device_id is not null').run(owner.user_id);
+    db.query('delete from sync_vaults where id = ?').run(vault.id);
+    audit(db, owner.user_id, owner.id, 'vault.empty_reset', 'sync_vault', vault.id, {
+      removedDevices: devices.changes,
+    }, now());
+    return devices.changes;
+  });
+  return { vaultId: vault.id, removedDevices: reset() };
 }
 
 export function saveGrantRequest(

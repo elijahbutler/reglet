@@ -10,7 +10,7 @@ Reglet sync remains local-first and opt-in. Protocol v2 stores only authenticate
 
 Protocol v1 remains an isolated compatibility-test source. The protocol-v2 server process disables `/v1` unless a developer explicitly sets `REGLET_ENABLE_LEGACY_V1=1`.
 
-The preview implements encrypted objects, OS credential storage on macOS and Windows, authenticated fingerprint pairing, signed device certificates, manual sync, conflicts, tombstones, device management, and single-node deployment safeguards. Epoch rotation, offline recovery, hosted operations, desktop UI, and public release gates remain open.
+The preview implements encrypted objects, native OS credential storage on macOS, Windows, and Linux, authenticated fingerprint pairing, signed device certificates, manual sync, conflicts, tombstones, device management, and single-node deployment safeguards. Epoch rotation, offline recovery, hosted operations, desktop UI, and public release gates remain open.
 
 ## Security goals
 

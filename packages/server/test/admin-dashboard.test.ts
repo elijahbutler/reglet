@@ -1,5 +1,6 @@
+import { Database } from 'bun:sqlite';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -10,7 +11,9 @@ import {
   issueSyncV2DeviceCertificate,
   type SyncV2PairRequest,
 } from '@reglet/core';
+import { resetEmptySyncVault } from '../src/admin-storage.js';
 import { closeApp, createApp } from '../src/app.js';
+import { removeTestDirectory } from './cleanup.js';
 
 const apps: Array<ReturnType<typeof createApp>> = [];
 const directories: string[] = [];
@@ -18,7 +21,7 @@ const directories: string[] = [];
 afterEach(async () => {
   for (const app of apps) closeApp(app);
   apps.length = 0;
-  for (const directory of directories) await rm(directory, { recursive: true, force: true });
+  for (const directory of directories) await removeTestDirectory(directory);
   directories.length = 0;
 });
 
@@ -69,7 +72,9 @@ describe('owner dashboard and connection grants', () => {
   });
 
   test('initializes the first encrypted device atomically without exposing its token or vault keys', async () => {
-    const { app, cookie, csrfToken } = await claimedServer();
+    let currentTime = new Date('2026-07-16T12:00:00.000Z');
+    const now = () => currentTime;
+    const { app, cookie, csrfToken } = await claimedServer(undefined, { now });
     const grantResponse = await adminRequest(app, cookie, csrfToken, '/api/admin/v1/connections', { method: 'POST' });
     expect(grantResponse.status).toBe(201);
     const grant = await grantResponse.json() as { id: string; kind: string; connectUrl: string };
@@ -105,7 +110,7 @@ describe('owner dashboard and connection grants', () => {
       }),
     });
     expect(connection.status).toBe(201);
-    const pending = await connection.json() as { fingerprint: string };
+    const pending = await connection.json() as { fingerprint: string; expiresAt: string };
     expect(pending.fingerprint.split(' ')).toHaveLength(16);
 
     const dashboardPending = await app.request('/api/admin/v1/connections', { headers: { cookie } });
@@ -115,17 +120,42 @@ describe('owner dashboard and connection grants', () => {
     expect(JSON.stringify(pendingBody)).not.toContain(vault.rootSecret);
     expect(JSON.stringify(pendingBody)).not.toContain(vault.authoritySecretKey);
 
+    currentTime = new Date(currentTime.getTime() + 9 * 60 * 1000);
     const approved = await adminRequest(app, cookie, csrfToken, `/api/admin/v1/connections/${grant.id}/approve`, { method: 'POST' });
     expect(approved.status).toBe(200);
+    currentTime = new Date(currentTime.getTime() + 2 * 60 * 1000);
     const status = await app.request(`/v2/bootstrap/requests/${grant.id}`, {
       headers: { authorization: `Connection ${grantToken}` },
     });
-    expect(await status.json()).toMatchObject({ status: 'approved', fingerprint: pending.fingerprint });
-    expect((await app.request('/v2/devices', { headers: auth(deviceToken) })).status).toBe(200);
+    const statusBody = await status.json() as { status: string; fingerprint: string; expiresAt: string };
+    expect(statusBody).toMatchObject({ status: 'approved', fingerprint: pending.fingerprint });
+    expect(new Date(statusBody.expiresAt).getTime()).toBe(new Date(pending.expiresAt).getTime() + 9 * 60 * 1000);
     expect((await app.request(`/v2/bootstrap/requests/${grant.id}/claim`, {
       method: 'POST',
       headers: { authorization: `Connection ${grantToken}` },
     })).status).toBe(200);
+    expect((await app.request('/v2/devices', { headers: auth(deviceToken) })).status).toBe(200);
+  });
+
+  test('resets a stranded empty first-device vault but refuses a vault with sync history', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'reglet-empty-vault-'));
+    directories.push(directory);
+    const databasePath = path.join(directory, 'reglet.sqlite');
+    const setup = await bootstrappedDashboard({ databasePath });
+    const database = new Database(databasePath);
+    try {
+      database.query('update sync_vaults set sequence = 1').run();
+      expect(() => resetEmptySyncVault(database, () => new Date())).toThrow('contains encrypted sync data');
+      database.query('update sync_vaults set sequence = 0').run();
+      expect(resetEmptySyncVault(database, () => new Date())).toMatchObject({ removedDevices: 1 });
+    } finally {
+      database.close();
+    }
+
+    const overview = await setup.app.request('/api/admin/v1/overview', { headers: { cookie: setup.cookie } });
+    expect(await overview.json()).toMatchObject({ vault: { initialized: false, activeDevices: 0 } });
+    const freshGrant = await adminRequest(setup.app, setup.cookie, setup.csrfToken, '/api/admin/v1/connections', { method: 'POST' });
+    expect(await freshGrant.json()).toMatchObject({ kind: 'bootstrap' });
   });
 
   test('requires device approval for later invitations and supports cancellation', async () => {
@@ -245,9 +275,14 @@ describe('owner dashboard and connection grants', () => {
   });
 });
 
-async function claimedServer(backupDirectory?: string): Promise<{ app: ReturnType<typeof createApp>; cookie: string; csrfToken: string }> {
+async function claimedServer(
+  backupDirectory?: string,
+  options: { databasePath?: string; now?: () => Date } = {},
+): Promise<{ app: ReturnType<typeof createApp>; cookie: string; csrfToken: string }> {
   const links: string[] = [];
   const app = useApp(createApp({
+    ...(options.databasePath === undefined ? {} : { dbPath: options.databasePath }),
+    ...(options.now === undefined ? {} : { now: options.now }),
     publicUrl: 'https://reglet.test',
     onOwnerClaimLink: (link) => links.push(link),
     rateLimit: false,
@@ -258,7 +293,7 @@ async function claimedServer(backupDirectory?: string): Promise<{ app: ReturnTyp
   return { app, cookie: claimed.cookie, csrfToken: claimed.csrfToken };
 }
 
-async function bootstrappedDashboard(): Promise<{
+async function bootstrappedDashboard(options: { databasePath?: string } = {}): Promise<{
   app: ReturnType<typeof createApp>;
   cookie: string;
   csrfToken: string;
@@ -266,7 +301,7 @@ async function bootstrappedDashboard(): Promise<{
   device: ReturnType<typeof generateSyncV2DeviceKeys>;
   vault: ReturnType<typeof generateSyncV2VaultKeys>;
 }> {
-  const setup = await claimedServer();
+  const setup = await claimedServer(undefined, options);
   const grant = await (await adminRequest(setup.app, setup.cookie, setup.csrfToken, '/api/admin/v1/connections', { method: 'POST' })).json() as { id: string; connectUrl: string };
   const grantToken = new URLSearchParams(new URL(grant.connectUrl).hash.slice(1)).get('grant')!;
   const device = generateSyncV2DeviceKeys();

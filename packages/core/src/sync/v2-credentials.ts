@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import type {
   PendingSyncV2BootstrapSecrets,
@@ -13,7 +12,7 @@ export interface SyncV2SecretStore {
 }
 
 const credentialService = 'build.reglet.sync.v2';
-const maximumCredentialBytes = 16 * 1024;
+const maximumCredentialBytes = 2 * 1024;
 
 export function activeSyncV2CredentialId(serverUrl: string): string {
   return `active-${serverIdentity(serverUrl)}`;
@@ -24,9 +23,10 @@ export function pendingSyncV2CredentialId(serverUrl: string): string {
 }
 
 export function platformSyncV2SecretStore(platform = process.platform): SyncV2SecretStore {
-  if (platform === 'darwin') return new MacKeychainSecretStore();
-  if (platform === 'win32') return new WindowsCredentialManagerSecretStore();
-  throw new Error('Encrypted sync preview supports client credential storage on macOS and Windows only');
+  if (platform === 'darwin' || platform === 'win32' || platform === 'linux') {
+    return new NativeKeyringSecretStore();
+  }
+  throw new Error('Encrypted sync preview supports client credential storage on macOS, Windows, and Linux only');
 }
 
 export async function saveSyncV2DeviceSecrets(
@@ -105,122 +105,40 @@ export async function loadPendingSyncV2BootstrapSecrets(
   return parsed;
 }
 
-class MacKeychainSecretStore implements SyncV2SecretStore {
+class NativeKeyringSecretStore implements SyncV2SecretStore {
   async get(account: string): Promise<string | null> {
-    const result = await runCredentialCommand(
-      'security',
-      ['find-generic-password', '-a', account, '-s', credentialService, '-w'],
-      '',
-      44,
-    );
-    return result === null ? null : result.replace(/\r?\n$/, '');
-  }
-
-  async set(account: string, secret: string): Promise<void> {
-    requireBoundedSecret(secret);
-    await runCredentialCommand(
-      'security',
-      macKeychainSetArgs(account, secret),
-      '',
-      null,
-    );
-  }
-
-  async delete(account: string): Promise<void> {
-    await runCredentialCommand(
-      'security',
-      ['delete-generic-password', '-a', account, '-s', credentialService],
-      '',
-      44,
-    );
-  }
-}
-
-class WindowsCredentialManagerSecretStore implements SyncV2SecretStore {
-  async get(account: string): Promise<string | null> {
-    const output = await runPowerShellCredentialScript(windowsReadScript, account, '', 2);
-    if (output === null) return null;
     try {
-      return Buffer.from(output.trim(), 'base64').toString('utf8');
+      const value = await (await nativeKeyringEntry(account)).getSecret();
+      if (value === undefined || value === null) return null;
+      const secret = new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(value));
+      requireBoundedSecret(secret);
+      return secret;
     } catch {
-      throw new Error('Windows Credential Manager returned invalid Reglet credentials');
+      throw new Error('The operating system credential store is unavailable');
     }
   }
 
   async set(account: string, secret: string): Promise<void> {
     requireBoundedSecret(secret);
-    await runPowerShellCredentialScript(windowsWriteScript, account, secret, null);
+    try {
+      await (await nativeKeyringEntry(account)).setSecret(new TextEncoder().encode(secret));
+    } catch {
+      throw new Error('The operating system credential store rejected the Reglet credential update');
+    }
   }
 
   async delete(account: string): Promise<void> {
-    await runPowerShellCredentialScript(windowsDeleteScript, account, '', 2);
+    try {
+      await (await nativeKeyringEntry(account)).deleteCredential();
+    } catch {
+      throw new Error('The operating system credential store rejected the Reglet credential deletion');
+    }
   }
 }
 
-async function runPowerShellCredentialScript(
-  script: string,
-  account: string,
-  stdin: string,
-  missingExitCode: number | null,
-): Promise<string | null> {
-  const encoded = Buffer.from(`${windowsPrelude}\n${script}`, 'utf16le').toString('base64');
-  return runCredentialCommand(
-    'powershell.exe',
-    ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
-    stdin,
-    missingExitCode,
-    { REGLET_CREDENTIAL_TARGET: `${credentialService}/${account}` },
-  );
-}
-
-function runCredentialCommand(
-  command: string,
-  args: string[],
-  stdin: string,
-  missingExitCode: number | null,
-  environment: Record<string, string> = {},
-): Promise<string | null> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-      env: { ...process.env, ...environment },
-    });
-    const stdout: Buffer[] = [];
-    let stdoutBytes = 0;
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdoutBytes += chunk.byteLength;
-      if (stdoutBytes > maximumCredentialBytes) child.kill();
-      else stdout.push(chunk);
-    });
-    child.stderr.resume();
-    child.on('error', () => reject(new Error('The operating system credential store is unavailable')));
-    child.on('close', (code) => {
-      if (stdoutBytes > maximumCredentialBytes) {
-        reject(new Error('The operating system credential store returned too much data'));
-      } else if (code === 0) {
-        resolve(Buffer.concat(stdout).toString('utf8'));
-      } else if (missingExitCode !== null && code === missingExitCode) {
-        resolve(null);
-      } else {
-        reject(new Error('The operating system credential store rejected the Reglet credential update'));
-      }
-    });
-    child.stdin.end(stdin);
-  });
-}
-
-export function macKeychainSetArgs(account: string, secret: string): string[] {
-  return [
-    'add-generic-password',
-    '-a',
-    account,
-    '-s',
-    credentialService,
-    '-U',
-    '-X',
-    Buffer.from(secret, 'utf8').toString('hex'),
-  ];
+async function nativeKeyringEntry(account: string) {
+  const { AsyncEntry } = await import('@napi-rs/keyring');
+  return new AsyncEntry(credentialService, account);
 }
 
 function serverIdentity(serverUrl: string): string {
@@ -267,62 +185,3 @@ function isBootstrapSecrets(value: unknown): value is PendingSyncV2BootstrapSecr
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
-
-const windowsPrelude = String.raw`
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class RegletCred {
-  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-  public struct Credential {
-    public UInt32 Flags; public UInt32 Type; public string TargetName; public string Comment;
-    public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
-    public UInt32 CredentialBlobSize; public IntPtr CredentialBlob; public UInt32 Persist;
-    public UInt32 AttributeCount; public IntPtr Attributes; public string TargetAlias; public string UserName;
-  }
-  [DllImport("advapi32.dll", EntryPoint="CredWriteW", CharSet=CharSet.Unicode, SetLastError=true)]
-  public static extern bool Write(ref Credential credential, UInt32 flags);
-  [DllImport("advapi32.dll", EntryPoint="CredReadW", CharSet=CharSet.Unicode, SetLastError=true)]
-  public static extern bool Read(string target, UInt32 type, UInt32 flags, out IntPtr credential);
-  [DllImport("advapi32.dll", EntryPoint="CredDeleteW", CharSet=CharSet.Unicode, SetLastError=true)]
-  public static extern bool Delete(string target, UInt32 type, UInt32 flags);
-  [DllImport("advapi32.dll", EntryPoint="CredFree", SetLastError=true)]
-  public static extern void Free(IntPtr credential);
-}
-'@
-$target = $env:REGLET_CREDENTIAL_TARGET
-`;
-
-const windowsWriteScript = String.raw`
-$secret = [Console]::In.ReadToEnd()
-$bytes = [Text.Encoding]::UTF8.GetBytes($secret)
-$pointer = [Runtime.InteropServices.Marshal]::AllocHGlobal($bytes.Length)
-try {
-  [Runtime.InteropServices.Marshal]::Copy($bytes, 0, $pointer, $bytes.Length)
-  $credential = New-Object RegletCred+Credential
-  $credential.Type = 1; $credential.TargetName = $target; $credential.CredentialBlobSize = $bytes.Length
-  $credential.CredentialBlob = $pointer; $credential.Persist = 2; $credential.UserName = 'Reglet'
-  if (-not [RegletCred]::Write([ref]$credential, 0)) { exit 1 }
-} finally { [Runtime.InteropServices.Marshal]::FreeHGlobal($pointer) }
-`;
-
-const windowsReadScript = String.raw`
-$pointer = [IntPtr]::Zero
-if (-not [RegletCred]::Read($target, 1, 0, [ref]$pointer)) {
-  if ([Runtime.InteropServices.Marshal]::GetLastWin32Error() -eq 1168) { exit 2 }
-  exit 1
-}
-try {
-  $credential = [Runtime.InteropServices.Marshal]::PtrToStructure($pointer, [type][RegletCred+Credential])
-  $bytes = New-Object byte[] $credential.CredentialBlobSize
-  [Runtime.InteropServices.Marshal]::Copy($credential.CredentialBlob, $bytes, 0, $bytes.Length)
-  [Console]::Out.Write([Convert]::ToBase64String($bytes))
-} finally { [RegletCred]::Free($pointer) }
-`;
-
-const windowsDeleteScript = String.raw`
-if (-not [RegletCred]::Delete($target, 1, 0)) {
-  if ([Runtime.InteropServices.Marshal]::GetLastWin32Error() -eq 1168) { exit 2 }
-  exit 1
-}
-`;
