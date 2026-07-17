@@ -12,7 +12,7 @@ export interface SyncV2SecretStore {
 }
 
 const credentialService = 'build.reglet.sync.v2';
-const maximumCredentialBytes = 16 * 1024;
+const maximumCredentialBytes = 2 * 1024;
 
 export function activeSyncV2CredentialId(serverUrl: string): string {
   return `active-${serverIdentity(serverUrl)}`;
@@ -108,10 +108,11 @@ export async function loadPendingSyncV2BootstrapSecrets(
 class NativeKeyringSecretStore implements SyncV2SecretStore {
   async get(account: string): Promise<string | null> {
     try {
-      const value = await (await nativeKeyringEntry(account)).getPassword();
+      const value = await (await nativeKeyringEntry(account)).getSecret();
       if (value === undefined || value === null) return null;
-      requireBoundedSecret(value);
-      return value;
+      const secret = new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(value));
+      requireBoundedSecret(secret);
+      return secret;
     } catch {
       throw new Error('The operating system credential store is unavailable');
     }
@@ -120,7 +121,7 @@ class NativeKeyringSecretStore implements SyncV2SecretStore {
   async set(account: string, secret: string): Promise<void> {
     requireBoundedSecret(secret);
     try {
-      await (await nativeKeyringEntry(account)).setPassword(secret);
+      await (await nativeKeyringEntry(account)).setSecret(new TextEncoder().encode(secret));
     } catch {
       throw new Error('The operating system credential store rejected the Reglet credential update');
     }

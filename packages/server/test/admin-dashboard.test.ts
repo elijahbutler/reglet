@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -13,6 +13,7 @@ import {
 } from '@reglet/core';
 import { resetEmptySyncVault } from '../src/admin-storage.js';
 import { closeApp, createApp } from '../src/app.js';
+import { removeTestDirectory } from './cleanup.js';
 
 const apps: Array<ReturnType<typeof createApp>> = [];
 const directories: string[] = [];
@@ -20,7 +21,7 @@ const directories: string[] = [];
 afterEach(async () => {
   for (const app of apps) closeApp(app);
   apps.length = 0;
-  for (const directory of directories) await rm(directory, { recursive: true, force: true });
+  for (const directory of directories) await removeTestDirectory(directory);
   directories.length = 0;
 });
 
