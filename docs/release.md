@@ -2,7 +2,7 @@
 
 ## Artifact requirements
 
-Public releases include standalone CLI binaries plus ad-hoc-signed/unnotarized macOS and unsigned Windows desktop artifacts. The retained Swift macOS manager remains frozen during Tauri parity work. Linux GUI packaging is configured for `.deb` and AppImage, but Linux desktop artifacts are deferred until after macOS and Windows stabilize. Release automation fails unless it can:
+Public releases include standalone CLI binaries plus ad-hoc-signed/unnotarized macOS and unsigned Windows desktop artifacts. Linux GUI packaging is configured for `.deb` and AppImage, but Linux desktop artifacts are deferred until after macOS and Windows stabilize. Release automation fails unless it can:
 
 1. run Bun checks and tests;
 2. run the source-level Swift tests for the retained macOS manager;

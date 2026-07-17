@@ -8,7 +8,7 @@ Before submitting changes:
 bun run typecheck
 bun test
 bun run lint
-swift test --package-path apps/macos/RegletSetup
+bun run desktop:cargo:test
 ```
 
 Guidelines:

@@ -77,10 +77,3 @@ jobs:
         run: bash scripts/stage-tauri-check-sidecar.sh
       - run: cd apps/desktop/src-tauri && cargo check
       - run: cd apps/desktop/src-tauri && cargo test
-
-  macos-native:
-    name: macOS manager tests
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: swift test --package-path apps/macos/RegletSetup

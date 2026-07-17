@@ -2,7 +2,7 @@
 
 ![Reglet engineering control plane banner](docs/assets/reglet-banner.svg)
 
-Reglet is a local-only CLI, with retained Swift macOS manager source and a cross-platform Tauri desktop manager under parity development, for global AI-agent rules, skills, and MCP configurations. It keeps one versionable master directory, renders it to the six supported providers, makes every provider write reviewable, and retains recovery data indefinitely.
+Reglet is a local-only CLI and cross-platform Tauri desktop manager for global AI-agent rules, skills, and MCP configurations. It keeps one versionable master directory, renders it to the six supported providers, makes every provider write reviewable, and retains recovery data indefinitely.
 
 The default Public V1 CLI has no account, device-linking, remote configuration, background network transfer, or network management commands. Its configuration path stays on the current machine. Encrypted sync is separate, explicitly gated desktop preview functionality for personal self-hosted testing. Desktop update checks are manual unless a user explicitly opts into automatic checks. macOS desktop artifacts are ad-hoc signed and unnotarized; Windows artifacts are unsigned. Linux GUI artifacts are deferred.
 
@@ -208,7 +208,7 @@ bun install --frozen-lockfile
 bun run test
 bun run typecheck
 bun run lint
-swift test --package-path apps/macos/RegletSetup
+bun run desktop:cargo:test
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 ```
 

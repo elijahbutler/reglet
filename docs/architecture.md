@@ -4,7 +4,7 @@ Public V1 consists of three local components:
 
 - `packages/core`: master-directory model, provider adapters, transaction engine, drift detection, and recovery.
 - `packages/cli`: local automation and the JSON contracts used by the manager.
-- `apps/macos/RegletSetup`: the native manager.
+- `apps/desktop`: the Tauri desktop manager.
 
 There is no public service dependency. The configuration workflow does not make network requests.
 

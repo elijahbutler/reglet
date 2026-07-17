@@ -20,13 +20,7 @@ Outputs:
 - `dist/reglet-darwin-x64`
 - `dist/reglet-windows-x64.exe`
 
-Public release packaging additionally runs:
-
-```bash
-swift test --package-path apps/macos/RegletSetup
-```
-
-The Swift test guards the retained macOS manager while it remains frozen during Tauri parity. Public release automation publishes ad-hoc-signed/unnotarized macOS and unsigned Windows Tauri desktop artifacts; Linux GUI artifacts are structurally prepared but deferred.
+Public release automation publishes ad-hoc-signed/unnotarized macOS and unsigned Windows Tauri desktop artifacts; Linux GUI artifacts are structurally prepared but deferred.
 
 The Tauri app requires a Rust toolchain. Validate the frontend and fixed sidecar bridge without starting a development server:
 
@@ -40,14 +34,14 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 
 Release builds first compile the standalone CLIs, stage each matching target-triple sidecar, then call `scripts/build-tauri-desktop.sh`. The script injects the tag version into both the package metadata and Rust update checker.
 
-## Run or install the macOS app locally
+## Run or install the macOS Tauri app locally
 
 ```bash
 bun run macos:local
 bun run macos:install
 ```
 
-`macos:local` installs the native CLI and launches the retained Swift app from source. `macos:install` creates an ad-hoc-signed `~/Applications/Reglet.app` with the same CLI bundled inside it for local testing. Tauri desktop artifacts are produced from `apps/desktop` with staged sidecars. Set `REGLET_NO_OPEN=1` for unattended installation tests, or override `REGLET_CLI_INSTALL_DIR` and `REGLET_APP_INSTALL_DIR` to keep outputs in a temporary directory.
+`macos:local` builds the host Tauri app and opens it from the Tauri build output. `macos:install` builds the host Tauri app, installs it to `~/Applications/Reglet.app`, and opens it unless `REGLET_NO_OPEN=1` is set. Set `REGLET_APP_INSTALL_DIR` to install somewhere else.
 
 ## Test Safety
 

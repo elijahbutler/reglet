@@ -1,6 +1,6 @@
 # macOS Manager product and delivery roadmap (historical)
 
-> Superseded by the cross-platform [production roadmap](../ROADMAP.md). This document is retained as product-design history for the frozen Swift implementation and is not an active delivery plan.
+> Superseded by the cross-platform [production roadmap](../ROADMAP.md). This document is retained as product-design history for the retired Swift implementation and is not an active delivery plan.
 
 ## Status and boundary
 
@@ -279,7 +279,7 @@ Require consent for each invocation. Never run because a tool was detected, beca
 
 Phases are dependency ordered. A phase can merge behind an internal build flag, but no public Manager artifact ships merely because one phase is complete.
 
-The PR-sized work breakdown, dependencies, and merge gates are maintained in the [remaining implementation plan](macos-manager-implementation-plan.md).
+The PR-sized historical Swift implementation plan was removed when the tracked Swift app was retired.
 
 ### Phase 0: Contracts and product semantics
 
