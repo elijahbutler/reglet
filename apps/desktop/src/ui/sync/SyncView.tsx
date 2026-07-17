@@ -93,8 +93,9 @@ export function SyncView({ bridge, incomingLink, onConsumedLink, onReview }: Syn
   }, [bridge]);
 
   useEffect(() => {
-    if (snapshot?.phase !== 'pending' || pending === null || isExpired(pending.expiresAt) || pending.status !== 'pending') return;
+    if (snapshot?.phase !== 'pending' || pending === null || pending.status !== 'pending') return;
     void pollStatus().catch((cause: unknown) => setError(errorMessage(cause)));
+    if (isExpired(pending.expiresAt)) return;
     const timer = window.setInterval(() => {
       void pollStatus().catch((cause: unknown) => setError(errorMessage(cause)));
     }, 3_000);
@@ -282,7 +283,7 @@ function DeviceName({ value, onChange }: { value: string; onChange: (value: stri
 function PendingView(props: { pending: SyncPendingConnection; confirmed: boolean; onConfirmed: (value: boolean) => void; onComplete: () => void; onCancel: () => void; busy: boolean }) {
   const expired = isExpired(props.pending.expiresAt);
   const ready = props.pending.status === 'approved' || props.pending.status === 'claimed';
-  return <div className="sync-guided"><div className="sync-pending-heading"><LoaderCircle className={ready || expired ? '' : 'animate-spin'} size={22} /><div><h3>{expired ? 'Connection expired' : ready ? 'Approval received' : 'Waiting for approval'}</h3><p>{props.pending.method === 'bootstrap' ? 'Approve the matching fingerprint in the owner dashboard.' : 'Enter this code on a connected Reglet device.'}</p></div></div>{props.pending.code !== null && <output className="sync-code" aria-label="Pairing code">{props.pending.code}</output>}{props.pending.fingerprint !== null && <output className="sync-fingerprint" aria-label="Connection fingerprint">{props.pending.fingerprint}</output>}<p className="text-xs text-reglet-muted">Expires {formatDate(props.pending.expiresAt)}</p>{ready && props.pending.fingerprint !== null && <label className="sync-ack"><input type="checkbox" checked={props.confirmed} onChange={(event) => props.onConfirmed(event.currentTarget.checked)} />The fingerprint matches the approving dashboard or device.</label>}<div className="flex gap-2">{ready && <button className="primary-button" disabled={!props.confirmed || props.busy} onClick={props.onComplete}><Check size={16} />Finish connection</button>}<button className="danger-button" disabled={props.busy} onClick={props.onCancel}><X size={16} />Cancel request</button></div></div>;
+  return <div className="sync-guided"><div className="sync-pending-heading"><LoaderCircle className={ready || expired ? '' : 'animate-spin'} size={22} /><div><h3>{ready ? 'Approval received' : expired ? 'Connection expired' : 'Waiting for approval'}</h3><p>{props.pending.method === 'bootstrap' ? 'Approve the matching fingerprint in the owner dashboard.' : 'Enter this code on a connected Reglet device.'}</p></div></div>{props.pending.code !== null && <output className="sync-code" aria-label="Pairing code">{props.pending.code}</output>}{props.pending.fingerprint !== null && <output className="sync-fingerprint" aria-label="Connection fingerprint">{props.pending.fingerprint}</output>}<p className="text-xs text-reglet-muted">Expires {formatDate(props.pending.expiresAt)}</p>{ready && props.pending.fingerprint !== null && <label className="sync-ack"><input type="checkbox" checked={props.confirmed} onChange={(event) => props.onConfirmed(event.currentTarget.checked)} />The fingerprint matches the approving dashboard or device.</label>}<div className="flex gap-2">{ready && <button className="primary-button" disabled={!props.confirmed || props.busy} onClick={props.onComplete}><Check size={16} />Finish connection</button>}<button className="danger-button" disabled={props.busy} onClick={props.onCancel}><X size={16} />Cancel request</button></div></div>;
 }
 
 function ConnectedView(props: {

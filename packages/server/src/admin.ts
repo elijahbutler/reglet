@@ -2,7 +2,7 @@
 import { Database } from 'bun:sqlite';
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { issueOwnerReset } from './admin-storage.js';
+import { issueOwnerReset, resetEmptySyncVault } from './admin-storage.js';
 import { initializeSchema } from './storage.js';
 
 const databasePath = path.resolve(process.env.REGLET_DB ?? './reglet.sqlite');
@@ -55,8 +55,20 @@ if (command === 'owner-reset-link') {
     backup.close();
   }
   console.log(`backup\tverified\t${destination}`);
+} else if (command === 'reset-empty-vault') {
+  if (process.argv[3] !== '--confirm-empty-vault') {
+    throw new Error('Usage: admin.ts reset-empty-vault --confirm-empty-vault');
+  }
+  const database = new Database(databasePath);
+  try {
+    initializeSchema(database);
+    const reset = resetEmptySyncVault(database, () => new Date());
+    console.log(`vault\treset\t${reset.vaultId}\tdevices=${reset.removedDevices}`);
+  } finally {
+    database.close();
+  }
 } else {
-  throw new Error('Usage: admin.ts <owner-reset-link|check|backup> [destination.sqlite]');
+  throw new Error('Usage: admin.ts <owner-reset-link|check|backup|reset-empty-vault> [argument]');
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

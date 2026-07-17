@@ -82,6 +82,17 @@ curl --fail https://sync.example.com/v2/compatibility
 
 An interrupted request can be retried with the same invitation. Reglet preserves the pending identity in the operating-system credential store so the fingerprint remains stable. Never approve when the fingerprints differ.
 
+Reglet uses each platform's native credential service: macOS Keychain, Windows Credential Manager, or Linux Secret Service. Credentials are accessed through the app process rather than shell commands, so long encrypted-sync identities are stored without command-line encoding or size truncation.
+
+If an earlier preview created a first device on the server but the client lost its pending credential before uploading any encrypted objects, update the server first and reset only that empty vault:
+
+```bash
+docker compose exec reglet-sync \
+  bun packages/server/src/admin.ts reset-empty-vault --confirm-empty-vault
+```
+
+The command refuses to run when the vault sequence or encrypted object, history, or mutation counts are nonzero. After it succeeds, create a new first-device invitation in the owner dashboard.
+
 ## Add later devices
 
 Later devices have two supported paths. Both require approval from a trusted Reglet device, not the dashboard.

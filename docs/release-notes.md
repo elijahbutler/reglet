@@ -1,5 +1,12 @@
 # Public V1 release notes
 
+## v0.1.20 - Cross-platform credential storage and sync recovery
+
+- Replaces shell-based credential writes with native macOS Keychain, Windows Credential Manager, and Linux Secret Service access, preserving complete encrypted-sync identities.
+- Extends an approved first-device grant with a fresh completion window and lets the desktop recover approval after the original invitation display expires.
+- Adds a guarded operator command for resetting a stranded first-device vault only when no encrypted sync content exists.
+- Builds Intel and Apple silicon macOS artifacts on native GitHub runners and keeps Homebrew publication gated on all desktop and CLI artifacts.
+
 ## v0.1.18 - Encrypted sync homeserver preview
 
 This release promotes the protocol-v2 encrypted sync preview into the desktop and self-hosted server workflow while keeping it explicitly gated and owner-operated.

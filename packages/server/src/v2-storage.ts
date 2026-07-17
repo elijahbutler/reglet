@@ -15,6 +15,7 @@ import {
   type SyncV2PairRequest,
 } from '@reglet/core';
 import { hashToken, randomCode, randomToken, sha256 } from './security.js';
+import { connectionGrantLifetimeMs } from './admin-storage.js';
 import { requireDevice } from './storage.js';
 
 export interface SyncV2DeviceAuth {
@@ -182,9 +183,10 @@ export function approveBootstrapConnection(
       input.signingPublicKey,
       canonicalJson(input.certificate),
     );
+    const approvedAt = now();
     const updated = db.query(
-      "update connection_grants set status = 'approved', approved_at = ? where id = ? and status = 'pending'",
-    ).run(now().toISOString(), grantId);
+      "update connection_grants set status = 'approved', approved_at = ?, expires_at = ? where id = ? and status = 'pending'",
+    ).run(approvedAt.toISOString(), approvedAt.getTime() + connectionGrantLifetimeMs, grantId);
     return updated.changes === 1 ? 'created' : 'conflict';
   });
   return approve();

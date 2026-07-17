@@ -24,6 +24,7 @@ jobs:
       - run: bun audit --production
       - run: bun run typecheck
       - run: bun run desktop:test
+      - run: bun test packages/core/test/sync-v2-credentials.test.ts
       - run: bun run build:binaries -- windows-x64
       - run: bash scripts/stage-tauri-sidecars.sh x86_64-pc-windows-msvc
       - run: bash scripts/build-tauri-desktop.sh x86_64-pc-windows-msvc nsis
@@ -38,10 +39,37 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: tauri-windows-unsigned
-          path: dist/desktop/*
+          path: |
+            dist/reglet-windows-x64.exe
+            dist/desktop/*
+
+  build-tauri-macos-intel:
+    name: Build Intel Tauri macOS artifacts
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+      - run: bun install --frozen-lockfile
+      - run: bun audit --production
+      - run: bun test packages/core/test/sync-v2-credentials.test.ts
+      - run: REGLET_ARCH=x86_64 bun run build:macos-release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tauri-macos-intel
+          path: |
+            dist/reglet-darwin-x64
+            dist/desktop/reglet-desktop-macos-x86_64.app.zip
+            dist/desktop/reglet-desktop-macos-x86_64.dmg
 
   publish-release:
-    needs: build-tauri-windows
+    needs: [build-tauri-windows, build-tauri-macos-intel]
     runs-on: macos-latest
     permissions:
       contents: write
@@ -56,7 +84,7 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: aarch64-apple-darwin
       - run: bun install --frozen-lockfile
       - run: bun audit --production
       - run: bun run typecheck
@@ -65,16 +93,19 @@ jobs:
       - run: bun run desktop:typecheck
       - run: bun run desktop:lint
       - run: bun run desktop:test
-      - run: bun run build:binaries
-      - run: bash scripts/stage-tauri-sidecars.sh aarch64-apple-darwin x86_64-apple-darwin
+      - run: bash scripts/stage-tauri-check-sidecar.sh
+      - run: bun run desktop:cargo:check
+      - run: bun run desktop:cargo:test
+      - name: Build ad-hoc-signed unnotarized Apple silicon Tauri artifacts
+        run: REGLET_ARCH=arm64 bun run build:macos-release
       - uses: actions/download-artifact@v4
         with:
           name: tauri-windows-unsigned
-          path: dist/desktop
-      - name: Build ad-hoc-signed unnotarized Tauri macOS artifacts
-        run: |
-          REGLET_ARCH=arm64 bun run build:macos-release
-          REGLET_ARCH=x86_64 bun run build:macos-release
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: tauri-macos-intel
+          path: dist
       - name: Create checksums and release provenance
         shell: bash
         run: |

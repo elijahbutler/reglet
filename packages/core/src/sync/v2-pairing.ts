@@ -502,7 +502,7 @@ export async function pendingSyncV2ConnectionStatus(options: {
     status,
     fingerprint: state.fingerprint,
     deviceName: state.deviceName,
-    expiresAt: state.expiresAt,
+    expiresAt: response.expiresAt,
   };
 }
 
