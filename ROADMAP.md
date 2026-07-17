@@ -2,7 +2,7 @@
 
 ## Status
 
-Reglet is a local-first CLI and cross-platform Tauri desktop app for managing global AI-agent rules, Skills, and MCP configuration. The retained Swift app is frozen as a compatibility reference while Tauri becomes the only desktop implementation.
+Reglet is a local-first CLI and cross-platform Tauri desktop app for managing global AI-agent rules, Skills, and MCP configuration.
 
 The current public capability remains local-only. Multi-device sync exists as dormant source and tests, but it is not a supported public capability and must not be enabled until the security and recovery gates in this roadmap are complete.
 
@@ -41,7 +41,7 @@ Reglet is production-ready only when all of the following are true:
 - [x] Provider-scoped rules, Skills, and MCP definitions.
 - [x] Typed MCP environment references and redacted Manager contracts.
 - [x] Tauri desktop shell with Providers, Rules, Skills, MCP, Activity & Drift, Recovery, onboarding, and update controls.
-- [x] Cross-platform frontend, protocol, Rust bridge, and retained Swift tests in CI.
+- [x] Cross-platform frontend, protocol, and Rust bridge tests in CI.
 - [x] Dormant revision-based sync prototype with accounts, device pairing, conflicts, and SQLite persistence.
 
 The sync prototype is evidence, not a production baseline. The containment pass now validates one shared path contract, prevents remote provider apply, preserves edit/delete conflicts, synchronizes tombstones and provider-scoped MCP files, stores private state atomically, and provides basic device lifecycle controls. Protocol v1 still stores plaintext and remains disabled pending the protocol-v2 cryptographic and recovery work.
@@ -69,7 +69,7 @@ Exit criteria:
 
 These items should not return as open roadmap tasks:
 
-- Completing the retained native Swift app. It remains only a tested compatibility reference until Tauri release acceptance permits removal.
+- Reintroducing the retired native Swift app.
 - Shipping or incrementally polishing plaintext sync protocol v1. It is now only a disposable local development harness; production work starts at encrypted protocol v2.
 - Applying provider outputs automatically after a pull. This contradicts the product trust boundary and is permanently excluded.
 - Building separate modal behavior per screen. The desktop now has one shared accessible dialog boundary; remaining work is native acceptance evidence.
@@ -191,7 +191,7 @@ Exit criteria:
 
 - All desktop, CLI, server, security, accessibility, and recovery gates have evidence tied to release checksums.
 - No known P0/P1 finding remains open.
-- The frozen Swift app can be removed after Tauri acceptance and migration evidence are complete.
+- The retired Swift app source is no longer part of the tracked build surface.
 
 ## Phase 5 — general availability
 

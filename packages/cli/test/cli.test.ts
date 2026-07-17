@@ -1304,7 +1304,7 @@ describe('reglet CLI', () => {
     expect(result.stdout).not.toContain('legacy-network-secret');
   });
 
-  test('manager snapshot defaults to legacy v1 for the retained Swift decoder', async () => {
+  test('manager snapshot defaults to legacy v1 for compatibility', async () => {
     const { home, providerHome } = await useTempHomes();
 
     const result = await runCli(['manager', 'snapshot', '--json'], home, providerHome);

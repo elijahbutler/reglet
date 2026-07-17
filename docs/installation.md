@@ -2,7 +2,7 @@
 
 ## Requirements
 
-Public releases include macOS arm64, macOS x64, and Windows x64 CLI binaries plus ad-hoc-signed/unnotarized macOS and unsigned Windows desktop artifacts. The retained Swift app remains frozen during Tauri parity. Linux GUI artifacts are deferred.
+Public releases include macOS arm64, macOS x64, and Windows x64 CLI binaries plus ad-hoc-signed/unnotarized macOS and unsigned Windows desktop artifacts. Linux GUI artifacts are deferred.
 
 ## Homebrew
 
@@ -77,7 +77,7 @@ Get-FileHash .\reglet-windows-x64.exe -Algorithm SHA256
 
 ## Source checkout
 
-Source work requires Bun. Tauri work also requires Rust and the native Tauri system dependencies for the host; retained Swift app work requires Xcode Command Line Tools on macOS.
+Source work requires Bun. Tauri work also requires Rust and the native Tauri system dependencies for the host.
 
 ```bash
 git clone https://github.com/elijahbutler/reglet.git
@@ -92,4 +92,4 @@ On macOS, install a local build of both the current-architecture CLI and app fro
 bun run macos:install
 ```
 
-This installs the CLI to `~/.local/bin/reglet` and an ad-hoc-signed Swift app to `~/Applications/Reglet.app` for local development only. Use `bun run macos:local` instead to install the CLI and run the Swift app directly from source. Public Tauri macOS artifacts are also ad-hoc signed and are not notarized.
+This builds the host Tauri desktop app with a freshly staged sidecar and installs it to `~/Applications/Reglet.app` for local development only. Use `bun run macos:local` instead to build and open the app from the Tauri build output. Public Tauri macOS artifacts are ad-hoc signed and are not notarized.

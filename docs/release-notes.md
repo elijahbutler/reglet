@@ -40,7 +40,7 @@ This release establishes Reglet as a local-only CLI for rules, skills, and MCP c
 
 - The CLI and retained manager source are local-only. Legacy network state is inert until explicitly cleared.
 - Automatic update checks in the retained macOS manager source are disabled by default; manual update checks remain available in source builds.
-- Public artifacts include CLI binaries, ad-hoc-signed/unnotarized macOS desktop artifacts, and unsigned Windows desktop artifacts, with checksums, provenance, and mandatory Homebrew formula publication before release publishing. The Swift app remains frozen during parity, and Linux GUI publishing is deferred.
+- Public artifacts include CLI binaries, ad-hoc-signed/unnotarized macOS desktop artifacts, and unsigned Windows desktop artifacts, with checksums, provenance, and mandatory Homebrew formula publication before release publishing. Linux GUI publishing is deferred.
 
 ### Desktop manager
 

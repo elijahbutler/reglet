@@ -6,7 +6,7 @@ The macOS Manager consumes a single read-only JSON response:
 reglet manager snapshot --json --contract-version 2
 ```
 
-Version 1 remains the compatibility response for retained Swift code. New Manager work must request version 2 explicitly and validate the response against `packages/core/schemas/manager-snapshot-v2.schema.json`.
+Version 1 remains the legacy compatibility response. New Manager work must request version 2 explicitly and validate the response against `packages/core/schemas/manager-snapshot-v2.schema.json`.
 
 ## Evolution Rules
 

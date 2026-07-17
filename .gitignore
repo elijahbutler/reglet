@@ -9,3 +9,4 @@ dist/
 *.sqlite-shm
 *.sqlite-wal
 .env
+.archive/
