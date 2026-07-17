@@ -1544,7 +1544,7 @@ async function importDriftForRpc(provider: ProviderId, content: ApplyContent, sc
 function managerRpcErrorResponse(operation: ManagerProtocolOperation, error: unknown): ManagerRpcResponse {
   const managerError = managerErrorFromUnknown(error, `manager.rpc.${operation}`);
   const code = protocolErrorCode(error, managerError.error.code);
-  const message = redactManagerValue(managerError.error.message);
+  const message = redactManagerValue(error instanceof Error ? error.message : managerError.error.message);
   return failureResponse(operation, code, message, code === 'INVALID_INPUT' ? false : managerError.error.recoverable);
 }
 

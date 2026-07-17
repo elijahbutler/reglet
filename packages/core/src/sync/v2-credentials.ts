@@ -118,12 +118,10 @@ class MacKeychainSecretStore implements SyncV2SecretStore {
 
   async set(account: string, secret: string): Promise<void> {
     requireBoundedSecret(secret);
-    // Omitting the -w argument makes `security` read and confirm the value from
-    // stdin instead of exposing it in the process list.
     await runCredentialCommand(
       'security',
-      ['add-generic-password', '-a', account, '-s', credentialService, '-U', '-w'],
-      `${secret}\n${secret}\n`,
+      macKeychainSetArgs(account, secret),
+      '',
       null,
     );
   }
@@ -210,6 +208,19 @@ function runCredentialCommand(
     });
     child.stdin.end(stdin);
   });
+}
+
+export function macKeychainSetArgs(account: string, secret: string): string[] {
+  return [
+    'add-generic-password',
+    '-a',
+    account,
+    '-s',
+    credentialService,
+    '-U',
+    '-X',
+    Buffer.from(secret, 'utf8').toString('hex'),
+  ];
 }
 
 function serverIdentity(serverUrl: string): string {
