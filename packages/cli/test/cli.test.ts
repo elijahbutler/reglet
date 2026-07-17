@@ -167,6 +167,28 @@ describe('reglet CLI', () => {
     });
   });
 
+  test('manager RPC returns actionable sync connection errors', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await runRpc({ protocolVersion: 1, operation: 'sync.preview.set', input: { acknowledged: true } }, home, providerHome);
+
+    const result = await runRpc({
+      protocolVersion: 1,
+      operation: 'sync.pair.request',
+      input: { serverUrl: 'http://sync.example', deviceName: 'Mac' },
+    }, home, providerHome);
+    const response = JSON.parse(result.stdout) as {
+      ok: boolean;
+      error?: { code: string; message: string; recoverable: boolean };
+    };
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toEqual({
+      code: 'OPERATION_FAILED',
+      message: 'Sync requires HTTPS except for a loopback development server',
+      recoverable: true,
+    });
+  });
+
   test('plan --json previews first-run reads and writes without changing files', async () => {
     const { home, providerHome } = await useTempHomes();
     const claudeRules = path.join(providerHome, '.claude', 'CLAUDE.md');
