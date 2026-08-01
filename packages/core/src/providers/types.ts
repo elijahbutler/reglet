@@ -6,6 +6,30 @@ export type ProviderId = 'claude' | 'codex' | 'cursor' | 'gemini' | 'windsurf' |
 
 export type ApplyStatus = 'written' | 'skipped' | 'unchanged';
 
+export type ProviderCapability = 'instructions' | 'skills' | 'mcp';
+export type DiscoveryArtifactKind = 'instruction' | 'skill' | 'mcp';
+export type DiscoveryScope = 'global' | 'project';
+export type DiscoveryMatcher = 'exact' | 'basename' | 'extension' | 'directory';
+
+export interface ProviderDiscoveryDeclaration {
+  kind: DiscoveryArtifactKind;
+  scope: DiscoveryScope;
+  format: string;
+  pattern: string;
+  matcher: DiscoveryMatcher;
+  hierarchical?: boolean;
+  rootOnly?: boolean;
+  trustedOnly?: boolean;
+  supported: boolean;
+  issue?: string;
+}
+
+export interface CompatibilityFixture {
+  capability: ProviderCapability;
+  fixture: string;
+  expectedSchemaVersion: number;
+}
+
 export interface ApplyResult {
   provider: ProviderId;
   content: ManagedContent;
@@ -35,6 +59,12 @@ export interface ProviderInventory {
 export interface ProviderAdapter {
   id: ProviderId;
   displayName: string;
+  documentationUrl: string;
+  lastVerifiedAt: string;
+  schemaVersion: number;
+  discoveries: ProviderDiscoveryDeclaration[];
+  compatibilityFixtures: CompatibilityFixture[];
+  configuredDiscoveries?(): Promise<ProviderDiscoveryDeclaration[]>;
   detect(): Promise<boolean>;
   rulesPath(): string | null;
   skillsDir(): string | null;

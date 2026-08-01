@@ -53,7 +53,7 @@
     { "protocolVersion": 1, "operation": "structured-preview.apply", "ok": false, "error": { "code": "STALE_PLAN", "message": "Refresh and review again.", "recoverable": true } }
   ],
   "malformed": [
-    { "protocolVersion": 2, "operation": "snapshot", "input": {} },
+    { "protocolVersion": 3, "operation": "snapshot", "input": {} },
     { "protocolVersion": 1, "operation": "unknown", "input": {} },
     { "protocolVersion": 1, "operation": "rules.read", "input": {} },
     { "protocolVersion": 1, "operation": "rules.source-read", "input": { "provider": "unknown" } },

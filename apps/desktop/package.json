@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@reglet/manager-protocol": "workspace:*",
+    "@reglet/manager-ui": "workspace:*",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-deep-link": "^2.0.0",
     "lucide-react": "^0.468.0",

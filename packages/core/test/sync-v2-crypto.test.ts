@@ -143,6 +143,7 @@ describe('sync protocol v2 cryptography', () => {
     expect(isAllowedEncryptedSyncPath('rules/00-general.md')).toBe(true);
     expect(isAllowedEncryptedSyncPath('skills/codex/my-skill/SKILL.md')).toBe(true);
     expect(isAllowedEncryptedSyncPath('mcp/providers/claude/servers.json')).toBe(true);
+    expect(isAllowedEncryptedSyncPath('library.json')).toBe(true);
     expect(isAllowedEncryptedSyncPath('reglet.toml')).toBe(false);
     expect(isAllowedEncryptedSyncPath('.state/sync-v2.json')).toBe(false);
     expect(isAllowedEncryptedSyncPath('rules/file.conflict-device.md')).toBe(false);

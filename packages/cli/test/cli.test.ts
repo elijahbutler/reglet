@@ -91,6 +91,67 @@ async function runRpc(
 }
 
 describe('reglet CLI', () => {
+  test('migrate library-v2 previews and applies only after explicit approval', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await mkdir(path.join(home, 'rules'), { recursive: true });
+    await writeFile(path.join(home, 'rules', 'general.md'), '# General\n');
+
+    const preview = JSON.parse(
+      (await runCli(['migrate', 'library-v2', '--preview', '--json'], home, providerHome)).stdout,
+    ) as { required: boolean; digest: string; artifacts: unknown[] };
+    expect(preview.required).toBe(true);
+    expect(preview.artifacts).toHaveLength(1);
+    expect(await Bun.file(path.join(home, 'library.json')).exists()).toBe(false);
+
+    const receipt = JSON.parse(
+      (await runCli([
+        'migrate',
+        'library-v2',
+        '--apply',
+        '--yes',
+        '--preview-digest',
+        preview.digest,
+        '--json',
+      ], home, providerHome)).stdout,
+    ) as { artifactCount: number; reversible: boolean };
+    expect(receipt).toMatchObject({ artifactCount: 1, reversible: true });
+    expect(await Bun.file(path.join(home, 'library.json')).exists()).toBe(true);
+    expect(await Bun.file(path.join(providerHome, '.codex', 'AGENTS.md')).exists()).toBe(false);
+  });
+
+  test('canonical lifecycle commands share the Manager application contract', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await mkdir(path.join(home, 'rules'), { recursive: true });
+    await writeFile(path.join(home, 'rules', 'general.md'), '# General\n');
+    await runCli(['migrate', 'library-v2', '--apply', '--yes', '--json'], home, providerHome);
+
+    const created = JSON.parse((await runCliWithInput([
+      'create',
+      'instruction',
+      '--slug',
+      'safe-reviews',
+      '--provider',
+      'codex',
+      '--json',
+    ], '# Safe reviews\n', home, providerHome)).stdout) as { id: string; slug: string };
+    expect(created.slug).toBe('safe-reviews');
+
+    const shown = JSON.parse((await runCli(['show', created.id, '--json'], home, providerHome)).stdout) as {
+      content: string;
+      artifact: { targets: string[] };
+    };
+    expect(shown).toMatchObject({ content: '# Safe reviews\n', artifact: { targets: ['codex'] } });
+
+    await runCli(['rename', created.id, 'review-safely', '--json'], home, providerHome);
+    await runCli(['archive', created.id, '--json'], home, providerHome);
+    const archived = JSON.parse((await runCli(['list', 'instructions', '--archived', '--json'], home, providerHome)).stdout) as Array<{
+      id: string;
+      slug: string;
+      lifecycle: string;
+    }>;
+    expect(archived).toContainEqual(expect.objectContaining({ id: created.id, slug: 'review-safely', lifecycle: 'archived' }));
+  });
+
   test('rules list, read, and write manage master documents without applying providers', async () => {
     const { home, providerHome } = await useTempHomes();
     await mkdir(path.join(home, 'rules'), { recursive: true });

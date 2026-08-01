@@ -14,6 +14,14 @@ class MemoryStorage implements Storage {
 }
 
 Object.defineProperty(window, 'localStorage', { configurable: true, value: new MemoryStorage() });
+Object.defineProperty(window, 'ResizeObserver', {
+  configurable: true,
+  value: class ResizeObserver {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  },
+});
 
 afterEach(() => {
   cleanup();

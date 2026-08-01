@@ -290,7 +290,8 @@ function resolveSkillsForProvider(
   const resolved = new Map<string, SkillApplyEntry>();
 
   for (const skill of master.skills) {
-    if (!config.contentSync.skills[skill.name]?.includes(provider) && config.contentSync.skills[skill.name] !== undefined) continue;
+    const configuredTargets = skill.targets ?? config.contentSync.skills[skill.name];
+    if (configuredTargets !== undefined && !configuredTargets.includes(provider)) continue;
     resolved.set(skill.name, {
       name: skill.name,
       sourceDir: path.join(home, 'skills', skill.name),

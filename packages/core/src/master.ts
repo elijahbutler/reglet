@@ -2,8 +2,10 @@ import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { configPath, defaultConfig, providerNames, serializeConfig, type ProviderName } from './config.js';
 import { ensurePrivateDir } from './fsutil.js';
+import { hasLibraryManifest, loadLibraryManifest } from './artifacts/library.js';
 import { loadMcpDefinitions, serializeMcpServers, type McpServerDefinition } from './mcp.js';
 import { regletHome } from './paths.js';
+import type { SecretRef } from './security/secrets.js';
 
 export interface McpServerDef {
   command?: string;
@@ -15,9 +17,16 @@ export interface McpServerDef {
 export interface McpProcessEnvReference {
   source: 'process-env';
   name: string;
+  required?: boolean;
 }
 
-export type McpEnvironmentValue = McpProcessEnvReference;
+export interface McpKeychainReference {
+  source: 'keychain';
+  id: string;
+  required?: boolean;
+}
+
+export type McpEnvironmentValue = SecretRef;
 
 export const PROVIDER_RULES_MARKER = '.reglet-provider-overlay';
 
@@ -31,6 +40,7 @@ export interface ResolvedMcpServerDef {
 export interface MasterRule {
   relPath: string;
   content: string;
+  targets?: ProviderName[];
 }
 
 export interface MasterSkillFile {
@@ -41,6 +51,7 @@ export interface MasterSkillFile {
 export interface MasterSkill {
   name: string;
   files: MasterSkillFile[];
+  targets?: ProviderName[];
 }
 
 export interface MasterDir {
@@ -73,7 +84,7 @@ export async function loadMasterDir(home = regletHome()): Promise<MasterDir> {
   const loadedRules = await loadRules(path.join(home, 'rules'));
   const loadedSkills = await loadSkills(path.join(home, 'skills'));
   const loadedMcp = await loadMcpDefinitions(home);
-  return {
+  const master: MasterDir = {
     rules: loadedRules.shared,
     providerRules: loadedRules.providers,
     skills: loadedSkills.shared,
@@ -82,6 +93,47 @@ export async function loadMasterDir(home = regletHome()): Promise<MasterDir> {
     mcpDefinitions: loadedMcp.shared,
     providerMcpDefinitions: loadedMcp.providers,
   };
+  if (!(await hasLibraryManifest(home))) return master;
+  return filterArchivedAndTargetedArtifacts(master, await loadLibraryManifest(home));
+}
+
+function filterArchivedAndTargetedArtifacts(
+  master: MasterDir,
+  manifest: Awaited<ReturnType<typeof loadLibraryManifest>>,
+): MasterDir {
+  const active = manifest.artifacts.filter((artifact) => artifact.lifecycle === 'active');
+  const byLocator = new Map(
+    active.map((artifact) => [artifact.locator.path.split(path.sep).join('/'), artifact]),
+  );
+  const rules = master.rules.flatMap((rule) => {
+    const artifact = byLocator.get(path.posix.join('rules', rule.relPath));
+    return artifact?.kind === 'instruction' && artifact.scope.kind === 'global'
+      ? [{ ...rule, targets: artifact.targets }]
+      : [];
+  });
+  const providerRules = emptyProviderRecords<MasterRule>();
+  const providerSkills = emptyProviderRecords<MasterSkill>();
+  for (const provider of providerNames) {
+    providerRules[provider] = master.providerRules[provider].flatMap((rule) => {
+      const artifact = byLocator.get(path.posix.join('rules', rule.relPath));
+      return artifact?.kind === 'instruction' && artifact.scope.kind === 'provider-overlay' && artifact.scope.provider === provider
+        ? [{ ...rule, targets: [provider] }]
+        : [];
+    });
+    providerSkills[provider] = master.providerSkills[provider].flatMap((skill) => {
+      const artifact = byLocator.get(path.posix.join('skills', provider, skill.name));
+      return artifact?.kind === 'skill' && artifact.scope.kind === 'provider-overlay' && artifact.scope.provider === provider
+        ? [{ ...skill, targets: [provider] }]
+        : [];
+    });
+  }
+  const skills = master.skills.flatMap((skill) => {
+    const artifact = byLocator.get(path.posix.join('skills', skill.name));
+    return artifact?.kind === 'skill' && artifact.scope.kind === 'global'
+      ? [{ ...skill, targets: artifact.targets }]
+      : [];
+  });
+  return { ...master, rules, providerRules, skills, providerSkills };
 }
 
 interface LoadedRules {

@@ -13,7 +13,11 @@
     "baseUrl": ".",
     "paths": {
       "@reglet/core": ["packages/core/src/index.ts"],
-      "@reglet/manager-protocol": ["packages/manager-protocol/src/index.ts"]
+      "@reglet/manager-application": ["packages/manager-application/src/index.ts"],
+      "@reglet/manager-runtime": ["packages/manager-runtime/src/index.ts"],
+      "@reglet/manager-protocol": ["packages/manager-protocol/src/index.ts"],
+      "@reglet/manager-ui": ["packages/manager-ui/src/index.ts"],
+      "@reglet/manager-ui/testing": ["packages/manager-ui/src/testing/index.ts"]
     }
   }
 }

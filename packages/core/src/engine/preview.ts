@@ -14,6 +14,7 @@ import { applyAll, type ApplyContent } from './apply.js';
 import { detectDrift, type DriftStatus } from './drift.js';
 import type { OperationReceipt } from './operations.js';
 import { deriveMasterRevisions } from '../revisions.js';
+import { systemSecretStore } from '../security/secrets.js';
 
 export interface StructuredApplyPreviewOptions {
   providers?: ProviderId[];
@@ -113,7 +114,7 @@ async function previewApplyStructuredBody(
   const revisions = await deriveMasterRevisions(master, config);
   const providers = options.providers === undefined ? allAdapters() : options.providers.map((id) => getAdapter(id));
   const contents = options.contents ?? ['rules', 'skills', 'mcp'];
-  const validationIssues = await collectValidationIssues(home, providers);
+  const validationIssues = await collectValidationIssues(home, providers, contents);
   const driftByPath = new Map<string, DriftStatus>(
     (await detectDrift(home)).map((record): [string, DriftStatus] => [record.outputPath, record.status]),
   );
@@ -137,29 +138,37 @@ async function previewApplyStructuredBody(
   return { version: 1, masterRevision: revisions.masterRevision, validationIssues, entries };
 }
 
-async function collectValidationIssues(home: string, providers: readonly ProviderAdapter[]): Promise<string[]> {
+async function collectValidationIssues(
+  home: string,
+  providers: readonly ProviderAdapter[],
+  contents: readonly ApplyContent[],
+): Promise<string[]> {
   const issues: string[] = [];
-  for (const server of (await listMcpServers(home)).servers) {
-    issues.push(...server.issues.map((issue) => `mcp/${server.id}: ${issue}`));
+  if (contents.includes('mcp')) {
+    for (const server of (await listMcpServers(home)).servers) {
+      issues.push(...server.issues.map((issue) => `mcp/${server.id}: ${issue}`));
+    }
+    for (const adapter of providers) {
+      for (const server of (await listMcpServers(providerMcpScope(adapter.id), home)).servers) {
+        issues.push(...server.issues.map((issue) => `mcp/${adapter.id}/${server.id}: ${issue}`));
+      }
+      const conflict = (await listEffectiveMcpServers(adapter.id, home)).find((entry) => entry.conflictStatus.state === 'conflict');
+      if (conflict !== undefined && conflict.conflictStatus.state === 'conflict') {
+        issues.push(`mcp/${adapter.id}: display-name conflict ${conflict.conflictStatus.displayName} (${conflict.conflictStatus.conflictingIds.join(', ')})`);
+      }
+      try {
+        await resolveEffectiveMcpServersEnv(adapter.id, home);
+      } catch (error) {
+        issues.push(error instanceof Error ? error.message : String(error));
+      }
+    }
   }
-  for (const adapter of providers) {
-    for (const server of (await listMcpServers(providerMcpScope(adapter.id), home)).servers) {
-      issues.push(...server.issues.map((issue) => `mcp/${adapter.id}/${server.id}: ${issue}`));
-    }
-    const conflict = (await listEffectiveMcpServers(adapter.id, home)).find((entry) => entry.conflictStatus.state === 'conflict');
-    if (conflict !== undefined && conflict.conflictStatus.state === 'conflict') {
-      issues.push(`mcp/${adapter.id}: display-name conflict ${conflict.conflictStatus.displayName} (${conflict.conflictStatus.conflictingIds.join(', ')})`);
-    }
-    try {
-      await resolveEffectiveMcpServersEnv(adapter.id, home);
-    } catch (error) {
-      issues.push(error instanceof Error ? error.message : String(error));
-    }
-  }
-  const master = await loadMasterDir(home);
-  for (const skill of [...master.skills, ...Object.values(master.providerSkills).flat()]) {
-    if (!skill.files.some((file) => file.relPath === 'SKILL.md')) {
-      issues.push(`skills/${skill.name}: missing SKILL.md`);
+  if (contents.includes('skills')) {
+    const master = await loadMasterDir(home);
+    for (const skill of [...master.skills, ...Object.values(master.providerSkills).flat()]) {
+      if (!skill.files.some((file) => file.relPath === 'SKILL.md')) {
+        issues.push(`skills/${skill.name}: missing SKILL.md`);
+      }
     }
   }
   return issues;
@@ -191,7 +200,7 @@ async function previewSkills(
   if (skillsDir === null) return [skipEntry(adapter.id, 'skills', `${adapter.id}:skills unsupported`)];
   const resolved = new Map<string, string>();
   for (const skill of master.skills) {
-    const syncProviders = config.contentSync.skills[skill.name];
+    const syncProviders = skill.targets ?? config.contentSync.skills[skill.name];
     if (syncProviders === undefined || syncProviders.includes(adapter.id)) {
       resolved.set(skill.name, path.join(home, 'skills', skill.name));
     }
@@ -263,8 +272,8 @@ async function previewMcp(
   }
   const rawBefore = await readOptionalFile(outputPath);
   const rawAfter = await renderMcpInSandbox(adapter, outputPath, home);
-  const before = redactMcpSecrets(rawBefore, redactionServers);
-  const after = redactMcpSecrets(rawAfter, redactionServers);
+  const before = await redactMcpSecrets(rawBefore, redactionServers);
+  const after = await redactMcpSecrets(rawAfter, redactionServers);
   return makeEntry(
     adapter.id,
     'mcp',
@@ -321,13 +330,19 @@ async function copyIfPresent(source: string, destination: string): Promise<void>
   }
 }
 
-function redactMcpSecrets(content: string | null, servers: Record<string, McpServerDef>): string | null {
+async function redactMcpSecrets(
+  content: string | null,
+  servers: Record<string, McpServerDef>,
+): Promise<string | null> {
   if (content === null) return null;
   let redacted = redactLikelyEnvironmentValues(content);
+  const secretStore = systemSecretStore();
   for (const server of Object.values(servers)) {
     for (const [key, ref] of Object.entries(server.env ?? {})) {
       const replacement = `<redacted:${key}>`;
-      const resolvedValue = process.env[ref.name];
+      const resolvedValue = ref.source === 'process-env'
+        ? process.env[ref.name]
+        : await secretStore.resolve(ref.id);
       if (resolvedValue !== undefined && resolvedValue.length > 0) {
         redacted = redacted.replaceAll(resolvedValue, replacement);
       }

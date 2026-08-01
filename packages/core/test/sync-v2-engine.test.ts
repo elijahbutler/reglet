@@ -9,6 +9,7 @@ import {
   requestSyncV2Pairing,
   syncOnceV2,
   type SyncV2SecretStore,
+  saveLibraryManifest,
 } from '../src/index.js';
 import { closeApp, createApp } from '../../server/src/app.js';
 import { removeTestDirectory } from '../../server/test/cleanup.js';
@@ -27,6 +28,39 @@ afterEach(async () => {
 });
 
 describe('encrypted sync protocol v2 engine', () => {
+  test('syncs only manifest-indexed canonical files after library-v2 migration', async () => {
+    const setup = await twoDeviceSetup();
+    await mkdir(path.join(setup.macHome, 'rules'), { recursive: true });
+    await mkdir(path.join(setup.macHome, 'skills', 'archived'), { recursive: true });
+    await mkdir(path.join(setup.macHome, '.state', 'drafts'), { recursive: true });
+    await writeFile(path.join(setup.macHome, 'rules', 'managed.md'), 'Managed\n');
+    await writeFile(path.join(setup.macHome, 'rules', 'unindexed.md'), 'Local only\n');
+    await writeFile(path.join(setup.macHome, 'skills', 'archived', 'SKILL.md'), 'Archived canonical\n');
+    await writeFile(path.join(setup.macHome, '.state', 'drafts', 'artifact.json'), '{"secret":"local"}\n');
+    await saveLibraryManifest({
+      schemaVersion: 2,
+      artifacts: [
+        {
+          id: 'instruction-id', kind: 'instruction', lifecycle: 'active', scope: { kind: 'global' },
+          slug: 'managed', title: 'Managed', tags: [], targets: ['codex'], locator: { type: 'file', path: 'rules/managed.md' },
+        },
+        {
+          id: 'archived-id', kind: 'skill', lifecycle: 'archived', scope: { kind: 'global' },
+          slug: 'archived', title: 'Archived', tags: [], targets: [], locator: { type: 'directory', path: 'skills/archived' },
+        },
+      ],
+      tombstones: [],
+    }, setup.macHome);
+
+    const pushed = await syncOnceV2({ home: setup.macHome, fetchImpl: setup.fetchImpl, secretStore: setup.macStore });
+    const pulled = await syncOnceV2({ home: setup.windowsHome, fetchImpl: setup.fetchImpl, secretStore: setup.windowsStore });
+
+    expect(pushed.pushed).toEqual(['library.json', 'rules/managed.md', 'skills/archived/SKILL.md']);
+    expect(pulled.pulled).toEqual(['library.json', 'rules/managed.md', 'skills/archived/SKILL.md']);
+    await expect(stat(path.join(setup.windowsHome, 'rules', 'unindexed.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(path.join(setup.windowsHome, '.state', 'drafts', 'artifact.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   test('moves rules, skills, and MCP from Mac to Windows without provider writes or machine-local config', async () => {
     const setup = await twoDeviceSetup();
     await mkdir(path.join(setup.macHome, 'rules'), { recursive: true });

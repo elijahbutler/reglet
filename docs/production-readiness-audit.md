@@ -4,6 +4,8 @@ Date: 2026-07-16
 Scope: Tauri desktop app, Manager RPC/CLI boundary, local transaction engine, encrypted sync preview, and sync server
 Baseline: `origin/main` at `966830f`
 
+> Historical audit: the desktop architecture described below was superseded by the shared Manager V2 workbench and persistent loopback runtime. The former per-request bridge and duplicate `apps/desktop/src/ui` implementation have been removed.
+
 ## Executive summary
 
 The local transaction engine is the strongest part of Reglet: digest freshness, rollback, receipts, scoped detachment, typed MCP references, and redaction are well tested. The Tauri app has broad surface coverage and a restrained visual system, but feature depth, state coordination, and accessibility evidence are not yet at a production bar.
@@ -83,7 +85,7 @@ No source-level public capability currently enables sync, so these are contained
 ### Logic and contract design
 
 1. Manager mutation results other than snapshot v2 are parsed through repeated ad-hoc guards rather than operation-specific response schemas.
-2. The desktop launches a sidecar process for each RPC. Onboarding and MCP loading fan one action into several process launches.
+2. **Resolved:** Tauri owns one persistent loopback runtime and the shared UI uses the same HTTP/WebSocket client contract as the browser.
 3. **Resolved:** unsupported or attention-required provider/content cells are disabled with their reason.
 4. Receipt restoration does not use the same preview-first interaction as provider apply.
 5. Drift offers a direct destructive import, not a three-way review or the three distinct resolution paths.
@@ -101,10 +103,10 @@ No source-level public capability currently enables sync, so these are contained
 | File | `origin/main` | Current | Finding | Recommended boundary |
 | --- | ---: | ---: | --- | --- |
 | `packages/cli/src/index.ts` | 2,654 | 2,659 | Commands, RPC dispatch, snapshot construction, onboarding, AI runner execution, parsing, and formatting are coupled. | `commands/`, `manager-rpc/`, `manager-snapshot/`, `onboarding/`, `ai-draft/` |
-| `apps/desktop/src/ui/App.tsx` | 1,417 | 1,417 | Global state, transport parsing, mutations, six views, and helpers share one render unit; dialogs are now extracted. | coordinator, hooks, `views/`, RPC decoders |
-| `apps/desktop/src/ui/OnboardingWizard.tsx` | 1,059 | 1,059 | Workflow state, staging mutations, seven steps, and parsing are coupled. | onboarding controller plus one module per step |
+| `apps/desktop/src/ui/App.tsx` | 1,417 | Removed | Superseded by transport-neutral `packages/manager-ui`. | Shared feature packages |
+| `apps/desktop/src/ui/OnboardingWizard.tsx` | 1,059 | Removed | Superseded by the shared manager workflow. | Shared onboarding feature |
 | `packages/server/src/app.ts` | 445 | 468 | The coordinator stays below 500 lines and protocol-v2 routes are extracted; `v2-storage.ts` is now a 624-line review hotspot. | Split encrypted pairing, object, and device persistence before public release. |
-| `apps/desktop/src/styles.css` | 633 | 633 | Token-backed but one global component layer makes ownership and dead-style removal difficult. | base/tokens, primitives, shell, onboarding |
+| `apps/desktop/src/styles.css` | 633 | Removed | Shared tokens and workbench styling now live in `packages/manager-ui`. | Shared design system |
 
 The target is not line count for its own sake. Each extracted module should own one reason to change, preserve type flow, and reduce the amount of code required to review a security-sensitive operation.
 
