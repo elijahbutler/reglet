@@ -56,6 +56,9 @@ export interface SkillTrustDecision {
 }
 
 const defaultLargeAssetBytes = 25 * 1024 * 1024;
+const executableExtensions = new Set([
+  '.appimage', '.bat', '.cmd', '.com', '.exe', '.fish', '.msi', '.ps1', '.run', '.sh', '.zsh',
+]);
 
 /**
  * Inventories a skill without importing modules, executing scripts, or
@@ -126,7 +129,7 @@ export async function inspectSkill(
       }
 
       const content = await readFile(entryPath);
-      const executable = (stats.mode & 0o111) !== 0;
+      const executable = isExecutableContent(relPath, stats.mode, content);
       const binary = isBinary(content);
       totalBytes += stats.size;
       files.push({
@@ -189,6 +192,12 @@ export async function inspectSkill(
     promotionBlocked: risks.some((risk) => risk.severity === 'error'),
     requiresExecutableConfirmation: risks.some((risk) => risk.code === 'executable'),
   };
+}
+
+function isExecutableContent(relPath: string, mode: number, content: Buffer): boolean {
+  return (mode & 0o111) !== 0 ||
+    content.subarray(0, 2).toString('utf8') === '#!' ||
+    executableExtensions.has(path.extname(relPath).toLocaleLowerCase());
 }
 
 export function isTrustDecisionCurrent(
@@ -359,4 +368,3 @@ function isBinary(content: Uint8Array): boolean {
   const sample = content.subarray(0, Math.min(content.length, 8_192));
   return sample.includes(0);
 }
-
