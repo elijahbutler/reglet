@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Clipboard,
   DatabaseBackup,
+  Gauge,
   HardDrive,
   KeyRound,
   Laptop,
@@ -38,6 +39,8 @@ interface SessionResponse {
   session: AdminSession;
   csrfToken: string;
 }
+
+type AdminSection = 'overview' | 'connections' | 'devices' | 'host';
 
 export function App(): JSX.Element {
   if (window.location.pathname === '/connect') return <ConnectionHandoff />;
@@ -145,6 +148,7 @@ function Dashboard(props: {
   const [grant, setGrant] = useState<ConnectionGrant | null>(null);
   const [copied, setCopied] = useState(false);
   const [integrityCheckedAt, setIntegrityCheckedAt] = useState('');
+  const [activeSection, setActiveSection] = useState<AdminSection>('overview');
 
   const load = useCallback(async () => {
     props.setError('');
@@ -226,37 +230,90 @@ function Dashboard(props: {
     <div className="dashboard-shell">
       <header className="topbar">
         <Brand />
+        <div className="breadcrumb" aria-label="Current location">
+          <span>Sync server</span>
+          <ChevronRight aria-hidden="true" />
+          <strong>Owner console</strong>
+        </div>
         <div className="topbar-actions">
           <span className="owner-email">{props.session.email}</span>
           <button className="icon-button" title="Refresh" aria-label="Refresh dashboard" onClick={() => void load()}><RefreshCw aria-hidden="true" /></button>
           <button className="icon-button" title="Sign out" aria-label="Sign out" disabled={busy === 'logout'} onClick={() => void logout()}><LogOut aria-hidden="true" /></button>
         </div>
       </header>
-      <main className="dashboard-content">
-        <div className="page-heading">
-          <div><h1>Encrypted sync</h1><p>Server access and host health. Vault contents remain device-only.</p></div>
-          <button className="primary" disabled={busy === 'grant'} onClick={() => void createGrant()}>
-            {busy === 'grant' ? <LoaderCircle className="spin" aria-hidden="true" /> : <Link2 aria-hidden="true" />}
-            Add device
-          </button>
-        </div>
-        {props.error !== '' && <ErrorNotice message={props.error} />}
-        {data === null ? <DashboardSkeleton /> : <>
-          <HealthStrip overview={data.overview} />
-          {grant !== null && <InvitationPanel grant={grant} copied={copied} onCopy={() => void navigator.clipboard.writeText(grant.connectUrl).then(() => setCopied(true))} onClose={() => setGrant(null)} />}
-          <PendingLedger connections={data.connections} busy={busy} onApprove={(id) => void mutate(`approve:${id}`, `/api/admin/v1/connections/${encodeURIComponent(id)}/approve`, { method: 'POST' })} onCancel={(id) => void mutate(`cancel:${id}`, `/api/admin/v1/connections/${encodeURIComponent(id)}`, { method: 'DELETE' })} />
-          <DeviceLedger devices={data.devices} busy={busy} onRename={(id, name) => void mutate(`rename:${id}`, `/api/admin/v1/devices/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) })} onRevoke={(id) => void mutate(`revoke:${id}`, `/api/admin/v1/devices/${encodeURIComponent(id)}`, { method: 'DELETE' })} />
-          <HostOperations
-            overview={data.overview}
-            backups={data.backups}
-            busy={busy}
-            integrityCheckedAt={integrityCheckedAt}
-            onBackup={() => void mutate('backup', '/api/admin/v1/backups', { method: 'POST' })}
-            onIntegrity={() => void checkIntegrity()}
-          />
-        </>}
-      </main>
+      <div className="admin-workbench">
+        <AdminNavigation
+          activeSection={activeSection}
+          pendingConnections={data?.overview.vault.pendingConnections ?? 0}
+          onNavigate={setActiveSection}
+        />
+        <main className="dashboard-content">
+          <section className="overview-section" id="overview" aria-labelledby="overview-title">
+            <div className="page-heading">
+              <div><h1 id="overview-title">Encrypted sync</h1><p>Server access and host health. Vault contents remain device-only.</p></div>
+              <button className="primary" disabled={busy === 'grant'} onClick={() => void createGrant()}>
+                {busy === 'grant' ? <LoaderCircle className="spin" aria-hidden="true" /> : <Link2 aria-hidden="true" />}
+                Add device
+              </button>
+            </div>
+            {props.error !== '' && <ErrorNotice message={props.error} />}
+            {data === null ? <DashboardSkeleton /> : <HealthStrip overview={data.overview} />}
+          </section>
+          {data !== null && <>
+            {grant !== null && <InvitationPanel grant={grant} copied={copied} onCopy={() => void navigator.clipboard.writeText(grant.connectUrl).then(() => setCopied(true))} onClose={() => setGrant(null)} />}
+            <PendingLedger connections={data.connections} busy={busy} onApprove={(id) => void mutate(`approve:${id}`, `/api/admin/v1/connections/${encodeURIComponent(id)}/approve`, { method: 'POST' })} onCancel={(id) => void mutate(`cancel:${id}`, `/api/admin/v1/connections/${encodeURIComponent(id)}`, { method: 'DELETE' })} />
+            <DeviceLedger devices={data.devices} busy={busy} onRename={(id, name) => void mutate(`rename:${id}`, `/api/admin/v1/devices/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name }) })} onRevoke={(id) => void mutate(`revoke:${id}`, `/api/admin/v1/devices/${encodeURIComponent(id)}`, { method: 'DELETE' })} />
+            <HostOperations
+              overview={data.overview}
+              backups={data.backups}
+              busy={busy}
+              integrityCheckedAt={integrityCheckedAt}
+              onBackup={() => void mutate('backup', '/api/admin/v1/backups', { method: 'POST' })}
+              onIntegrity={() => void checkIntegrity()}
+            />
+          </>}
+        </main>
+      </div>
+      <footer className="status-bar">
+        <span><i className="status-dot" aria-hidden="true" />Owner session active</span>
+        <span>Encrypted envelopes only</span>
+        <span className="status-bar-end">{data === null ? 'Connecting' : `Schema ${data.overview.schema.current} · ${data.overview.vault.activeDevices} active device${data.overview.vault.activeDevices === 1 ? '' : 's'}`}</span>
+      </footer>
     </div>
+  );
+}
+
+function AdminNavigation({ activeSection, pendingConnections, onNavigate }: {
+  activeSection: AdminSection;
+  pendingConnections: number;
+  onNavigate: (section: AdminSection) => void;
+}): JSX.Element {
+  const items: Array<{ id: AdminSection; label: string; icon: JSX.Element; count?: number }> = [
+    { id: 'overview', label: 'Overview', icon: <Gauge /> },
+    { id: 'connections', label: 'Connections', icon: <Link2 />, count: pendingConnections },
+    { id: 'devices', label: 'Devices', icon: <Laptop /> },
+    { id: 'host', label: 'Host operations', icon: <HardDrive /> },
+  ];
+  return (
+    <aside className="admin-navigation" aria-label="Owner console sections">
+      <nav>
+        {items.map((item) => <a
+          className={`nav-row ${activeSection === item.id ? 'nav-row-active' : ''}`}
+          href={`#${item.id}`}
+          aria-current={activeSection === item.id ? 'location' : undefined}
+          onClick={() => onNavigate(item.id)}
+          key={item.id}
+        >
+          <span className="nav-row-icon" aria-hidden="true">{item.icon}</span>
+          <span className="nav-row-label">{item.label}</span>
+          {item.count === undefined || item.count === 0 ? null : <small>{item.count}</small>}
+        </a>)}
+      </nav>
+      <div className="boundary-note">
+        <ShieldCheck aria-hidden="true" />
+        <div><strong>Device-only vault</strong><span>This server stores authenticated ciphertext, never vault keys.</span></div>
+      </div>
+    </aside>
   );
 }
 
@@ -268,7 +325,7 @@ function HostOperations({ overview, backups, busy, integrityCheckedAt, onBackup,
   onBackup: () => void;
   onIntegrity: () => void;
 }): JSX.Element {
-  return <section className="ledger-section host-operations">
+  return <section className="ledger-section host-operations" id="host">
     <div className="section-heading"><div><h2>Host operations</h2><p>Verified snapshots and live SQLite integrity.</p></div><div className="row-actions"><button className="secondary" onClick={onIntegrity} disabled={busy !== ''}>{busy === 'integrity' ? <LoaderCircle className="spin" /> : <HardDrive />}Check database</button>{overview.capabilities.serverBackups && <button className="secondary" onClick={onBackup} disabled={busy !== ''}>{busy === 'backup' ? <LoaderCircle className="spin" /> : <DatabaseBackup />}Create backup</button>}</div></div>
     {integrityCheckedAt !== '' && <div className="integrity-result" role="status"><ShieldCheck />Live database passed quick_check at {formatDate(integrityCheckedAt)}.</div>}
     {overview.capabilities.serverBackups ? <div className="ledger backup-ledger">{backups.length === 0 ? <div className="empty-ledger"><DatabaseBackup /><div><strong>No backups yet</strong><p>Create the first verified server snapshot.</p></div></div> : backups.map((backup) => <div className="ledger-row" key={backup.name}><DatabaseBackup /><div className="ledger-primary"><strong>{backup.name}</strong><span>{formatDate(backup.createdAt)} · {formatBytes(backup.sizeBytes)}</span></div><span className={`badge ${backup.verification === 'verified' ? 'active' : 'revoked'}`}>{backup.verification}</span></div>)}</div> : <div className="empty-ledger"><DatabaseBackup /><div><strong>Backup directory not configured</strong><p>Set REGLET_BACKUP_DIR to a dedicated mounted directory.</p></div></div>}
@@ -303,7 +360,7 @@ function InvitationPanel({ grant, copied, onCopy, onClose }: { grant: Connection
 
 function PendingLedger({ connections, busy, onApprove, onCancel }: { connections: PendingConnection[]; busy: string; onApprove: (id: string) => void; onCancel: (id: string) => void }): JSX.Element {
   return (
-    <section className="ledger-section">
+    <section className="ledger-section" id="connections">
       <div className="section-heading"><div><h2>Pending connections</h2><p>First-device setup may be approved here. Later devices require a trusted Reglet device.</p></div></div>
       {connections.length === 0 ? <EmptyLedger icon={<Link2 />} title="No devices waiting" detail="New connection requests appear here until they expire." /> : <div className="ledger">
         {connections.map((item) => <div className="ledger-row" key={item.id}>
@@ -318,7 +375,7 @@ function PendingLedger({ connections, busy, onApprove, onCancel }: { connections
 
 function DeviceLedger({ devices, busy, onRename, onRevoke }: { devices: DeviceSummary[]; busy: string; onRename: (id: string, name: string) => void; onRevoke: (id: string) => void }): JSX.Element {
   return (
-    <section className="ledger-section">
+    <section className="ledger-section" id="devices">
       <div className="section-heading"><div><h2>Device access</h2><p>Revocation blocks server access but does not rotate the vault key.</p></div><ShieldAlert className="warning-icon" aria-label="Key rotation warning" /></div>
       {devices.length === 0 ? <EmptyLedger icon={<Laptop />} title="No connected devices" detail="Create an invitation to connect the first Reglet device." /> : <div className="ledger">
         {devices.map((device) => <DeviceRow key={device.id} device={device} busy={busy} onRename={onRename} onRevoke={onRevoke} />)}
