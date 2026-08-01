@@ -16,7 +16,7 @@ export async function applyJsonMcp(
   servers: Record<string, McpServerDef>,
   ctx: ApplyContext,
 ): Promise<ApplyResult> {
-  const previous = await getOutput(outputPath);
+  const previous = await getOutput(outputPath, ctx.home);
   const previousManagedKeys = previous?.managedKeys ?? [];
   const baseConfig = await readJsonObject(outputPath);
   const existingServers = isRecord(baseConfig.mcpServers) ? { ...baseConfig.mcpServers } : {};
@@ -25,7 +25,16 @@ export async function applyJsonMcp(
     delete existingServers[key];
   }
 
-  const nextServers: Record<string, unknown> = { ...existingServers, ...servers };
+  const renderedServers = Object.fromEntries(
+    Object.entries(servers).map(([name, server]) => [
+      name,
+      renderStandardMcpDefinition(server),
+    ]),
+  );
+  const nextServers: Record<string, unknown> = {
+    ...existingServers,
+    ...renderedServers,
+  };
   const nextConfig: JsonMcpFile & Record<string, unknown> = {
     ...baseConfig,
     mcpServers: nextServers as Record<string, McpServerDef>,
@@ -40,6 +49,7 @@ export async function applyJsonMcp(
     managedContent: 'mcp' satisfies ManagedContent,
     dryRun: ctx.dryRun,
     managedKeys,
+    home: ctx.home,
   });
 
   return {
@@ -48,6 +58,36 @@ export async function applyJsonMcp(
     outputPath,
     status: writeResult.status,
     managedKeys,
+    ...(ctx.dryRun
+      ? {
+          desiredHash: writeResult.hash,
+          appliedHash: writeResult.appliedHash,
+          observedHash: writeResult.observedHash,
+          appliedAt: writeResult.appliedAt,
+        }
+      : {}),
+  };
+}
+
+function renderStandardMcpDefinition(
+  server: McpServerDef,
+): Record<string, unknown> {
+  if (server.transport === 'http' || (server.url !== undefined && server.command === undefined)) {
+    return {
+      type: 'http',
+      url: server.url ?? '',
+      ...(server.headers !== undefined && Object.keys(server.headers).length > 0
+        ? { headers: server.headers }
+        : {}),
+    };
+  }
+  return {
+    command: server.command ?? '',
+    args: server.args ?? [],
+    ...(server.cwd === undefined ? {} : { cwd: server.cwd }),
+    ...(server.env !== undefined && Object.keys(server.env).length > 0
+      ? { env: server.env }
+      : {}),
   };
 }
 

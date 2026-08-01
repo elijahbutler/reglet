@@ -2,8 +2,11 @@
   "name": "reglet",
   "version": "0.1.0",
   "type": "module",
-  "bin": { "reglet": "src/index.ts" },
+  "bin": {
+    "reglet": "src/index.ts"
+  },
   "dependencies": {
-    "@reglet/core": "workspace:*"
+    "@reglet/core": "workspace:*",
+    "@reglet/server": "workspace:*"
   }
 }

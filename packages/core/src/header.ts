@@ -11,8 +11,15 @@ Hand-edits here will be detected as drift and you'll be prompted to import or di
 export function renderRulesFile(provider: ProviderId, ruleFiles: MasterRule[]): string {
   const header = GENERATED_HEADER.replace('<provider>', provider);
   const body = ruleFiles
-    .map((rule) => `<!-- source: rules/${rule.relPath} -->\n\n${rule.content.trimEnd()}`)
+    .map(
+      (rule) =>
+        `<!-- source: ${canonicalRulePath(rule.relPath)} -->\n\n${rule.content.trimEnd()}`,
+    )
     .join('\n\n---\n\n');
 
   return body.length === 0 ? `${header}\n` : `${header}\n\n${body}\n`;
+}
+
+function canonicalRulePath(relPath: string): string {
+  return relPath.startsWith('rules/') ? relPath : `rules/${relPath}`;
 }

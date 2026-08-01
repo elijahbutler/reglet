@@ -1,20 +1,93 @@
 # Reglet
 
-**One home for all your AI agent configs.** Reglet keeps your system prompts, skills, and MCP server configs in a single master directory (`~/.reglet/`) and syncs them — converted to the right format — into every AI coding tool on your machine: Claude Code (`~/.claude/CLAUDE.md`), Codex CLI (`~/.codex/AGENTS.md`), Gemini CLI, Cursor, Windsurf, OpenCode, and more.
+Reglet is a local-first manager for agent instructions, skills, and MCP server
+definitions. It keeps a canonical global library, previews provider-specific
+projections, and changes provider files only after an explicit Apply.
 
-> A *reglet* is a small flat ruler. Reglet the tool is inspired by (and indebted to) [ruler](https://github.com/intellectronica/ruler), which solves this problem per-project; Reglet solves it machine-wide, with multi-device sync.
+It supports Codex, Claude Code, Cursor, Gemini CLI, Windsurf, and OpenCode. A
+*reglet* is a small flat ruler: the product is a reference point for keeping
+agent configuration aligned without hiding ownership or scope.
 
-## What it does
+## Product model
 
-- **One source of truth**: rules/prompts as markdown, skills as `SKILL.md` folders, MCP servers as one JSON file — all in `~/.reglet/`.
-- **Automatic distribution**: `reglet apply` (or the background daemon) converts and writes each provider's global config files.
-- **Safe by default**: scans your machine, imports your existing configs, and backs up every file before touching it. `reglet restore` undoes everything.
-- **Drift detection**: hand-edits to generated files are detected; import them back into the master or unenroll that file from syncing.
-- **Multi-device sync** (self-hostable): a lightweight sync server keeps `~/.reglet/` identical across your Mac and Windows machines.
+- **Library:** canonical, editable artifacts with stable IDs, lifecycle,
+  machine-local invalid drafts, history, and recovery.
+- **Providers:** readable and diffable projections. Reglet preserves unmanaged
+  entries, reports drift and shadowing, backs up before destructive writes, and
+  never edits arbitrary provider settings.
+- **Projects:** read-only discovery roots. Promotion requires an explicit scope
+  choice and records provenance locally.
+- **Connections:** remote access and canonical-only sync are optional and off by
+  default. Project state, drafts, secrets, and provider outputs never sync.
 
-## Status
+Reglet never executes skill scripts or starts MCP servers. Secret values live in
+the OS keychain; canonical MCP definitions contain references only.
 
-Early development. See [docs/specs](docs/specs/) for the design and [ROADMAP.md](ROADMAP.md) for what's next.
+## Workspace
+
+Canonical content defaults to `~/.reglet/`:
+
+```text
+rules/                 Markdown instructions
+skills/<slug>/         SKILL.md plus reviewed assets
+mcp/servers.json       MCP definitions and keychain references
+library.json           Stable artifact metadata
+.state/reglet.sqlite   Local projections, projects, sessions, trust, and sync state
+```
+
+## CLI
+
+Use Bun for source development:
+
+```sh
+bun packages/cli/src/index.ts init
+bun packages/cli/src/index.ts create instruction --slug general
+bun packages/cli/src/index.ts project root add /path/to/repository
+bun packages/cli/src/index.ts project scan
+bun packages/cli/src/index.ts apply --dry-run
+bun packages/cli/src/index.ts apply
+bun packages/cli/src/index.ts serve
+```
+
+Consequential commands support `--json`; destructive commands require explicit
+non-interactive confirmation such as `--yes`. Run `reglet help` for lifecycle,
+promotion, secrets, sessions, diagnostics, remote access, and sync commands.
+
+Exit codes are `0` success, `1` operation error, `2` drift or conflict, `3`
+validation or blocked projection, and `4` authentication or permission failure.
+
+## Manager and desktop
+
+`reglet serve` exposes the shared Raycast-style manager and a Hono runtime.
+Pairing credentials are one-use and expire after ten minutes. Read, write, and
+admin sessions are scoped; development roots, secret binding, sessions, and
+network settings require admin scope.
+
+The Electron client starts the same loopback runtime in a sandboxed window.
+macOS and Windows packaging, signing hooks, daily opt-in update checks, and
+install-on-restart behavior live in `packages/desktop`.
+
+## Sync and privacy
+
+The included self-hosted sync service stores canonical content in plaintext
+unless its operator encrypts storage. Sync conflicts are resolved per file and
+do not block clean artifacts or local Apply. A hosted service is intentionally
+deferred until client-side end-to-end encryption is available.
+
+Reglet has no product analytics by default and no configured crash-upload
+endpoint. Metadata-only diagnostics redact secrets, project paths, artifact
+bodies, environment values, and authorization data.
+
+## Development checks
+
+```sh
+bun test
+bun run typecheck
+bun run lint
+```
+
+See [PRODUCT.md](PRODUCT.md), [DESIGN.md](DESIGN.md), and
+[ACCEPTANCE.md](ACCEPTANCE.md) for the durable contracts and verification map.
 
 ## License
 

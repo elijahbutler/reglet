@@ -1,0 +1,30 @@
+{
+  "name": "@reglet/desktop",
+  "productName": "Reglet",
+  "version": "0.1.0",
+  "description": "Local-first manager for agent instructions, skills, and MCP servers",
+  "author": "Reglet",
+  "repository": "https://github.com/elijahbutler/reglet",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build:main": "tsc --build",
+    "start": "bun run build:main && electron .",
+    "package": "bun run build:main && electron-forge package",
+    "make": "bun run build:main && electron-forge make"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.11.2",
+    "@electron-forge/maker-dmg": "^7.11.2",
+    "@electron-forge/maker-squirrel": "^7.11.2",
+    "@electron-forge/maker-zip": "^7.11.2",
+    "@electron-forge/plugin-fuses": "^7.11.2",
+    "@electron/fuses": "^1.8.0",
+    "@types/electron-squirrel-startup": "^1.0.2",
+    "electron": "^43.2.0"
+  },
+  "dependencies": {
+    "electron-squirrel-startup": "^1.0.1"
+  }
+}

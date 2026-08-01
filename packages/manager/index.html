@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Local-first manager for agent instructions, skills, and MCP servers"
+    />
+    <title>Reglet Manager</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <!--
+      THESIS: Reglet is a keyboard-first control surface for understanding canonical artifacts and provider projections; it refuses the generic metric-dashboard arrangement.
+      OWN-WORLD: Raycast’s near-black layers, hairline separators, inset key highlights, restrained coral punctuation, neutral actions, and compact Inter typography.
+      STORY: Select a canonical artifact, inspect its provider state, resolve issues, preview the exact output, then apply deliberately.
+      FIRST VIEWPORT: Persistent navigation and library index frame a dominant editor with a projection inspector and keyboard action bar.
+      FORM: Four-pane desktop workbench, first recommendation; user-pinned Raycast reference, seed user-pinned-raycast.
+      FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+    -->
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <section class="runtime-gate" id="runtime-gate" aria-labelledby="runtime-gate-title" hidden>
+      <div class="runtime-gate-card">
+        <svg class="runtime-gate-mark" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 2.75v4.5M12 16.75v4.5M2.75 12h4.5M16.75 12h4.5M5.45 5.45l3.18 3.18M15.37 15.37l3.18 3.18M18.55 5.45l-3.18 3.18M8.63 15.37l-3.18 3.18" />
+          <circle cx="12" cy="12" r="2.25" />
+        </svg>
+        <h1 id="runtime-gate-title">Pair with the local runtime</h1>
+        <p id="runtime-gate-copy">Enter the one-use code shown by <code>reglet session pair --scope admin</code>. It expires after ten minutes.</p>
+        <form id="pairing-form">
+          <label for="pairing-code">Pairing code</label>
+          <div class="pairing-control">
+            <input id="pairing-code" name="code" autocomplete="one-time-code" inputmode="text" maxlength="6" placeholder="ABC234" required />
+            <button class="button button-primary" type="submit">Pair manager</button>
+          </div>
+        </form>
+        <p class="runtime-gate-status" id="runtime-gate-status" aria-live="polite"></p>
+        <span class="runtime-gate-note">The resulting session stays in an HttpOnly browser cookie. Reglet never puts it in local storage.</span>
+      </div>
+    </section>
+
+    <main class="app-shell" id="app-shell" aria-label="Reglet Manager workspace" hidden>
+      <header class="titlebar">
+        <div class="brand-lockup">
+          <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 2.75v4.5M12 16.75v4.5M2.75 12h4.5M16.75 12h4.5M5.45 5.45l3.18 3.18M15.37 15.37l3.18 3.18M18.55 5.45l-3.18 3.18M8.63 15.37l-3.18 3.18" />
+            <circle cx="12" cy="12" r="2.25" />
+          </svg>
+          <strong>Reglet</strong>
+          <span class="runtime-label">Preview data</span>
+        </div>
+
+        <div class="breadcrumbs" aria-label="Current location">
+          <span id="breadcrumb-section">Library</span>
+          <span class="breadcrumb-separator" aria-hidden="true">/</span>
+          <span id="breadcrumb-item">General agent instructions</span>
+        </div>
+
+        <div class="titlebar-actions">
+          <button class="command-trigger" id="command-trigger" type="button">
+            <span class="search-icon" aria-hidden="true"></span>
+            <span>Search or run command</span>
+            <kbd>⌘ K</kbd>
+          </button>
+          <button class="button button-quiet" id="new-artifact" type="button">
+            <span data-icon="plus" aria-hidden="true"></span>
+            New
+          </button>
+          <button class="button button-quiet" id="preview-diff" type="button">
+            <span data-icon="diff" aria-hidden="true"></span>
+            Preview diff
+          </button>
+          <button class="button button-primary" id="apply-top" type="button">
+            Apply changes
+          </button>
+        </div>
+      </header>
+
+      <div class="workspace">
+        <nav class="primary-nav" aria-label="Primary">
+          <div class="nav-items" id="primary-nav"></div>
+          <div class="workspace-switcher">
+            <button type="button" class="workspace-button" id="workspace-button">
+              <span class="workspace-avatar" aria-hidden="true">R</span>
+              <span class="workspace-copy">
+                <strong>Local workspace</strong>
+                <small>Sync off</small>
+              </span>
+              <span data-icon="chevrons" aria-hidden="true"></span>
+            </button>
+          </div>
+        </nav>
+
+        <aside class="collection-pane" aria-label="Collection browser">
+          <div class="pane-header">
+            <div>
+              <h1 id="collection-title">Library</h1>
+              <p id="collection-description">Canonical and editable</p>
+            </div>
+            <button
+              type="button"
+              class="icon-button"
+              id="collection-action"
+              aria-label="Create artifact"
+            >
+              <span data-icon="plus" aria-hidden="true"></span>
+            </button>
+          </div>
+          <label class="search-field">
+            <span data-icon="search" aria-hidden="true"></span>
+            <input
+              id="collection-search"
+              type="search"
+              placeholder="Search artifacts"
+              autocomplete="off"
+            />
+            <kbd>⌘ F</kbd>
+          </label>
+          <div class="filter-row" id="filter-row" aria-label="Library filters"></div>
+          <div class="collection-list" id="collection-list"></div>
+          <div class="collection-footer" id="collection-footer"></div>
+        </aside>
+
+        <section class="content-pane" aria-label="Artifact workbench">
+          <div class="content-header">
+            <div class="content-title">
+              <span class="artifact-kind-icon" id="artifact-kind-icon" aria-hidden="true"></span>
+              <div>
+                <div class="title-line">
+                  <h2 id="artifact-title">General agent instructions</h2>
+                  <span class="status-dot status-dot-success" id="save-indicator"></span>
+                </div>
+                <p id="artifact-meta">Instruction · Active · Saved locally</p>
+              </div>
+            </div>
+            <div class="content-header-actions">
+              <button class="icon-button" id="open-external" type="button" aria-label="Open in external editor">
+                <span data-icon="external" aria-hidden="true"></span>
+              </button>
+              <button class="icon-button" id="more-actions" type="button" aria-label="More artifact actions">
+                <span data-icon="more" aria-hidden="true"></span>
+              </button>
+            </div>
+          </div>
+
+          <div class="content-tabs" role="tablist" aria-label="Artifact views">
+            <button type="button" role="tab" aria-selected="true" data-view="edit">Edit</button>
+            <button type="button" role="tab" aria-selected="false" data-view="preview">Preview</button>
+            <button type="button" role="tab" aria-selected="false" data-view="history">History</button>
+          </div>
+
+          <div class="editor-region" id="editor-region"></div>
+
+          <div class="editor-statusbar">
+            <span id="document-stats">Markdown · 118 words · UTF-8</span>
+            <span id="draft-status">Canonical revision 8</span>
+          </div>
+        </section>
+
+        <aside class="inspector-pane" aria-label="Projection inspector">
+          <div class="inspector-header">
+            <div>
+              <h2>Projection inspector</h2>
+              <p id="inspector-summary">5 targeted · 2 pending</p>
+            </div>
+            <button type="button" class="icon-button" id="collapse-inspector" aria-label="Collapse inspector">
+              <span data-icon="panel-right" aria-hidden="true"></span>
+            </button>
+          </div>
+
+          <div class="provider-list" id="provider-list"></div>
+          <div class="projection-detail" id="projection-detail"></div>
+        </aside>
+      </div>
+
+      <section class="action-sheet" id="action-sheet" role="dialog" aria-modal="false" aria-labelledby="action-sheet-title" aria-describedby="action-sheet-description" tabindex="-1" hidden>
+        <header>
+          <div>
+            <h2 id="action-sheet-title">Artifact action</h2>
+            <p id="action-sheet-description"></p>
+          </div>
+          <button class="icon-button" id="action-sheet-close" type="button" aria-label="Close action sheet">
+            <span data-icon="close" aria-hidden="true"></span>
+          </button>
+        </header>
+        <div class="action-sheet-body" id="action-sheet-body"></div>
+      </section>
+
+      <footer class="actionbar">
+        <div class="shortcut-group">
+          <span><kbd>⌘</kbd><kbd>K</kbd> Command palette</span>
+          <span><kbd>⌘</kbd><kbd>↵</kbd> Apply changes</span>
+          <span><kbd>⌘</kbd><kbd>D</kbd> Preview diff</span>
+          <span><kbd>⌘</kbd><kbd>O</kbd> Open externally</span>
+        </div>
+        <div class="actionbar-state">
+          <span class="connection-dot" aria-hidden="true"></span>
+          Local runtime ready
+        </div>
+        <button class="button button-primary actionbar-apply" id="apply-bottom" type="button">
+          Apply 2 changes
+        </button>
+      </footer>
+    </main>
+
+    <dialog class="command-dialog" id="command-dialog" aria-labelledby="command-heading">
+      <h2 id="command-heading" class="sr-only">Command palette</h2>
+      <label class="command-input">
+        <span data-icon="search" aria-hidden="true"></span>
+        <input
+          id="command-input"
+          type="search"
+          placeholder="Search library or run a command…"
+          autocomplete="off"
+        />
+        <kbd>esc</kbd>
+      </label>
+      <div class="command-results" id="command-results"></div>
+      <footer class="command-footer">
+        <span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span>
+        <span><kbd>↵</kbd> Open</span>
+      </footer>
+    </dialog>
+
+    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+    <script src="./src/runtime.js" defer></script>
+    <script src="./src/app.js" defer></script>
+  </body>
+</html>

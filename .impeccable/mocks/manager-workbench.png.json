@@ -1,0 +1,6 @@
+{
+  "approved": true,
+  "approval": "Explicitly approved by the user after reviewing the live Reglet prototype.",
+  "prompt": "Reglet Manager Library workbench in the user-pinned Raycast visual system. A compact top command bar, persistent primary navigation, searchable artifact index, dominant Markdown editor, right projection inspector comparing Desired, Applied, and Observed, and a keyboard action footer. Near-black layered surfaces, hairline separators, tactile inset key highlights, compact Inter typography, restrained coral punctuation, and neutral Mist Apply actions. Use representative Reglet artifacts and provider states; avoid dashboard metrics, chromatic CTAs, decorative glass, and generic card grids.",
+  "surface": "packages/manager/index.html"
+}

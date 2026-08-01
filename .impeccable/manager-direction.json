@@ -1,0 +1,124 @@
+{
+  "title": "Choose Reglet’s visual world",
+  "question": "Reglet needs a precise operating surface for comparing canonical artifacts with provider projections. Keep the calibration workbench, take a challenger, or re-roll.",
+  "options": [
+    {
+      "id": "assigned",
+      "label": "Calibration Workbench",
+      "kicker": "PROPOSED DIRECTION",
+      "lineage": "metrology labs, inspection cards, reference standards",
+      "thesis": "Reglet is the reference standard that makes provider drift measurable before anything is applied.",
+      "palette": [
+        "#e6e4dc",
+        "#b9b6ab",
+        "#202521",
+        "#d85b2f",
+        "#c7b84b"
+      ],
+      "materials": [
+        "powder-coated instrument panels",
+        "brushed aluminum",
+        "inspection paper",
+        "engraved scales"
+      ],
+      "viewport": "A calm instrument bench: library index at left, selected artifact on the inspection bed, and a calibrated projection rail showing desired, applied, and observed state.",
+      "risk": "The reference-instrument language becomes sterile if paper, annotation, and editorial hierarchy are underplayed.",
+      "case": "Wins on product clarity: canonical reference, tolerance, drift, and explicit calibration map directly to Reglet’s core loop.",
+      "sketch": ".impeccable/sketches/manager-calibration-workbench.png"
+    },
+    {
+      "id": "challenger-hardware",
+      "label": "Creator Hardware",
+      "lineage": "creator control surfaces and bench instruments",
+      "thesis": "Every operation has tactile certainty, and the one safety-orange key commits an apply.",
+      "palette": [
+        "#d8d0bb",
+        "#aaa28e",
+        "#252927",
+        "#f0642d",
+        "#d89b37"
+      ],
+      "materials": [
+        "bone keycaps",
+        "gunmetal chassis",
+        "knurled aluminum",
+        "amber status glass"
+      ],
+      "viewport": "A strict key-grid workbench with grouped artifact functions, one orange Apply key, and a compact amber projection readout.",
+      "risk": "A literal control panel can make nuanced artifact comparison feel like a collection of buttons.",
+      "case": "Audience identification is excellent; it loses narrowly because ownership and scope are less legible than on the calibration bench.",
+      "sketch": ".impeccable/sketches/manager-creator-hardware.png",
+      "hero": "https://impeccable.style/worlds/cards/design-canon-creator-hardware-bench-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/design-canon-creator-hardware-bench.webp"
+    },
+    {
+      "id": "challenger-terminal",
+      "label": "Crew Terminal",
+      "lineage": "used-future starship work terminals",
+      "thesis": "Provider configuration becomes a shipboard system query with unmistakable hazards and acknowledgements.",
+      "palette": [
+        "#111713",
+        "#65c477",
+        "#d09a36",
+        "#d6d0bd",
+        "#2e332f"
+      ],
+      "materials": [
+        "curved phosphor glass",
+        "grimy equipment panels",
+        "stenciled plates"
+      ],
+      "viewport": "A phosphor terminal answers a selected artifact query while hazard plates identify drift, missing secrets, and shadowed projections.",
+      "risk": "The theatrical command-line topology can slow routine editing and comparison.",
+      "case": "Fuses poorly because query-by-query navigation hides the simultaneous provider state Reglet must make obvious.",
+      "sketch": ".impeccable/sketches/manager-crew-terminal.png",
+      "hero": "https://impeccable.style/worlds/cards/pop-culture-shelf-industrial-starship-terminal-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/pop-culture-shelf-industrial-starship-terminal.webp"
+    },
+    {
+      "id": "challenger-drawcord",
+      "label": "Drawcord Projection",
+      "lineage": "pattern cutting and transforming garments",
+      "thesis": "One canonical plane gathers into several provider-specific shapes through visible constraints.",
+      "palette": [
+        "#171918",
+        "#363b38",
+        "#c5a654",
+        "#d9d8cf",
+        "#747b76"
+      ],
+      "materials": [
+        "matte technical silk",
+        "gold drawcord",
+        "graphite stitching"
+      ],
+      "viewport": "The canonical artifact is a flat pattern at center; provider outputs gather around it, connected by scope and compatibility channels.",
+      "risk": "The transformation is memorable, but dense editing and exact state labels fight the textile metaphor.",
+      "case": "Product transformation is clear, but audience identification and daily-operating precision are weaker.",
+      "sketch": ".impeccable/sketches/manager-drawcord-projection.png",
+      "hero": "https://impeccable.style/worlds/cards/textiles-weave-drape-fashion-drawcord-transforming-cape-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/textiles-weave-drape-fashion-drawcord-transforming-cape.webp"
+    }
+  ],
+  "reroll": true,
+  "canon": true,
+  "canonCard": {
+    "label": "Conventional developer app",
+    "lineage": "desktop settings tools and modern admin consoles",
+    "thesis": "A familiar sidebar, table, editor, and details panel executed with exceptional restraint.",
+    "palette": [
+      "#f6f7f8",
+      "#ffffff",
+      "#20242a",
+      "#5668d8"
+    ],
+    "materials": [
+      "flat application chrome",
+      "subtle separators"
+    ],
+    "viewport": "Navigation sidebar, searchable artifact table, editor panel, and a conventional provider-status drawer.",
+    "risk": "Immediately usable, but visually interchangeable with other developer settings products.",
+    "sketch": ".impeccable/sketches/manager-canon.png"
+  },
+  "steer": true
+}

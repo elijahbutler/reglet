@@ -4,9 +4,15 @@ import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { defaultConfig, saveConfig, type ProviderName } from '../src/config.js';
 import { applyAll } from '../src/engine/apply.js';
+import {
+  purgeProviderBackups,
+  restoreProviderOutputs,
+} from '../src/engine/restore.js';
+import { detectProjectionDrift } from '../src/engine/drift.js';
 import { GENERATED_HEADER } from '../src/header.js';
 import { loadManifest } from '../src/manifest.js';
 import { getAdapter } from '../src/providers/registry.js';
+import { MemorySecretStore } from '../src/security/secrets.js';
 
 let currentHome: string | undefined;
 let currentProviderHome: string | undefined;
@@ -175,5 +181,229 @@ describe('applyAll', () => {
 
     expect(claude).toEqual({ theme: 'dark', mcpServers: { userServer: { command: 'python' } } });
     expect(gemini).toEqual({ selectedAuthType: 'oauth', mcpServers: { userServer: { url: 'https://example.test' } } });
+  });
+
+  test('renders and merges MCP for all launch providers', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const providers: ProviderName[] = [
+      'claude',
+      'codex',
+      'cursor',
+      'gemini',
+      'windsurf',
+      'opencode',
+    ];
+    await enableProviders(home, providers);
+    await mkdir(path.join(home, 'mcp'), { recursive: true });
+    await writeFile(
+      path.join(home, 'mcp', 'servers.json'),
+      `${JSON.stringify(
+        {
+          mcpServers: {
+            local: {
+              transport: 'stdio',
+              command: 'node',
+              args: ['server.js'],
+              env: { MODE: 'safe' },
+              secretEnv: {},
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await mkdir(path.join(providerHome, '.codex'), { recursive: true });
+    await writeFile(
+      path.join(providerHome, '.codex', 'config.toml'),
+      '# keep this comment\n\n[features]\nweb_search = true\n\n[mcp_servers.user]\ncommand = "python"\n',
+    );
+    await mkdir(path.join(providerHome, '.cursor'), { recursive: true });
+    await writeFile(
+      path.join(providerHome, '.cursor', 'mcp.json'),
+      `${JSON.stringify({ mcpServers: { user: { command: 'python' } } }, null, 2)}\n`,
+    );
+    await mkdir(path.join(providerHome, '.codeium', 'windsurf'), { recursive: true });
+    await writeFile(
+      path.join(providerHome, '.codeium', 'windsurf', 'mcp_config.json'),
+      `${JSON.stringify({ mcpServers: { user: { command: 'python' } } }, null, 2)}\n`,
+    );
+    await mkdir(path.join(providerHome, '.config', 'opencode'), { recursive: true });
+    await writeFile(
+      path.join(providerHome, '.config', 'opencode', 'opencode.json'),
+      `${JSON.stringify({ theme: 'system', mcp: { user: { type: 'local', command: ['python'] } } }, null, 2)}\n`,
+    );
+
+    const report = await applyAll({ providers, contents: ['mcp'] });
+
+    expect(report.results.every((result) => result.status === 'written')).toBe(true);
+    const codex = await readFile(path.join(providerHome, '.codex', 'config.toml'), 'utf8');
+    expect(codex).toContain('# keep this comment');
+    expect(codex).toContain('[mcp_servers.user]');
+    expect(codex).toContain('[mcp_servers.local]');
+    expect(codex).toContain('[mcp_servers.local.env]');
+    const opencode = JSON.parse(
+      await readFile(
+        path.join(providerHome, '.config', 'opencode', 'opencode.json'),
+        'utf8',
+      ),
+    ) as { theme: string; mcp: Record<string, unknown> };
+    expect(opencode.theme).toBe('system');
+    expect(opencode.mcp.user).toBeDefined();
+    expect(opencode.mcp.local).toEqual({
+      type: 'local',
+      command: ['node', 'server.js'],
+      environment: { MODE: 'safe' },
+    });
+  });
+
+  test('keeps four successful provider writes when two providers fail', async () => {
+    const { home } = await useTempHomes();
+    const providers: ProviderName[] = [
+      'claude',
+      'codex',
+      'cursor',
+      'gemini',
+      'windsurf',
+      'opencode',
+    ];
+    await enableProviders(home, providers);
+    await mkdir(path.join(home, 'mcp'), { recursive: true });
+    await writeFile(
+      path.join(home, 'mcp', 'servers.json'),
+      `${JSON.stringify({
+        mcpServers: {
+          local: {
+            transport: 'stdio',
+            command: 'node',
+            args: ['server.js'],
+            env: {},
+            secretEnv: {},
+          },
+        },
+      })}\n`,
+    );
+
+    for (const provider of ['claude', 'gemini'] satisfies ProviderName[]) {
+      const outputPath = getAdapter(provider).mcpPath();
+      if (outputPath === null) throw new Error(`${provider} MCP path missing`);
+      await mkdir(outputPath, { recursive: true });
+    }
+
+    const report = await applyAll({ providers, contents: ['mcp'] });
+    expect(report.results.filter((result) => result.status === 'written')).toHaveLength(4);
+    expect(report.results.filter((result) => result.status === 'error')).toHaveLength(2);
+    for (const provider of ['codex', 'cursor', 'windsurf', 'opencode'] satisfies ProviderName[]) {
+      const outputPath = getAdapter(provider).mcpPath();
+      if (outputPath === null) throw new Error(`${provider} MCP path missing`);
+      expect(await readFile(outputPath, 'utf8')).toContain('local');
+    }
+  });
+
+  test('blocks only MCP projections whose required secrets are unbound', async () => {
+    const { home } = await useTempHomes();
+    await enableProviders(home, ['claude', 'cursor']);
+    await mkdir(path.join(home, 'mcp'), { recursive: true });
+    await writeFile(
+      path.join(home, 'mcp', 'servers.json'),
+      `${JSON.stringify(
+        {
+          mcpServers: {
+            api: {
+              transport: 'http',
+              url: 'https://example.test/mcp',
+              headers: {},
+              secretHeaders: {
+                Authorization: { id: 'api-token' },
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const secretStore = new MemorySecretStore();
+
+    const blocked = await applyAll({
+      providers: ['claude', 'cursor'],
+      contents: ['mcp'],
+      secretStore,
+    });
+    await secretStore.set('api-token', 'Bearer bound');
+    const applied = await applyAll({
+      providers: ['claude', 'cursor'],
+      contents: ['mcp'],
+      secretStore,
+    });
+
+    expect(blocked.results.every((result) => result.status === 'blocked')).toBe(true);
+    expect(applied.results.every((result) => result.status === 'written')).toBe(true);
+  });
+
+  test('restores provider originals and keeps a pre-restore safety backup', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await writeMasterRule(home);
+    await enableProviders(home, ['claude']);
+    const outputPath = path.join(providerHome, '.claude', 'CLAUDE.md');
+    await mkdir(path.dirname(outputPath), { recursive: true });
+    await writeFile(outputPath, 'provider original\n');
+    await applyAll({ providers: ['claude'], contents: ['rules'] });
+
+    const report = await restoreProviderOutputs('claude', home);
+
+    expect(await readFile(outputPath, 'utf8')).toBe('provider original\n');
+    expect(report.results[0]?.action).toBe('restored');
+    expect(report.results[0]?.safetyBackup).not.toBeNull();
+    expect(Object.keys((await loadManifest(home)).outputs)).toHaveLength(0);
+  });
+
+  test('purges retained provider originals without changing current output', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await writeMasterRule(home);
+    await enableProviders(home, ['claude']);
+    const outputPath = path.join(providerHome, '.claude', 'CLAUDE.md');
+    await mkdir(path.dirname(outputPath), { recursive: true });
+    await writeFile(outputPath, 'provider original\n');
+    await applyAll({ providers: ['claude'], contents: ['rules'] });
+    const managedOutput = await readFile(outputPath, 'utf8');
+
+    await purgeProviderBackups('claude', home);
+
+    expect(await readFile(outputPath, 'utf8')).toBe(managedOutput);
+    expect(
+      Object.values((await loadManifest(home)).outputs)[0]?.backedUpTo,
+    ).toBeNull();
+  });
+
+  test('detects modified and missing provider projections', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await writeMasterRule(home);
+    await enableProviders(home, ['claude']);
+    const outputPath = path.join(providerHome, '.claude', 'CLAUDE.md');
+    await applyAll({ providers: ['claude'], contents: ['rules'] });
+    expect((await detectProjectionDrift(home))[0]?.state).toBe('clean');
+
+    await writeFile(outputPath, 'external edit\n');
+    expect((await detectProjectionDrift(home))[0]?.state).toBe('drifted');
+    expect(
+      (
+        await applyAll({
+          providers: ['claude'],
+          contents: ['rules'],
+        })
+      ).results[0]?.status,
+    ).toBe('blocked');
+    expect(
+      (
+        await applyAll({
+          providers: ['claude'],
+          contents: ['rules'],
+          allowOverwriteDrift: true,
+        })
+      ).results[0]?.status,
+    ).toBe('written');
+    await rm(outputPath);
+    expect((await detectProjectionDrift(home))[0]?.state).toBe('missing');
   });
 });
