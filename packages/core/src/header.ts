@@ -18,6 +18,7 @@ Hand-edits here will be reported as drift and will not be overwritten automatica
 export function renderRulesFile(provider: ProviderId, ruleFiles: MasterRule[]): string {
   const header = GENERATED_HEADER.replace('<provider>', provider);
   const body = ruleFiles
+    .filter((rule) => rule.targets === undefined || rule.targets.includes(provider))
     .map((rule) => `<!-- source: rules/${rule.relPath} -->\n\n${rule.content.trimEnd()}`)
     .join('\n\n---\n\n');
 

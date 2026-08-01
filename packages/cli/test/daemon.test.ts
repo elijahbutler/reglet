@@ -13,19 +13,26 @@ let currentProviderHome: string | undefined;
 let currentDaemon: ChildProcess | undefined;
 
 afterEach(async () => {
-  if (currentDaemon !== undefined && currentDaemon.pid !== undefined) {
-    currentDaemon.kill('SIGTERM');
-    currentDaemon = undefined;
-  }
+  await stopCurrentDaemon();
   if (currentHome !== undefined) {
-    await rm(currentHome, { recursive: true, force: true });
+    await rm(currentHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     currentHome = undefined;
   }
   if (currentProviderHome !== undefined) {
-    await rm(currentProviderHome, { recursive: true, force: true });
+    await rm(currentProviderHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     currentProviderHome = undefined;
   }
 });
+
+async function stopCurrentDaemon(): Promise<void> {
+  const daemon = currentDaemon;
+  currentDaemon = undefined;
+  if (daemon === undefined || daemon.exitCode !== null || daemon.signalCode !== null) return;
+  await new Promise<void>((resolve) => {
+    daemon.once('exit', () => resolve());
+    daemon.kill('SIGTERM');
+  });
+}
 
 async function useTempHomes(): Promise<{ home: string; providerHome: string }> {
   currentHome = await mkdtemp(path.join(tmpdir(), 'reglet-daemon-home-'));

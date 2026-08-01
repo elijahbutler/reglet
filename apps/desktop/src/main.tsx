@@ -1,9 +1,8 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import { App } from './ui/App.js';
-import { tauriBridge } from './managerBridge.js';
-import { tauriConnectLinks } from './deepLinks.js';
-import './styles.css';
+import { DesktopManager } from './DesktopManager.js';
+import '@reglet/manager-ui/styles.css';
+import './desktop-shell.css';
 
 const root = document.getElementById('root');
 if (root === null) {
@@ -12,6 +11,6 @@ if (root === null) {
 
 createRoot(root).render(
   <React.StrictMode>
-    <App bridge={tauriBridge} connectLinks={tauriConnectLinks} />
+    <DesktopManager />
   </React.StrictMode>,
 );

@@ -78,12 +78,18 @@ export async function runDaemon(options: DaemonRunOptions = {}): Promise<void> {
   await logDaemon('reglet daemon watching');
 
   await new Promise<void>((resolve) => {
+    let stopping = false;
     const shutdown = (): void => {
-      void watcher.close();
-      void providerWatcher.close();
-      void rm(pidPath(home), { force: true });
-      void logDaemon('reglet daemon stopped');
-      resolve();
+      if (stopping) return;
+      stopping = true;
+      if (applyTimer !== undefined) clearTimeout(applyTimer);
+      if (driftTimer !== undefined) clearTimeout(driftTimer);
+      void Promise.all([watcher.close(), providerWatcher.close()])
+        .then(async () => {
+          await rm(pidPath(home), { force: true });
+          await logDaemon('reglet daemon stopped');
+        })
+        .finally(resolve);
     };
     process.once('SIGINT', shutdown);
     process.once('SIGTERM', shutdown);

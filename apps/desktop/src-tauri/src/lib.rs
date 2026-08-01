@@ -1,38 +1,27 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::{
     path::{Path, PathBuf},
+    sync::Mutex,
     time::Duration,
 };
 use tauri::{
     menu::{MenuBuilder, SubmenuBuilder},
-    AppHandle, Manager,
+    AppHandle, Manager, State, WindowEvent,
 };
-use tauri_plugin_shell::{process::CommandEvent, ShellExt};
+use tauri_plugin_shell::{
+    process::{CommandChild, CommandEvent},
+    ShellExt,
+};
 
 const SIDECAR_NAME: &str = "reglet";
-const FIXED_ARGS: [&str; 4] = ["manager", "rpc", "--json", "--protocol-version=1"];
-const MAX_ERROR_CHARS: usize = 160;
-const MAX_RPC_REQUEST_BYTES: usize = 8 * 1024 * 1024;
-const MAX_RPC_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
-const MAX_SIDECAR_STDERR_BYTES: usize = 64 * 1024;
-const SIDECAR_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(15);
 const RELEASE_API_URL: &str = "https://api.github.com/repos/elijahbutler/reglet/releases/latest";
 const RELEASE_PAGE_URL: &str = "https://github.com/elijahbutler/reglet/releases/latest";
+const RUNTIME_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 const BUILD_VERSION: &str = match option_env!("REGLET_VERSION") {
     Some(version) => version,
     None => env!("CARGO_PKG_VERSION"),
 };
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ManagerRpcFailure {
-    #[serde(rename = "protocolVersion")]
-    protocol_version: u8,
-    operation: String,
-    ok: bool,
-    error: ManagerRpcError,
-}
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ManagerRpcError {
@@ -56,104 +45,120 @@ struct GitHubRelease {
     html_url: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ManagerRuntimeStartup {
+    version: u8,
+    listening: bool,
+    url: String,
+    manager_url: String,
+    pairing_expires_at: String,
+    remote: bool,
+    protocol_version: u8,
+}
+
+#[derive(Default)]
+struct ManagerRuntimeState {
+    child: Mutex<Option<CommandChild>>,
+    startup: Mutex<Option<ManagerRuntimeStartup>>,
+}
+
 #[tauri::command]
-async fn manager_rpc(app: AppHandle, request: Value) -> Result<Value, ManagerRpcFailure> {
-    let operation = request
-        .get("operation")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-        .to_string();
-    if request.get("protocolVersion").and_then(Value::as_u64) != Some(1) {
-        return Err(bridge_error(
-            &operation,
-            "UNKNOWN_PROTOCOL_VERSION",
-            "Reglet rejected an unsupported Manager protocol version.",
-            false,
-        ));
+async fn manager_runtime_start(
+    app: AppHandle,
+    state: State<'_, ManagerRuntimeState>,
+) -> Result<ManagerRuntimeStartup, ManagerRpcError> {
+    if let Some(startup) = state
+        .startup
+        .lock()
+        .map_err(|_| runtime_state_error())?
+        .clone()
+    {
+        return Ok(startup);
     }
-
-    let mut payload = serde_json::to_vec(&request)
-        .map_err(|error| sidecar_error(&operation, "MALFORMED_REQUEST", error, false))?;
-    if payload.len() > MAX_RPC_REQUEST_BYTES {
-        return Err(bridge_error(
-            &operation,
-            "REQUEST_TOO_LARGE",
-            "Reglet rejected an oversized Manager request.",
-            false,
-        ));
-    }
-    payload.push(b'\n');
-
     let command = app
         .shell()
         .sidecar(SIDECAR_NAME)
-        .map_err(|error| sidecar_error(&operation, "SIDECAR_UNAVAILABLE", error, false))?
-        .args(FIXED_ARGS);
-    let (mut events, mut child) = command
-        .spawn()
-        .map_err(|error| sidecar_error(&operation, "SIDECAR_UNAVAILABLE", error, false))?;
-
-    child
-        .write(&payload)
-        .map_err(|error| sidecar_error(&operation, "SIDECAR_IO", error, true))?;
-
-    let mut exit_code = None;
-    let mut stdout = Vec::new();
-    let mut stderr_bytes = 0usize;
-    loop {
-        let event = match tokio::time::timeout(SIDECAR_IDLE_TIMEOUT, events.recv()).await {
-            Ok(event) => event,
-            Err(_) => {
-                let error = bridge_error(
-                    &operation,
-                    "SIDECAR_TIMEOUT",
-                    "Reglet stopped an unresponsive sidecar.",
-                    true,
-                );
-                let _ = child.kill();
-                return Err(error);
-            }
-        };
-        let Some(event) = event else { break };
+        .map_err(|_| runtime_start_error())?
+        .args(["serve", "--hostname", "127.0.0.1", "--port", "0", "--json"]);
+    let (mut events, child) = command.spawn().map_err(|_| runtime_start_error())?;
+    let startup = loop {
+        let event = tokio::time::timeout(RUNTIME_STARTUP_TIMEOUT, events.recv())
+            .await
+            .map_err(|_| runtime_start_error())?
+            .ok_or_else(runtime_start_error)?;
         match event {
             CommandEvent::Stdout(bytes) => {
-                if stdout.len().saturating_add(bytes.len() + 1) > MAX_RPC_RESPONSE_BYTES {
-                    let error = bridge_error(
-                        &operation,
-                        "RESPONSE_TOO_LARGE",
-                        "Reglet stopped a sidecar that returned an oversized response.",
-                        true,
-                    );
-                    let _ = child.kill();
-                    return Err(error);
-                }
-                stdout.extend(bytes);
-                stdout.push(b'\n');
-            }
-            CommandEvent::Stderr(bytes) => {
-                stderr_bytes = stderr_bytes.saturating_add(bytes.len() + 1);
-                if stderr_bytes > MAX_SIDECAR_STDERR_BYTES {
-                    let error = bridge_error(
-                        &operation,
-                        "SIDECAR_FAILED",
-                        "Reglet stopped a sidecar that produced excessive diagnostic output.",
-                        true,
-                    );
-                    let _ = child.kill();
-                    return Err(error);
+                let value = std::str::from_utf8(&bytes).ok().and_then(|text| {
+                    serde_json::from_str::<ManagerRuntimeStartup>(text.trim()).ok()
+                });
+                if let Some(candidate) = value {
+                    validate_runtime_startup(&candidate)?;
+                    break candidate;
                 }
             }
-            CommandEvent::Terminated(payload) => exit_code = payload.code,
-            CommandEvent::Error(error) => {
-                let failure = sidecar_error(&operation, "SIDECAR_IO", error, true);
-                let _ = child.kill();
-                return Err(failure);
+            CommandEvent::Terminated(_) | CommandEvent::Error(_) => {
+                return Err(runtime_start_error());
             }
             _ => {}
         }
-    }
+    };
+    *state.child.lock().map_err(|_| runtime_state_error())? = Some(child);
+    *state.startup.lock().map_err(|_| runtime_state_error())? = Some(startup.clone());
+    tauri::async_runtime::spawn(async move { while events.recv().await.is_some() {} });
+    Ok(startup)
+}
 
-    parse_sidecar_output(exit_code, &stdout, &[], &operation)
+#[tauri::command]
+fn manager_runtime_stop(state: State<'_, ManagerRuntimeState>) -> Result<(), ManagerRpcError> {
+    stop_manager_runtime(&state)
+}
+
+fn stop_manager_runtime(state: &ManagerRuntimeState) -> Result<(), ManagerRpcError> {
+    if let Some(child) = state
+        .child
+        .lock()
+        .map_err(|_| runtime_state_error())?
+        .take()
+    {
+        child.kill().map_err(|_| {
+            update_error(
+                "RUNTIME_STOP_FAILED",
+                "Reglet could not stop the local Manager runtime.",
+            )
+        })?;
+    }
+    *state.startup.lock().map_err(|_| runtime_state_error())? = None;
+    Ok(())
+}
+
+fn validate_runtime_startup(startup: &ManagerRuntimeStartup) -> Result<(), ManagerRpcError> {
+    let manager_prefix = format!("{}/manager/#pair=", startup.url);
+    if startup.version != 1
+        || !startup.listening
+        || startup.protocol_version != 2
+        || startup.remote
+        || !startup.url.starts_with("http://127.0.0.1:")
+        || !startup.manager_url.starts_with(&manager_prefix)
+        || startup.manager_url.len() <= manager_prefix.len()
+    {
+        return Err(runtime_start_error());
+    }
+    Ok(())
+}
+
+fn runtime_start_error() -> ManagerRpcError {
+    update_error(
+        "RUNTIME_START_FAILED",
+        "Reglet could not start a safe loopback Manager runtime.",
+    )
+}
+
+fn runtime_state_error() -> ManagerRpcError {
+    update_error(
+        "RUNTIME_STATE_FAILED",
+        "Reglet could not access local Manager runtime state.",
+    )
 }
 
 #[tauri::command]
@@ -303,6 +308,7 @@ fn user_home() -> Option<PathBuf> {
 
 pub fn run() {
     tauri::Builder::default()
+        .manage(ManagerRuntimeState::default())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -343,116 +349,21 @@ pub fn run() {
             app.set_menu(menu)?;
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if matches!(event, WindowEvent::Destroyed) && window.label() == "main" {
+                let state = window.state::<ManagerRuntimeState>();
+                let _ = stop_manager_runtime(&state);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
-            manager_rpc,
+            manager_runtime_start,
+            manager_runtime_stop,
             check_for_updates,
             open_release,
             open_file_location
         ])
         .run(tauri::generate_context!())
         .expect("error while running Reglet desktop");
-}
-
-fn parse_sidecar_output(
-    exit_code: Option<i32>,
-    stdout: &[u8],
-    _stderr: &[u8],
-    expected_operation: &str,
-) -> Result<Value, ManagerRpcFailure> {
-    if exit_code != Some(0) {
-        return Err(bridge_error(
-            expected_operation,
-            "SIDECAR_FAILED",
-            &format!(
-                "Reglet sidecar exited with status {}. Diagnostic output was redacted.",
-                exit_code.map_or_else(|| "unknown".to_string(), |code| code.to_string())
-            ),
-            true,
-        ));
-    }
-
-    let output = std::str::from_utf8(stdout).map_err(|_| {
-        bridge_error(
-            expected_operation,
-            "MALFORMED_RESPONSE",
-            "Reglet sidecar stdout was not UTF-8.",
-            true,
-        )
-    })?;
-    let parsed: Value = serde_json::from_str(output.trim()).map_err(|_| {
-        bridge_error(
-            expected_operation,
-            "MALFORMED_RESPONSE",
-            "Reglet sidecar returned malformed JSON.",
-            true,
-        )
-    })?;
-    if is_valid_rpc_response(&parsed, expected_operation) {
-        Ok(parsed)
-    } else {
-        Err(bridge_error(
-            expected_operation,
-            "MALFORMED_RESPONSE",
-            "Reglet sidecar returned an invalid RPC envelope.",
-            true,
-        ))
-    }
-}
-
-fn is_valid_rpc_response(value: &Value, expected_operation: &str) -> bool {
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-    if object.get("protocolVersion").and_then(Value::as_u64) != Some(1)
-        || object.get("operation").and_then(Value::as_str) != Some(expected_operation)
-    {
-        return false;
-    }
-    match object.get("ok").and_then(Value::as_bool) {
-        Some(true) => object.contains_key("result") && !object.contains_key("error"),
-        Some(false) => {
-            let Some(error) = object.get("error").and_then(Value::as_object) else {
-                return false;
-            };
-            !object.contains_key("result")
-                && error.get("code").and_then(Value::as_str).is_some()
-                && error.get("message").and_then(Value::as_str).is_some()
-                && error.get("recoverable").and_then(Value::as_bool).is_some()
-        }
-        None => false,
-    }
-}
-
-fn sidecar_error(
-    operation: &str,
-    code: &str,
-    error: impl std::fmt::Display,
-    recoverable: bool,
-) -> ManagerRpcFailure {
-    bridge_error(
-        operation,
-        code,
-        &format!("The Reglet sidecar could not complete the request: {error}"),
-        recoverable,
-    )
-}
-
-fn bridge_error(
-    operation: &str,
-    code: &str,
-    message: &str,
-    recoverable: bool,
-) -> ManagerRpcFailure {
-    ManagerRpcFailure {
-        protocol_version: 1,
-        operation: operation.to_string(),
-        ok: false,
-        error: ManagerRpcError {
-            code: code.to_string(),
-            message: redact_error_text(message),
-            recoverable,
-        },
-    }
 }
 
 fn update_error(code: &str, message: &str) -> ManagerRpcError {
@@ -463,81 +374,9 @@ fn update_error(code: &str, message: &str) -> ManagerRpcError {
     }
 }
 
-fn redact_error_text(message: &str) -> String {
-    let mut clean = message.replace('\\', "/");
-    let home = std::env::var("HOME").unwrap_or_default().replace('\\', "/");
-    if !home.is_empty() {
-        clean = clean.replace(&home, "~");
-    }
-    if contains_secret_marker(&clean) {
-        return "Reglet suppressed diagnostic text that may contain a secret.".to_string();
-    }
-    clean.chars().take(MAX_ERROR_CHARS).collect()
-}
-
-fn contains_secret_marker(message: &str) -> bool {
-    let upper = message.to_ascii_uppercase();
-    [
-        "SECRET",
-        "TOKEN",
-        "PASSWORD",
-        "PRIVATE",
-        "CREDENTIAL",
-        "API_KEY",
-        "API-KEY",
-    ]
-    .iter()
-    .any(|marker| upper.contains(marker))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn production_command_is_the_bundled_manager_rpc_sidecar_only() {
-        assert_eq!(SIDECAR_NAME, "reglet");
-        assert_eq!(
-            FIXED_ARGS,
-            ["manager", "rpc", "--json", "--protocol-version=1"]
-        );
-    }
-
-    #[test]
-    fn accepts_only_matching_typed_envelopes() {
-        let valid = br#"{"protocolVersion":1,"operation":"snapshot","ok":true,"result":{}}"#;
-        assert!(parse_sidecar_output(Some(0), valid, b"", "snapshot").is_ok());
-
-        let wrong_operation = br#"{"protocolVersion":1,"operation":"scan","ok":true,"result":{}}"#;
-        let error = parse_sidecar_output(Some(0), wrong_operation, b"", "snapshot")
-            .expect_err("operation mismatch");
-        assert_eq!(error.error.code, "MALFORMED_RESPONSE");
-    }
-
-    #[test]
-    fn malformed_stdout_becomes_a_typed_error() {
-        let error =
-            parse_sidecar_output(Some(0), b"not json", b"", "snapshot").expect_err("malformed");
-        assert_eq!(error.error.code, "MALFORMED_RESPONSE");
-        assert!(error.error.recoverable);
-    }
-
-    #[test]
-    fn nonzero_stderr_is_never_returned_to_the_frontend() {
-        let error = parse_sidecar_output(Some(7), b"", b"MY_SECRET_TOKEN=secret-value", "snapshot")
-            .expect_err("failure");
-        assert_eq!(error.error.code, "SIDECAR_FAILED");
-        assert!(!error.error.message.contains("secret-value"));
-        assert!(!error.error.message.contains("MY_SECRET_TOKEN"));
-    }
-
-    #[test]
-    fn diagnostics_with_secret_markers_fail_closed() {
-        assert_eq!(
-            redact_error_text("API_KEY=example"),
-            "Reglet suppressed diagnostic text that may contain a secret."
-        );
-    }
 
     #[test]
     fn build_version_is_semver() {

@@ -544,7 +544,7 @@ function isInside(candidate: string, root: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
-function hasValidSkillFrontmatter(content: string): { ok: boolean; issues: string[] } {
+export function hasValidSkillFrontmatter(content: string): { ok: boolean; issues: string[] } {
   if (!content.startsWith('---\n')) return { ok: true, issues: [] };
   const end = content.indexOf('\n---', 4);
   if (end < 0) return { ok: false, issues: ['frontmatter is not closed'] };

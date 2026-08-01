@@ -1,6 +1,9 @@
-export const managerProtocolVersion = 1 as const;
+export const managerProtocolVersion = 2 as const;
+export const legacyManagerProtocolVersion = 1 as const;
+export const managerProtocolVersions = [legacyManagerProtocolVersion, managerProtocolVersion] as const;
 
 export * from './snapshot-v2.js';
+export * from './snapshot-v3.js';
 export * from './sync.js';
 import {
   isManagerSnapshotV2,
@@ -8,8 +11,14 @@ import {
   type ManagerProviderId,
   type ManagerSnapshotV2,
 } from './snapshot-v2.js';
+import {
+  isManagerSnapshotV3,
+  type ManagerArtifactKind,
+  type ManagerSessionScope,
+  type ManagerSnapshotV3,
+} from './snapshot-v3.js';
 
-export const managerProtocolOperations = [
+export const managerProtocolV1Operations = [
   'snapshot',
   'scan',
   'plan',
@@ -59,6 +68,60 @@ export const managerProtocolOperations = [
   'sync.disconnect',
 ] as const;
 
+export const managerProtocolOperations = [
+  ...managerProtocolV1Operations,
+  'library.list',
+  'library.show',
+  'library.create',
+  'library.duplicate',
+  'library.save',
+  'library.rename',
+  'library.archive',
+  'library.restore',
+  'library.delete',
+  'library.targets',
+  'provider.list',
+  'provider.effective',
+  'provider.preview',
+  'provider.apply',
+  'provider.restore',
+  'provider.purge-backups',
+  'project.root.add',
+  'project.root.remove',
+  'project.root.list',
+  'project.scan',
+  'project.discoveries',
+  'project.ignore',
+  'project.promotion-preview',
+  'project.promote',
+  'skill.inspect',
+  'skill.trust',
+  'secret.set',
+  'secret.delete',
+  'secret.status',
+  'history.list',
+  'history.undo',
+  'activity.list',
+  'search',
+  'sync.configure',
+  'sync.disable',
+  'sync.status',
+  'sync.now',
+  'sync.resolve',
+  'remote.enable',
+  'remote.disable',
+  'remote.status',
+  'session.pair',
+  'session.list',
+  'session.revoke',
+  'diagnostics',
+  'external.open',
+  'external.reveal',
+  'migration.preview',
+  'migration.apply',
+  'migration.status',
+] as const;
+
 export const managerProtocolErrorCodes = [
   'MALFORMED_REQUEST',
   'UNKNOWN_PROTOCOL_VERSION',
@@ -67,9 +130,19 @@ export const managerProtocolErrorCodes = [
   'STALE_PLAN',
   'OPERATION_FAILED',
   'INTERNAL_ERROR',
+  'UNSUPPORTED_VERSION',
+  'REVISION_CONFLICT',
+  'AUTHENTICATION_REQUIRED',
+  'PERMISSION_DENIED',
+  'BLOCKED_PROJECTION',
+  'DRIFT_CONFLICT',
+  'MIGRATION_REQUIRED',
+  'NOT_FOUND',
+  'RATE_LIMITED',
 ] as const;
 
-export type ManagerProtocolVersion = typeof managerProtocolVersion;
+export type ManagerProtocolVersion = (typeof managerProtocolVersions)[number];
+export type ManagerProtocolV1Operation = (typeof managerProtocolV1Operations)[number];
 export type ManagerProtocolOperation = (typeof managerProtocolOperations)[number];
 export type ManagerProtocolErrorCode = (typeof managerProtocolErrorCodes)[number];
 export type ManagerScopeKind = 'shared' | 'provider';
@@ -85,7 +158,7 @@ export type ProviderContentSelectionInput = JsonObject & {
 };
 
 export type SnapshotInput = JsonObject & {
-  contractVersion?: 1 | 2;
+  contractVersion?: 1 | 2 | 3;
 };
 
 export type OnboardInput = ProviderContentSelectionInput & {
@@ -205,6 +278,75 @@ export type SyncDeviceRenameInput = JsonObject & { deviceId: string; name: strin
 export type SyncDeviceRevokeInput = JsonObject & { deviceId: string };
 export type SyncDisconnectInput = JsonObject & { localOnly?: boolean };
 
+export type ArtifactReferenceInput = JsonObject & { artifact: string };
+export type LibraryListInput = JsonObject & {
+  kind?: ManagerArtifactKind;
+  lifecycle?: 'active' | 'archived';
+};
+export type LibraryCreateInput = JsonObject & {
+  kind: ManagerArtifactKind;
+  slug: string;
+  title: string;
+  content: string;
+  description?: string;
+  tags?: string[];
+  targets?: ManagerProviderId[];
+  scope?: JsonObject;
+};
+export type LibrarySaveInput = ArtifactReferenceInput & { content: string };
+export type LibraryRenameInput = ArtifactReferenceInput & { slug: string };
+export type ConfirmedArtifactInput = ArtifactReferenceInput & { confirmed: boolean };
+export type LibraryTargetsInput = ArtifactReferenceInput & { targets: ManagerProviderId[] };
+export type ProviderArtifactInput = ArtifactReferenceInput & { provider: ManagerProviderId };
+export type ProviderApplyInput = JsonObject & {
+  batchDigest: string;
+  unitDigests?: Record<string, string>;
+  providers?: ManagerProviderId[];
+  artifacts?: string[];
+  confirmDrift?: boolean;
+};
+export type ProviderRestoreInput = JsonObject & { provider?: ManagerProviderId; confirmed: boolean };
+export type ProviderPurgeBackupsInput = JsonObject & { provider: ManagerProviderId; confirmed: boolean };
+export type ProjectRootAddInput = JsonObject & { path: string; label?: string };
+export type ProjectRootRemoveInput = JsonObject & { rootId: string; confirmed: boolean };
+export type ProjectScanInput = JsonObject & { rootId?: string; reappearChangedIgnored?: boolean };
+export type ProjectDiscoveriesInput = JsonObject & {
+  rootId?: string;
+  state?: 'new' | 'changed' | 'promoted' | 'conflict' | 'ignored';
+};
+export type DiscoveryInput = JsonObject & { discoveryId: string };
+export type PromotionPreviewInput = DiscoveryInput & {
+  mode?: 'global-instruction' | 'convert-to-skill' | 'disabled-draft';
+};
+export type PromoteInput = PromotionPreviewInput & {
+  targets?: ManagerProviderId[];
+  confirmExecutables?: boolean;
+  destinationArtifact?: string;
+  selectedHunks?: string[];
+  selectedFiles?: string[];
+  serverName?: string;
+};
+export type SkillTrustInput = ArtifactReferenceInput & { confirmed: boolean };
+export type SecretSetInput = JsonObject & { id: string; value: string };
+export type SecretIdInput = JsonObject & { id: string };
+export type HistoryUndoInput = ArtifactReferenceInput & { revision?: string; confirmed: boolean };
+export type ActivityListInput = JsonObject & { limit?: number };
+export type SearchInput = JsonObject & { query: string; limit?: number };
+export type SyncConfigureInput = JsonObject & { serverUrl: string };
+export type SyncResolveInput = JsonObject & { path: string; choice: 'ours' | 'theirs' };
+export type RemoteEnableInput = JsonObject & { endpoint: string };
+export type SessionPairInput = JsonObject & { scope: ManagerSessionScope };
+export type SessionRevokeInput = JsonObject & { sessionId: string };
+export type ExternalTargetInput = JsonObject & {
+  kind: 'canonical' | 'provider' | 'project';
+  artifact?: string;
+  provider?: ManagerProviderId;
+  content?: ManagerContentId;
+  discoveryId?: string;
+};
+export type ExternalInput = JsonObject & { target: ExternalTargetInput };
+export type MigrationApplyInput = JsonObject & { yes: boolean; previewDigest: string };
+
 export interface ManagerRpcInputs {
   snapshot: SnapshotInput;
   scan: JsonObject;
@@ -253,6 +395,56 @@ export interface ManagerRpcInputs {
   'sync.device.rename': SyncDeviceRenameInput;
   'sync.device.revoke': SyncDeviceRevokeInput;
   'sync.disconnect': SyncDisconnectInput;
+  'library.list': LibraryListInput;
+  'library.show': ArtifactReferenceInput;
+  'library.create': LibraryCreateInput;
+  'library.duplicate': ArtifactReferenceInput;
+  'library.save': LibrarySaveInput;
+  'library.rename': LibraryRenameInput;
+  'library.archive': ArtifactReferenceInput;
+  'library.restore': ArtifactReferenceInput;
+  'library.delete': ConfirmedArtifactInput;
+  'library.targets': LibraryTargetsInput;
+  'provider.list': JsonObject;
+  'provider.effective': ProviderInput;
+  'provider.preview': ProviderArtifactInput;
+  'provider.apply': ProviderApplyInput;
+  'provider.restore': ProviderRestoreInput;
+  'provider.purge-backups': ProviderPurgeBackupsInput;
+  'project.root.add': ProjectRootAddInput;
+  'project.root.remove': ProjectRootRemoveInput;
+  'project.root.list': JsonObject;
+  'project.scan': ProjectScanInput;
+  'project.discoveries': ProjectDiscoveriesInput;
+  'project.ignore': DiscoveryInput;
+  'project.promotion-preview': PromotionPreviewInput;
+  'project.promote': PromoteInput;
+  'skill.inspect': ArtifactReferenceInput;
+  'skill.trust': SkillTrustInput;
+  'secret.set': SecretSetInput;
+  'secret.delete': SecretIdInput;
+  'secret.status': SecretIdInput;
+  'history.list': ArtifactReferenceInput;
+  'history.undo': HistoryUndoInput;
+  'activity.list': ActivityListInput;
+  search: SearchInput;
+  'sync.configure': SyncConfigureInput;
+  'sync.disable': JsonObject;
+  'sync.status': JsonObject;
+  'sync.now': JsonObject;
+  'sync.resolve': SyncResolveInput;
+  'remote.enable': RemoteEnableInput;
+  'remote.disable': JsonObject;
+  'remote.status': JsonObject;
+  'session.pair': SessionPairInput;
+  'session.list': JsonObject;
+  'session.revoke': SessionRevokeInput;
+  diagnostics: JsonObject;
+  'external.open': ExternalInput;
+  'external.reveal': ExternalInput;
+  'migration.preview': JsonObject;
+  'migration.apply': MigrationApplyInput;
+  'migration.status': JsonObject;
 }
 
 export type ManagerRpcRequestFor<Operation extends ManagerProtocolOperation> = {
@@ -300,7 +492,7 @@ export const requestEnvelopeSchema: JsonObject = {
   additionalProperties: false,
   required: ['protocolVersion', 'operation'],
   properties: {
-    protocolVersion: { const: managerProtocolVersion },
+    protocolVersion: { enum: [...managerProtocolVersions] },
     operation: { enum: [...managerProtocolOperations] },
     input: {},
   },
@@ -313,7 +505,7 @@ export const responseEnvelopeSchema: JsonObject = {
       additionalProperties: false,
       required: ['protocolVersion', 'operation', 'ok', 'result'],
       properties: {
-        protocolVersion: { const: managerProtocolVersion },
+        protocolVersion: { enum: [...managerProtocolVersions] },
         operation: { enum: [...managerProtocolOperations] },
         ok: { const: true },
         result: {},
@@ -324,7 +516,7 @@ export const responseEnvelopeSchema: JsonObject = {
       additionalProperties: false,
       required: ['protocolVersion', 'operation', 'ok', 'error'],
       properties: {
-        protocolVersion: { const: managerProtocolVersion },
+        protocolVersion: { enum: [...managerProtocolVersions] },
         operation: { anyOf: [{ enum: [...managerProtocolOperations] }, { const: 'unknown' }] },
         ok: { const: false },
         error: {
@@ -352,7 +544,7 @@ const scopedProperties: JsonObject = {
 };
 
 export const operationInputSchemas: Record<ManagerProtocolOperation, JsonObject> = {
-  snapshot: objectSchema({ contractVersion: { enum: [1, 2] } }),
+  snapshot: objectSchema({ contractVersion: { enum: [1, 2, 3] } }),
   scan: objectSchema({}),
   plan: objectSchema(providerSelectionProperties),
   onboard: objectSchema({ ...providerSelectionProperties, stageOnly: { type: 'boolean' } }),
@@ -403,6 +595,85 @@ export const operationInputSchemas: Record<ManagerProtocolOperation, JsonObject>
   'sync.device.rename': objectSchema({ deviceId: { type: 'string' }, name: { type: 'string' } }, ['deviceId', 'name']),
   'sync.device.revoke': objectSchema({ deviceId: { type: 'string' } }, ['deviceId']),
   'sync.disconnect': objectSchema({ localOnly: { type: 'boolean' } }),
+  'library.list': objectSchema({ kind: { enum: ['instruction', 'skill', 'mcp'] }, lifecycle: { enum: ['active', 'archived'] } }),
+  'library.show': objectSchema({ artifact: { type: 'string' } }, ['artifact']),
+  'library.create': objectSchema({
+    kind: { enum: ['instruction', 'skill', 'mcp'] },
+    slug: { type: 'string' },
+    title: { type: 'string' },
+    content: { type: 'string' },
+    description: { type: 'string' },
+    tags: { type: 'array', items: { type: 'string' } },
+    targets: { type: 'array', items: { enum: providerIds } },
+    scope: {
+      oneOf: [
+        objectSchema({ kind: { const: 'global' } }, ['kind']),
+        objectSchema({ kind: { const: 'provider-overlay' }, provider: { enum: providerIds } }, ['kind', 'provider']),
+      ],
+    },
+  }, ['kind', 'slug', 'title', 'content']),
+  'library.duplicate': objectSchema({ artifact: { type: 'string' } }, ['artifact']),
+  'library.save': objectSchema({ artifact: { type: 'string' }, content: { type: 'string' } }, ['artifact', 'content']),
+  'library.rename': objectSchema({ artifact: { type: 'string' }, slug: { type: 'string' } }, ['artifact', 'slug']),
+  'library.archive': objectSchema({ artifact: { type: 'string' } }, ['artifact']),
+  'library.restore': objectSchema({ artifact: { type: 'string' } }, ['artifact']),
+  'library.delete': objectSchema({ artifact: { type: 'string' }, confirmed: { type: 'boolean' } }, ['artifact', 'confirmed']),
+  'library.targets': objectSchema({ artifact: { type: 'string' }, targets: { type: 'array', items: { enum: providerIds } } }, ['artifact', 'targets']),
+  'provider.list': objectSchema({}),
+  'provider.effective': objectSchema({ provider: { enum: providerIds } }, ['provider']),
+  'provider.preview': objectSchema({ artifact: { type: 'string' }, provider: { enum: providerIds } }, ['artifact', 'provider']),
+  'provider.apply': objectSchema({
+    batchDigest: { type: 'string' },
+    unitDigests: { type: 'object', additionalProperties: { type: 'string' } },
+    providers: { type: 'array', items: { enum: providerIds } },
+    artifacts: { type: 'array', items: { type: 'string' } },
+    confirmDrift: { type: 'boolean' },
+  }, ['batchDigest']),
+  'provider.restore': objectSchema({ provider: { enum: providerIds }, confirmed: { type: 'boolean' } }, ['confirmed']),
+  'provider.purge-backups': objectSchema({ provider: { enum: providerIds }, confirmed: { type: 'boolean' } }, ['provider', 'confirmed']),
+  'project.root.add': objectSchema({ path: { type: 'string' }, label: { type: 'string' } }, ['path']),
+  'project.root.remove': objectSchema({ rootId: { type: 'string' }, confirmed: { type: 'boolean' } }, ['rootId', 'confirmed']),
+  'project.root.list': objectSchema({}),
+  'project.scan': objectSchema({ rootId: { type: 'string' }, reappearChangedIgnored: { type: 'boolean' } }),
+  'project.discoveries': objectSchema({ rootId: { type: 'string' }, state: { enum: ['new', 'changed', 'promoted', 'conflict', 'ignored'] } }),
+  'project.ignore': objectSchema({ discoveryId: { type: 'string' } }, ['discoveryId']),
+  'project.promotion-preview': objectSchema({ discoveryId: { type: 'string' }, mode: { enum: ['global-instruction', 'convert-to-skill', 'disabled-draft'] } }, ['discoveryId']),
+  'project.promote': objectSchema({
+    discoveryId: { type: 'string' },
+    mode: { enum: ['global-instruction', 'convert-to-skill', 'disabled-draft'] },
+    targets: { type: 'array', items: { enum: providerIds } },
+    confirmExecutables: { type: 'boolean' },
+    destinationArtifact: { type: 'string' },
+    selectedHunks: { type: 'array', items: { type: 'string' } },
+    selectedFiles: { type: 'array', items: { type: 'string' } },
+    serverName: { type: 'string' },
+  }, ['discoveryId']),
+  'skill.inspect': objectSchema({ artifact: { type: 'string' } }, ['artifact']),
+  'skill.trust': objectSchema({ artifact: { type: 'string' }, confirmed: { type: 'boolean' } }, ['artifact', 'confirmed']),
+  'secret.set': objectSchema({ id: { type: 'string' }, value: { type: 'string' } }, ['id', 'value']),
+  'secret.delete': objectSchema({ id: { type: 'string' } }, ['id']),
+  'secret.status': objectSchema({ id: { type: 'string' } }, ['id']),
+  'history.list': objectSchema({ artifact: { type: 'string' } }, ['artifact']),
+  'history.undo': objectSchema({ artifact: { type: 'string' }, revision: { type: 'string' }, confirmed: { type: 'boolean' } }, ['artifact', 'confirmed']),
+  'activity.list': objectSchema({ limit: { type: 'integer', minimum: 1, maximum: 1_000 } }),
+  search: objectSchema({ query: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 1_000 } }, ['query']),
+  'sync.configure': objectSchema({ serverUrl: { type: 'string' } }, ['serverUrl']),
+  'sync.disable': objectSchema({}),
+  'sync.status': objectSchema({}),
+  'sync.now': objectSchema({}),
+  'sync.resolve': objectSchema({ path: { type: 'string' }, choice: { enum: ['ours', 'theirs'] } }, ['path', 'choice']),
+  'remote.enable': objectSchema({ endpoint: { type: 'string' } }, ['endpoint']),
+  'remote.disable': objectSchema({}),
+  'remote.status': objectSchema({}),
+  'session.pair': objectSchema({ scope: { enum: ['read', 'write', 'admin'] } }, ['scope']),
+  'session.list': objectSchema({}),
+  'session.revoke': objectSchema({ sessionId: { type: 'string' } }, ['sessionId']),
+  diagnostics: objectSchema({}),
+  'external.open': externalInputSchema(),
+  'external.reveal': externalInputSchema(),
+  'migration.preview': objectSchema({}),
+  'migration.apply': objectSchema({ yes: { const: true }, previewDigest: { type: 'string' } }, ['yes', 'previewDigest']),
+  'migration.status': objectSchema({}),
 };
 
 export const managerRpcRequestValidator: RuntimeValidator<ManagerRpcRequest> = {
@@ -443,8 +714,49 @@ export const managerSnapshotV2DtoValidator: RuntimeValidator<ManagerSnapshotV2> 
   validate: isManagerSnapshotV2,
 };
 
+export const managerSnapshotV3DtoValidator: RuntimeValidator<ManagerSnapshotV3> = {
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    required: [
+      'version',
+      'contract',
+      'protocolVersion',
+      'revision',
+      'permissions',
+      'library',
+      'providers',
+      'activity',
+      'settings',
+      'diagnostics',
+    ],
+    properties: {
+      version: { const: 3 },
+      contract: { const: 'manager-snapshot' },
+      protocolVersion: { const: 2 },
+      revision: { type: 'integer', minimum: 0 },
+      permissions: { type: 'object' },
+      library: { type: 'object' },
+      providers: { type: 'array' },
+      projectInbox: { type: 'object' },
+      activity: { type: 'array' },
+      settings: { type: 'object' },
+      diagnostics: { type: 'object' },
+    },
+  },
+  validate: isManagerSnapshotV3,
+};
+
 export function isManagerProtocolOperation(value: unknown): value is ManagerProtocolOperation {
   return typeof value === 'string' && managerProtocolOperations.includes(value as ManagerProtocolOperation);
+}
+
+export function isManagerProtocolV1Operation(value: unknown): value is ManagerProtocolV1Operation {
+  return typeof value === 'string' && managerProtocolV1Operations.includes(value as ManagerProtocolV1Operation);
+}
+
+export function isManagerProtocolVersion(value: unknown): value is ManagerProtocolVersion {
+  return value === legacyManagerProtocolVersion || value === managerProtocolVersion;
 }
 
 export function isManagerProtocolErrorCode(value: unknown): value is ManagerProtocolErrorCode {
@@ -482,22 +794,27 @@ export function isManagerRpcEnvelope(value: unknown): value is {
   input?: JsonObject;
 } {
   if (!isRecord(value)) return false;
-  return value.protocolVersion === managerProtocolVersion &&
-    isManagerProtocolOperation(value.operation) &&
-    hasOnlyKeys(value, ['protocolVersion', 'operation', 'input']) &&
+  if (!isManagerProtocolVersion(value.protocolVersion) ||
+    !isManagerProtocolOperation(value.operation) ||
+    (value.protocolVersion === legacyManagerProtocolVersion && !isManagerProtocolV1Operation(value.operation))) {
+    return false;
+  }
+  return hasOnlyKeys(value, ['protocolVersion', 'operation', 'input']) &&
     (value.input === undefined || isJsonObject(value.input));
 }
 
 export function isManagerRpcResponse(value: unknown): value is ManagerRpcResponse {
   if (!isRecord(value)) return false;
-  if (value.protocolVersion !== managerProtocolVersion) return false;
+  if (!isManagerProtocolVersion(value.protocolVersion)) return false;
+  const isValidOperation = isManagerProtocolOperation(value.operation) &&
+    (value.protocolVersion === managerProtocolVersion || isManagerProtocolV1Operation(value.operation));
   if (value.ok === true) {
     return hasOnlyKeys(value, ['protocolVersion', 'operation', 'ok', 'result']) &&
-      isManagerProtocolOperation(value.operation) && isJsonValue(value.result);
+      isValidOperation && isJsonValue(value.result);
   }
   if (value.ok !== false) return false;
   if (!hasOnlyKeys(value, ['protocolVersion', 'operation', 'ok', 'error'])) return false;
-  if (!(isManagerProtocolOperation(value.operation) || value.operation === 'unknown')) return false;
+  if (!(isValidOperation || value.operation === 'unknown')) return false;
   if (!isRecord(value.error)) return false;
   return hasOnlyKeys(value.error, ['code', 'message', 'recoverable']) &&
     isManagerProtocolErrorCode(value.error.code) &&
@@ -508,9 +825,10 @@ export function isManagerRpcResponse(value: unknown): value is ManagerRpcRespons
 export function successResponse(
   operation: ManagerProtocolOperation,
   result: JsonValue,
+  protocolVersion: ManagerProtocolVersion = managerProtocolVersion,
 ): ManagerRpcSuccessResponse {
   return {
-    protocolVersion: managerProtocolVersion,
+    protocolVersion,
     operation,
     ok: true,
     result,
@@ -522,9 +840,10 @@ export function failureResponse(
   code: ManagerProtocolErrorCode,
   message: string,
   recoverable: boolean,
+  protocolVersion: ManagerProtocolVersion = managerProtocolVersion,
 ): ManagerRpcFailureResponse {
   return {
-    protocolVersion: managerProtocolVersion,
+    protocolVersion,
     operation,
     ok: false,
     error: { code, message, recoverable },
@@ -547,7 +866,8 @@ function objectSchema(properties: JsonObject, required: string[] = []): JsonObje
 function isOperationInput(operation: ManagerProtocolOperation, input: JsonObject): boolean {
   switch (operation) {
     case 'snapshot':
-      return exact(input, ['contractVersion']) && (input.contractVersion === undefined || input.contractVersion === 1 || input.contractVersion === 2);
+      return exact(input, ['contractVersion']) &&
+        (input.contractVersion === undefined || input.contractVersion === 1 || input.contractVersion === 2 || input.contractVersion === 3);
     case 'scan':
     case 'status':
     case 'rules.list':
@@ -559,6 +879,17 @@ function isOperationInput(operation: ManagerProtocolOperation, input: JsonObject
     case 'sync.pair.status':
     case 'sync.pair.cancel':
     case 'sync.run':
+    case 'provider.list':
+    case 'project.root.list':
+    case 'sync.disable':
+    case 'sync.status':
+    case 'sync.now':
+    case 'remote.disable':
+    case 'remote.status':
+    case 'session.list':
+    case 'diagnostics':
+    case 'migration.preview':
+    case 'migration.status':
       return exact(input, []);
     case 'plan':
     case 'structured-preview.preview':
@@ -634,6 +965,96 @@ function isOperationInput(operation: ManagerProtocolOperation, input: JsonObject
       return exact(input, ['deviceId']) && typeof input.deviceId === 'string';
     case 'sync.disconnect':
       return exact(input, ['localOnly']) && optionalBoolean(input.localOnly);
+    case 'library.list':
+      return exact(input, ['kind', 'lifecycle']) && optionalArtifactKind(input.kind) &&
+        (input.lifecycle === undefined || input.lifecycle === 'active' || input.lifecycle === 'archived');
+    case 'library.show':
+    case 'library.duplicate':
+    case 'library.archive':
+    case 'library.restore':
+    case 'skill.inspect':
+    case 'history.list':
+      return isArtifactReference(input);
+    case 'library.create':
+      return exact(input, ['kind', 'slug', 'title', 'content', 'description', 'tags', 'targets', 'scope']) &&
+        isArtifactKind(input.kind) && typeof input.slug === 'string' && typeof input.title === 'string' &&
+        typeof input.content === 'string' && optionalString(input.description) && optionalStringArray(input.tags) &&
+        optionalProviderArray(input.targets) && (input.scope === undefined || isArtifactScope(input.scope));
+    case 'library.save':
+      return exact(input, ['artifact', 'content']) && typeof input.artifact === 'string' && typeof input.content === 'string';
+    case 'library.rename':
+      return exact(input, ['artifact', 'slug']) && typeof input.artifact === 'string' && typeof input.slug === 'string';
+    case 'library.delete':
+    case 'skill.trust':
+      return exact(input, ['artifact', 'confirmed']) && typeof input.artifact === 'string' && typeof input.confirmed === 'boolean';
+    case 'library.targets':
+      return exact(input, ['artifact', 'targets']) && typeof input.artifact === 'string' && isProviderArray(input.targets);
+    case 'provider.effective':
+      return exact(input, ['provider']) && isProvider(input.provider);
+    case 'provider.preview':
+      return exact(input, ['artifact', 'provider']) && typeof input.artifact === 'string' && isProvider(input.provider);
+    case 'provider.apply':
+      return exact(input, ['batchDigest', 'unitDigests', 'providers', 'artifacts', 'confirmDrift']) &&
+        typeof input.batchDigest === 'string' && optionalStringRecord(input.unitDigests) &&
+        optionalProviderArray(input.providers) && optionalStringArray(input.artifacts) && optionalBoolean(input.confirmDrift);
+    case 'provider.restore':
+      return exact(input, ['provider', 'confirmed']) && optionalProvider(input.provider) && typeof input.confirmed === 'boolean';
+    case 'provider.purge-backups':
+      return exact(input, ['provider', 'confirmed']) && isProvider(input.provider) && typeof input.confirmed === 'boolean';
+    case 'project.root.add':
+      return exact(input, ['path', 'label']) && typeof input.path === 'string' && optionalString(input.label);
+    case 'project.root.remove':
+      return exact(input, ['rootId', 'confirmed']) && typeof input.rootId === 'string' && typeof input.confirmed === 'boolean';
+    case 'project.scan':
+      return exact(input, ['rootId', 'reappearChangedIgnored']) && optionalString(input.rootId) && optionalBoolean(input.reappearChangedIgnored);
+    case 'project.discoveries':
+      return exact(input, ['rootId', 'state']) && optionalString(input.rootId) && optionalDiscoveryState(input.state);
+    case 'project.ignore':
+      return isDiscoveryReference(input);
+    case 'project.promotion-preview':
+      return exact(input, ['discoveryId', 'mode']) && typeof input.discoveryId === 'string' && optionalPromotionMode(input.mode);
+    case 'project.promote':
+      return exact(input, [
+        'discoveryId',
+        'mode',
+        'targets',
+        'confirmExecutables',
+        'destinationArtifact',
+        'selectedHunks',
+        'selectedFiles',
+        'serverName',
+      ]) && typeof input.discoveryId === 'string' && optionalPromotionMode(input.mode) &&
+        optionalProviderArray(input.targets) && optionalBoolean(input.confirmExecutables) &&
+        optionalString(input.destinationArtifact) && optionalStringArray(input.selectedHunks) &&
+        optionalStringArray(input.selectedFiles) && optionalString(input.serverName);
+    case 'secret.set':
+      return exact(input, ['id', 'value']) && typeof input.id === 'string' && typeof input.value === 'string';
+    case 'secret.delete':
+    case 'secret.status':
+      return exact(input, ['id']) && typeof input.id === 'string';
+    case 'history.undo':
+      return exact(input, ['artifact', 'revision', 'confirmed']) && typeof input.artifact === 'string' &&
+        optionalString(input.revision) && typeof input.confirmed === 'boolean';
+    case 'activity.list':
+      return exact(input, ['limit']) && optionalBoundedLimit(input.limit);
+    case 'search':
+      return exact(input, ['query', 'limit']) && typeof input.query === 'string' && optionalBoundedLimit(input.limit);
+    case 'sync.configure':
+      return exact(input, ['serverUrl']) && typeof input.serverUrl === 'string';
+    case 'sync.resolve':
+      return exact(input, ['path', 'choice']) && typeof input.path === 'string' &&
+        (input.choice === 'ours' || input.choice === 'theirs');
+    case 'remote.enable':
+      return exact(input, ['endpoint']) && typeof input.endpoint === 'string';
+    case 'session.pair':
+      return exact(input, ['scope']) && (input.scope === 'read' || input.scope === 'write' || input.scope === 'admin');
+    case 'session.revoke':
+      return exact(input, ['sessionId']) && typeof input.sessionId === 'string';
+    case 'external.open':
+    case 'external.reveal':
+      return exact(input, ['target']) && isExternalTarget(input.target);
+    case 'migration.apply':
+      return exact(input, ['yes', 'previewDigest']) && input.yes === true && typeof input.previewDigest === 'string';
   }
 }
 
@@ -671,6 +1092,62 @@ function isProviderArray(value: unknown): value is ManagerProviderId[] {
   return Array.isArray(value) && value.every(isProvider);
 }
 
+function isArtifactReference(input: JsonObject): boolean {
+  return exact(input, ['artifact']) && typeof input.artifact === 'string';
+}
+
+function isDiscoveryReference(input: JsonObject): boolean {
+  return exact(input, ['discoveryId']) && typeof input.discoveryId === 'string';
+}
+
+function isArtifactKind(value: unknown): value is ManagerArtifactKind {
+  return value === 'instruction' || value === 'skill' || value === 'mcp';
+}
+
+function optionalArtifactKind(value: unknown): boolean {
+  return value === undefined || isArtifactKind(value);
+}
+
+function isArtifactScope(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return value.kind === 'global'
+    ? hasOnlyKeys(value, ['kind'])
+    : value.kind === 'provider-overlay' && hasOnlyKeys(value, ['kind', 'provider']) && isProvider(value.provider);
+}
+
+function optionalDiscoveryState(value: unknown): boolean {
+  return value === undefined || value === 'new' || value === 'changed' || value === 'promoted' || value === 'conflict' || value === 'ignored';
+}
+
+function optionalPromotionMode(value: unknown): boolean {
+  return value === undefined || value === 'global-instruction' || value === 'convert-to-skill' || value === 'disabled-draft';
+}
+
+function optionalStringArray(value: unknown): boolean {
+  return value === undefined || (Array.isArray(value) && value.every((item) => typeof item === 'string'));
+}
+
+function optionalStringRecord(value: unknown): boolean {
+  return value === undefined || (isRecord(value) && Object.values(value).every((item) => typeof item === 'string'));
+}
+
+function optionalBoundedLimit(value: unknown): boolean {
+  return value === undefined || (typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 1_000);
+}
+
+function isExternalTarget(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.kind !== 'string') return false;
+  if (value.kind === 'canonical') {
+    return hasOnlyKeys(value, ['kind', 'artifact']) && typeof value.artifact === 'string';
+  }
+  if (value.kind === 'provider') {
+    return hasOnlyKeys(value, ['kind', 'provider', 'artifact', 'content']) && isProvider(value.provider) &&
+      optionalString(value.artifact) && optionalContent(value.content) &&
+      (typeof value.artifact === 'string' || isContent(value.content));
+  }
+  return value.kind === 'project' && hasOnlyKeys(value, ['kind', 'discoveryId']) && typeof value.discoveryId === 'string';
+}
+
 function optionalProviderArray(value: unknown): boolean {
   return value === undefined || isProviderArray(value);
 }
@@ -697,4 +1174,21 @@ function optionalString(value: unknown): boolean {
 
 function optionalBoolean(value: unknown): boolean {
   return value === undefined || typeof value === 'boolean';
+}
+
+function externalInputSchema(): JsonObject {
+  return objectSchema({
+    target: {
+      oneOf: [
+        objectSchema({ kind: { const: 'canonical' }, artifact: { type: 'string' } }, ['kind', 'artifact']),
+        objectSchema({
+          kind: { const: 'provider' },
+          provider: { enum: providerIds },
+          artifact: { type: 'string' },
+          content: { enum: contentIds },
+        }, ['kind', 'provider']),
+        objectSchema({ kind: { const: 'project' }, discoveryId: { type: 'string' } }, ['kind', 'discoveryId']),
+      ],
+    },
+  }, ['target']);
 }

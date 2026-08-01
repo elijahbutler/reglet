@@ -34,6 +34,7 @@ export function isAllowedEncryptedSyncPath(filePath: string): boolean {
     return false;
   }
   if (filePath === 'mcp/servers.json') return true;
+  if (filePath === 'library.json') return true;
   if (
     segments.length === 4 &&
     segments[0] === 'mcp' &&

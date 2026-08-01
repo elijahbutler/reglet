@@ -24,6 +24,8 @@ import {
   type ActiveSyncV2State,
 } from './v2-state.js';
 import type { SyncV2DeviceSecrets, SyncV2ObjectPlaintext, StoredSyncV2Envelope } from './v2-types.js';
+import { hasLibraryManifest, loadLibraryManifest } from '../artifacts/library.js';
+import { tryMergeLibraryManifestText } from './library-merge.js';
 
 export interface SyncV2Result {
   pulled: string[];
@@ -82,6 +84,27 @@ export async function syncOnceV2(options: SyncV2OnceOptions = {}): Promise<SyncV
   return result;
 }
 
+export async function resolveSyncV2Conflict(
+  filePath: string,
+  choice: 'ours' | 'theirs',
+  home = regletHome(),
+): Promise<{ path: string; choice: 'ours' | 'theirs'; resolved: true }> {
+  const canonicalPath = requireAllowedEncryptedSyncPath(filePath);
+  const state = await loadActiveSyncV2State(home);
+  const tracked = state.files[canonicalPath];
+  if (tracked?.conflicted !== true) throw new Error(`Encrypted sync conflict does not exist: ${JSON.stringify(canonicalPath)}`);
+  const localPath = await safeLocalSyncV2Path(home, canonicalPath);
+  const conflictPath = conflictFilePath(localPath, state.deviceName);
+  if (choice === 'theirs') {
+    if (tracked.deleted === true) await rm(localPath, { recursive: true, force: true });
+    else await writePrivateFile(localPath, await readFile(conflictPath));
+  }
+  await rm(conflictPath, { force: true });
+  state.files[canonicalPath] = { ...tracked, conflicted: false };
+  await saveSyncV2State(state, home);
+  return { path: canonicalPath, choice, resolved: true };
+}
+
 async function pullEncryptedChanges(
   home: string,
   state: ActiveSyncV2State,
@@ -131,7 +154,7 @@ async function applyDecryptedChange(
   change: DecryptedChange,
   result: SyncV2Result,
 ): Promise<boolean> {
-  const filePath = requireAllowedEncryptedSyncPath(change.plaintext.canonicalPath);
+  const filePath = await requireCanonicalEncryptedSyncPath(home, change.plaintext.canonicalPath);
   const known = state.files[filePath];
   if (known !== undefined && known.objectId !== change.envelope.objectId) {
     throw new Error(`Sync rejected an object identity change for ${JSON.stringify(filePath)}`);
@@ -172,7 +195,9 @@ async function applyDecryptedChange(
     if (localHash !== null && known?.conflicted !== true) {
       const localContent = await readFile(localPath);
       const baseContent = baseHash === null ? null : await readFile(basePath);
-      const merged = tryMergeText(baseContent, localContent, change.content);
+      const merged = filePath === 'library.json'
+        ? tryMergeLibraryManifestText(baseContent, localContent, change.content)
+        : tryMergeText(baseContent, localContent, change.content);
       if (merged !== null) {
         await writePrivateFile(localPath, merged);
         await writePrivateFile(basePath, change.content);
@@ -330,12 +355,48 @@ async function recordEncryptedConflict(
 }
 
 async function collectEncryptedSyncFiles(home: string): Promise<string[]> {
+  if (await hasLibraryManifest(home)) {
+    return collectLibrarySyncFiles(home);
+  }
   const files: string[] = [];
   await collectUnder(path.join(home, 'rules'), 'rules', files);
   await collectUnder(path.join(home, 'skills'), 'skills', files);
   await collectUnder(path.join(home, 'mcp', 'providers'), 'mcp/providers', files);
   if (await pathExists(path.join(home, 'mcp', 'servers.json'))) files.push('mcp/servers.json');
   return files.sort((left, right) => left.localeCompare(right));
+}
+
+async function collectLibrarySyncFiles(home: string): Promise<string[]> {
+  const manifest = await loadLibraryManifest(home);
+  const files = new Set<string>(['library.json']);
+  for (const artifact of manifest.artifacts) {
+    if (artifact.locator.type === 'directory') {
+      const directoryFiles: string[] = [];
+      await collectUnder(
+        path.join(home, ...artifact.locator.path.split('/')),
+        artifact.locator.path,
+        directoryFiles,
+      );
+      for (const file of directoryFiles) files.add(file);
+    } else if (await pathExists(path.join(home, ...artifact.locator.path.split('/')))) {
+      files.add(requireAllowedEncryptedSyncPath(artifact.locator.path));
+    }
+  }
+  return [...files].sort((left, right) => left.localeCompare(right));
+}
+
+async function requireCanonicalEncryptedSyncPath(home: string, filePath: string): Promise<string> {
+  const allowed = requireAllowedEncryptedSyncPath(filePath);
+  if (!(await hasLibraryManifest(home)) || allowed === 'library.json') return allowed;
+  const manifest = await loadLibraryManifest(home);
+  const canonical = manifest.artifacts.some((artifact) =>
+    artifact.locator.type === 'directory'
+      ? allowed.startsWith(`${artifact.locator.path}/`)
+      : artifact.locator.path === allowed);
+  if (!canonical) {
+    throw new Error(`Sync rejected a path outside the canonical library: ${JSON.stringify(filePath)}`);
+  }
+  return allowed;
 }
 
 async function repairDerivedSyncV2Bases(home: string, state: ActiveSyncV2State): Promise<void> {

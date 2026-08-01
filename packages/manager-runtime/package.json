@@ -1,0 +1,14 @@
+{
+  "name": "@reglet/manager-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "@reglet/core": "workspace:*",
+    "@reglet/manager-application": "workspace:*",
+    "@reglet/manager-protocol": "workspace:*",
+    "hono": "^4.6.0"
+  }
+}

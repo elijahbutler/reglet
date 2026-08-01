@@ -1,0 +1,47 @@
+{
+  "version": 3,
+  "contract": "manager-snapshot",
+  "protocolVersion": 2,
+  "revision": 0,
+  "permissions": {
+    "scope": "admin",
+    "canMutate": true,
+    "canAdmin": true
+  },
+  "library": {
+    "schemaVersion": 2,
+    "migration": {
+      "status": "not-needed",
+      "legacyArtifacts": 0
+    },
+    "artifacts": [],
+    "tombstones": [],
+    "counts": {
+      "active": 0,
+      "archived": 0,
+      "drafts": 0
+    }
+  },
+  "providers": [],
+  "projectInbox": {
+    "roots": [],
+    "discoveries": []
+  },
+  "activity": [],
+  "settings": {
+    "sync": {
+      "enabled": false,
+      "state": "disabled",
+      "conflictCount": 0
+    },
+    "remote": {
+      "enabled": false
+    },
+    "secretBindings": [],
+    "sessions": []
+  },
+  "diagnostics": {
+    "healthy": true,
+    "issues": []
+  }
+}

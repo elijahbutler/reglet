@@ -4,6 +4,10 @@ import { loadConfig, providerNames, saveConfig, setSyncProviders, syncProvidersF
 import { sha256String } from './fsutil.js';
 import type { McpEnvironmentValue, McpServerDef, ResolvedMcpServerDef } from './master.js';
 import { regletHome } from './paths.js';
+import { isSecretRef, systemSecretStore, type SecretStore } from './security/secrets.js';
+import { hasLibraryManifest, loadLibraryManifest } from './artifacts/library.js';
+import { resolveMcpMachineOverrides } from './projects/mcp-overrides.js';
+import { LocalState } from './state/database.js';
 
 export type McpScope = { kind: 'shared' } | { kind: 'provider'; provider: ProviderName };
 
@@ -74,7 +78,7 @@ export async function listMcpServers(scopeOrHome: McpScope | string = sharedMcpS
   const { scope, home } = normalizeScopeArgs(scopeOrHome, maybeHome);
   const [config, raw] = await Promise.all([loadConfig(home), readMcpServersFile(mcpServersPath(home, scope))]);
   const serversPath = mcpServersPath(home, scope);
-  const definitions = definitionsFromRaw(raw);
+  const definitions = await filterMcpDefinitionsByLibrary(definitionsFromRaw(raw), scope, home);
   const sharedDefinitions = scope.kind === 'shared'
     ? definitions
     : definitionsFromRaw(await readMcpServersFile(mcpServersPath(home, sharedMcpScope())));
@@ -231,6 +235,7 @@ export async function resolveEffectiveMcpServersEnv(
   provider: ProviderName,
   home = regletHome(),
   env: NodeJS.ProcessEnv = process.env,
+  secretStore: SecretStore = systemSecretStore(),
 ): Promise<Record<string, ResolvedMcpServerDef>> {
   const effective = await listEffectiveMcpServers(provider, home);
   const conflict = effective.find((entry) => entry.conflictStatus.state === 'conflict');
@@ -240,11 +245,33 @@ export async function resolveEffectiveMcpServersEnv(
     );
   }
   const servers: Record<string, McpServerDef> = {};
-  for (const entry of effective) {
-    if (entry.issues.length > 0) throw new Error(`Invalid MCP server ${entry.id}: ${entry.issues.join('; ')}`);
-    servers[entry.displayName] = entry.server;
+  const manifest = await loadLibraryManifest(home);
+  const state = await LocalState.open(home);
+  try {
+    for (const entry of effective) {
+      if (entry.issues.length > 0) throw new Error(`Invalid MCP server ${entry.id}: ${entry.issues.join('; ')}`);
+      const artifact = manifest.artifacts.find((candidate) =>
+        candidate.kind === 'mcp' && candidate.locator.type === 'mcp-server' &&
+        candidate.locator.serverName === entry.id &&
+        (entry.scope.kind === 'shared'
+          ? candidate.scope.kind === 'global'
+          : candidate.scope.kind === 'provider-overlay' && candidate.scope.provider === entry.scope.provider));
+      const overrides = artifact === undefined
+        ? []
+        : state.mcpMachineOverrides(artifact.id);
+      const resolved = resolveMcpMachineOverrides(
+        entry.server,
+        new Map(overrides.map((override) => [override.fieldPath, override.value])),
+      );
+      if (resolved.missing.length > 0) {
+        throw new Error(`Missing machine-local MCP overrides for ${entry.id}: ${resolved.missing.join(', ')}`);
+      }
+      servers[entry.displayName] = resolved.definition;
+    }
+  } finally {
+    state.close();
   }
-  return resolveMcpServersEnv(servers, env);
+  return resolveMcpServersSecrets(servers, env, secretStore);
 }
 
 export async function loadMcpDefinitions(home = regletHome()): Promise<{
@@ -255,11 +282,43 @@ export async function loadMcpDefinitions(home = regletHome()): Promise<{
     await Promise.all(
       providerNames.map(async (provider) => [
         provider,
-        definitionsFromRaw(await readMcpServersFile(mcpServersPath(home, providerMcpScope(provider))), false),
+        await filterMcpDefinitionsByLibrary(
+          definitionsFromRaw(await readMcpServersFile(mcpServersPath(home, providerMcpScope(provider))), false),
+          providerMcpScope(provider),
+          home,
+        ),
       ] as const),
     ),
   ) as Record<ProviderName, Record<string, McpServerDefinition>>;
-  return { shared: definitionsFromRaw(await readMcpServersFile(mcpServersPath(home, sharedMcpScope())), false), providers };
+  return {
+    shared: await filterMcpDefinitionsByLibrary(
+      definitionsFromRaw(await readMcpServersFile(mcpServersPath(home, sharedMcpScope())), false),
+      sharedMcpScope(),
+      home,
+    ),
+    providers,
+  };
+}
+
+async function filterMcpDefinitionsByLibrary(
+  definitions: Record<string, McpServerDefinition>,
+  scope: McpScope,
+  home: string,
+): Promise<Record<string, McpServerDefinition>> {
+  if (!(await hasLibraryManifest(home))) return definitions;
+  const manifest = await loadLibraryManifest(home);
+  const activeIds = new Set(
+    manifest.artifacts
+      .filter((artifact) =>
+        artifact.kind === 'mcp' &&
+        artifact.lifecycle === 'active' &&
+        artifact.locator.type === 'mcp-server' &&
+        (scope.kind === 'shared'
+          ? artifact.scope.kind === 'global'
+          : artifact.scope.kind === 'provider-overlay' && artifact.scope.provider === scope.provider))
+      .map((artifact) => artifact.locator.type === 'mcp-server' ? artifact.locator.serverName : ''),
+  );
+  return Object.fromEntries(Object.entries(definitions).filter(([id]) => activeIds.has(id)));
 }
 
 export function filterMcpDefinitionsForProvider(
@@ -291,6 +350,13 @@ export function validateMcpServer(name: string, server: unknown): { ok: boolean;
     return { ok: false, issues: [...issues, 'server must be an object'] };
   }
 
+  const supportedFields = new Set(['command', 'args', 'env', 'url']);
+  for (const field of Object.keys(server)) {
+    if (!supportedFields.has(field)) {
+      issues.push(`unsupported field ${field} may alter security or provider behavior`);
+    }
+  }
+
   const command = server.command;
   const args = server.args;
   const env = server.env;
@@ -307,7 +373,7 @@ export function validateMcpServer(name: string, server: unknown): { ok: boolean;
   }
   if (env !== undefined) {
     if (!isRecord(env)) {
-      issues.push('env must be an object of process environment references');
+      issues.push('env must be an object of process-env or keychain references');
     } else {
       for (const [key, value] of Object.entries(env)) {
         if (!isMcpEnvName(key)) {
@@ -315,8 +381,8 @@ export function validateMcpServer(name: string, server: unknown): { ok: boolean;
         } else if (typeof value === 'string') {
           issues.push(`env.${key} must be a process-env reference, not a raw string`);
         } else if (!isMcpEnvironmentValue(value)) {
-          issues.push(`env.${key} must be { source: "process-env", name: "LOCAL_VARIABLE" }`);
-        } else if (!isMcpEnvName(value.name)) {
+          issues.push(`env.${key} must be a process-env or keychain reference`);
+        } else if (value.source === 'process-env' && !isMcpEnvName(value.name)) {
           issues.push(`env.${key}.name must be a valid environment variable name`);
         }
       }
@@ -354,7 +420,9 @@ export function redactMcpServer(server: McpServerDef): McpServerDef {
       // The variable name is configuration, not credential material. Keeping it visible
       // lets people configure the required local process environment without revealing
       // the resolved value.
-      env[key] = { source: reference.source, name: reference.name };
+      env[key] = reference.source === 'process-env'
+        ? { source: 'process-env', name: reference.name, ...(reference.required === undefined ? {} : { required: reference.required }) }
+        : { source: 'keychain', id: reference.id, ...(reference.required === undefined ? {} : { required: reference.required }) };
     }
   }
   return { ...server, env };
@@ -383,6 +451,22 @@ export function resolveMcpServersEnv(
   return resolved;
 }
 
+export async function resolveMcpServersSecrets(
+  servers: Record<string, McpServerDef>,
+  env: NodeJS.ProcessEnv = process.env,
+  secretStore: SecretStore = systemSecretStore(),
+): Promise<Record<string, ResolvedMcpServerDef>> {
+  const resolved: Record<string, ResolvedMcpServerDef> = {};
+  for (const [name, server] of Object.entries(servers)) {
+    const validation = validateMcpServer(name, server);
+    if (!validation.ok) {
+      throw new Error(`Invalid MCP server ${name}: ${validation.issues.join('; ')}`);
+    }
+    resolved[name] = await resolveMcpServerSecrets(name, server, env, secretStore);
+  }
+  return resolved;
+}
+
 export function mcpEnvironmentDigest(
   servers: Record<string, McpServerDef>,
   env: NodeJS.ProcessEnv = process.env,
@@ -392,9 +476,10 @@ export function mcpEnvironmentDigest(
     if (server.env === undefined) continue;
     const serverEnv: Record<string, string> = {};
     for (const [outputKey, ref] of Object.entries(server.env).sort(([left], [right]) => left.localeCompare(right))) {
-      const value = env[ref.name];
+      const identity = ref.source === 'process-env' ? ref.name : ref.id;
+      const value = ref.source === 'process-env' ? env[ref.name] : '<credential-store>';
       serverEnv[outputKey] = sha256String(
-        `reglet:mcp-env:v1\u0000${serverName}\u0000${outputKey}\u0000${ref.source}\u0000${ref.name}\u0000${value === undefined ? '<missing>' : value}`,
+        `reglet:mcp-env:v2\u0000${serverName}\u0000${outputKey}\u0000${ref.source}\u0000${identity}\u0000${value === undefined ? '<missing>' : value}`,
       );
     }
     digestInput[serverName] = serverEnv;
@@ -510,23 +595,81 @@ function resolveMcpServerEnv(
     };
   }
   const resolvedEnv: Record<string, string> = {};
-  const missing: string[] = [];
+  const missingProcessEnvironment: string[] = [];
+  const missingKeychainBindings: string[] = [];
   for (const [key, ref] of Object.entries(server.env)) {
+    if (ref.source === 'keychain') {
+      if (ref.required !== false) missingKeychainBindings.push(`${key}:${ref.id}`);
+      continue;
+    }
     const value = env[ref.name];
-    if (value === undefined) {
-      missing.push(`${key}:${ref.name}`);
+    if (value === undefined && ref.required !== false) {
+      missingProcessEnvironment.push(`${key}:${ref.name}`);
     } else {
-      resolvedEnv[key] = value;
+      if (value !== undefined) resolvedEnv[key] = value;
     }
   }
-  if (missing.length > 0) {
-    throw new Error(`Missing process environment for MCP server ${serverName}: ${missing.join(', ')}`);
+  if (missingKeychainBindings.length > 0) {
+    throw new Error(
+      `Missing secret bindings for MCP server ${serverName}: ${[
+        ...missingProcessEnvironment.map((item) => `process-env:${item}`),
+        ...missingKeychainBindings.map((item) => `keychain:${item}`),
+      ].join(', ')}`,
+    );
+  }
+  if (missingProcessEnvironment.length > 0) {
+    throw new Error(`Missing process environment for MCP server ${serverName}: ${missingProcessEnvironment.join(', ')}`);
   }
   return { ...server, env: resolvedEnv };
 }
 
+async function resolveMcpServerSecrets(
+  serverName: string,
+  server: McpServerDef,
+  env: NodeJS.ProcessEnv,
+  secretStore: SecretStore,
+): Promise<ResolvedMcpServerDef> {
+  if (server.env === undefined) return resolveMcpServerEnv(serverName, server, env);
+  const resolvedEnv: Record<string, string> = {};
+  const missingProcessEnvironment: string[] = [];
+  const missingKeychainBindings: string[] = [];
+  for (const [key, reference] of Object.entries(server.env)) {
+    const value = reference.source === 'process-env'
+      ? env[reference.name]
+      : await secretStore.resolve(reference.id);
+    if (value === undefined) {
+      if (reference.required !== false) {
+        if (reference.source === 'process-env') {
+          missingProcessEnvironment.push(`${key}:${reference.name}`);
+        } else {
+          missingKeychainBindings.push(`${key}:${reference.id}`);
+        }
+      }
+    } else {
+      resolvedEnv[key] = value;
+    }
+  }
+  if (missingProcessEnvironment.length > 0 && missingKeychainBindings.length === 0) {
+    throw new Error(`Missing process environment for MCP server ${serverName}: ${missingProcessEnvironment.join(', ')}`);
+  }
+  if (missingProcessEnvironment.length > 0 || missingKeychainBindings.length > 0) {
+    throw new Error(
+      `Missing secret bindings for MCP server ${serverName}: ${[
+        ...missingProcessEnvironment.map((item) => `process-env:${item}`),
+        ...missingKeychainBindings.map((item) => `keychain:${item}`),
+      ].join(', ')}`,
+    );
+  }
+  return {
+    ...(server.command === undefined ? {} : { command: server.command }),
+    ...(server.args === undefined ? {} : { args: server.args }),
+    ...(server.url === undefined ? {} : { url: server.url }),
+    ...(Object.keys(resolvedEnv).length === 0 ? {} : { env: resolvedEnv }),
+  };
+}
+
 function isMcpEnvironmentValue(value: unknown): value is McpEnvironmentValue {
-  return isRecord(value) && value.source === 'process-env' && typeof value.name === 'string';
+  return isSecretRef(value);
 }
 
 function definitionsFromRaw(raw: Record<string, unknown>, includeInvalid = true): Record<string, McpServerDefinition> {

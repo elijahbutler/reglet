@@ -1,0 +1,107 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+}
+
+.rg-bootstrap {
+  align-items: center;
+  background: var(--rg-canvas, #08090b);
+  color: var(--rg-text, #f3f3f2);
+  display: grid;
+  min-height: 100vh;
+  padding: 24px;
+  place-items: center;
+}
+
+.rg-pairing {
+  background: var(--rg-panel, #111214);
+  border: 1px solid var(--rg-border, #2b2d31);
+  border-radius: 8px;
+  max-width: 420px;
+  padding: 28px;
+  width: 100%;
+}
+
+.rg-pairing__mark {
+  align-items: center;
+  background: var(--rg-coral, #ff6b64);
+  border-radius: 7px;
+  color: #190604;
+  display: inline-flex;
+  font-weight: 800;
+  height: 32px;
+  justify-content: center;
+  width: 32px;
+}
+
+.rg-pairing__eyebrow,
+.rg-pairing small,
+.rg-pairing > p {
+  color: var(--rg-muted, #a3a6ad);
+}
+
+.rg-pairing h1 {
+  font-size: 22px;
+  letter-spacing: -0.02em;
+  margin: 18px 0 8px;
+}
+
+.rg-pairing form {
+  display: grid;
+  gap: 8px;
+  margin: 22px 0;
+}
+
+.rg-pairing input,
+.rg-pairing button {
+  border-radius: 7px;
+  font: inherit;
+  min-height: 38px;
+}
+
+.rg-pairing input {
+  background: var(--rg-input, #0b0c0e);
+  border: 1px solid var(--rg-border-strong, #454850);
+  color: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.12em;
+  padding: 0 11px;
+  text-transform: uppercase;
+}
+
+.rg-pairing button {
+  background: var(--rg-text, #f3f3f2);
+  border: 0;
+  color: var(--rg-canvas, #08090b);
+  cursor: pointer;
+  font-weight: 700;
+  margin-top: 4px;
+}
+
+.rg-pairing__error {
+  color: var(--rg-danger, #ff8e88) !important;
+}
+
+.rg-pairing__progress {
+  animation: rg-pulse 800ms ease-in-out infinite alternate;
+  background: var(--rg-coral, #ff6b64);
+  display: block;
+  height: 2px;
+  margin: 24px 0;
+  transform-origin: left;
+}
+
+@keyframes rg-pulse {
+  from { transform: scaleX(0.2); }
+  to { transform: scaleX(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rg-pairing__progress { animation: none; }
+}

@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+}
+
+.rg-desktop-bootstrap {
+  align-items: center;
+  background: var(--rg-canvas, #08090b);
+  color: var(--rg-text, #f3f3f2);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+.rg-desktop-bootstrap__mark {
+  align-items: center;
+  background: var(--rg-coral, #ff6b64);
+  border-radius: 7px;
+  color: #190604;
+  display: inline-flex;
+  font-weight: 800;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.rg-desktop-bootstrap h1 {
+  font-size: 19px;
+  margin: 18px 0 5px;
+}
+
+.rg-desktop-bootstrap p {
+  color: var(--rg-muted, #a3a6ad);
+  margin: 0;
+}

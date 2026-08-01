@@ -12,20 +12,32 @@ import {
   isJsonObject,
   isManagerRpcEnvelope,
   isManagerProtocolOperation,
+  isManagerProtocolVersion,
+  legacyManagerProtocolVersion,
   managerProtocolVersion,
   managerRpcRequestValidator,
   successResponse,
   type JsonObject,
   type JsonValue,
+  type ManagerArtifactKind,
   type ManagerProtocolErrorCode,
   type ManagerProtocolOperation,
+  type ManagerProtocolVersion,
+  type ManagerRpcInputs,
   type ManagerRpcRequest,
   type ManagerRpcResponse,
   type SyncRunResult,
   type SyncSnapshot,
 } from '@reglet/manager-protocol';
 import {
+  type ApplicationCommand,
+  ApplicationPermissionError,
+  RegletApplication,
+  RevisionConflictError,
+} from '@reglet/manager-application';
+import {
   applyAll,
+  applyLibraryMigration,
   applyStructuredPreview,
   adoptSkill,
   createSkill,
@@ -48,10 +60,12 @@ import {
   listEffectiveMcpServers,
   listOperationReceipts,
   listManagedSkillTrees,
+  libraryMigrationStatus,
   listSkills,
   listUnmanagedSkills,
   type McpServerDef,
   previewApplyStructured,
+  previewLibraryMigration,
   PROVIDER_RULES_MARKER,
   readProviderMcpServers,
   readSkillFile,
@@ -143,6 +157,7 @@ import {
   uninstallDaemon,
 } from './daemon.js';
 import { registerSyncV2PreviewCommands } from './sync-preview.js';
+import { serveManagerRuntime } from '@reglet/manager-runtime';
 
 const providerIds = ['claude', 'codex', 'cursor', 'gemini', 'windsurf', 'opencode'] as const;
 const contentIds = ['rules', 'skills', 'mcp'] as const;
@@ -153,6 +168,7 @@ type ContentId = (typeof contentIds)[number];
 
 const program = new Command();
 const version = process.env.REGLET_VERSION ?? '0.1.0';
+const managerApplication = new RegletApplication();
 
 program
   .name('reglet')
@@ -178,6 +194,52 @@ program
     console.log(`Initialized ${regletHome()}`);
   });
 
+const migrate = program.command('migrate').description('Run explicit, reversible metadata migrations');
+
+migrate
+  .command('library-v2')
+  .description('Index legacy canonical content in schema-version-2 library.json without moving files')
+  .option('--preview', 'preview the artifact inventory and locator mapping')
+  .option('--apply', 'write library.json and a reversible migration receipt')
+  .option('-y, --yes', 'confirm the reviewed migration non-interactively')
+  .option('--preview-digest <digest>', 'require an exact previously reviewed preview digest')
+  .option('--json', 'print machine-readable JSON')
+  .action(async (options: {
+    preview?: boolean;
+    apply?: boolean;
+    yes?: boolean;
+    previewDigest?: string;
+    json?: boolean;
+  }) => {
+    if (options.preview === options.apply) {
+      throw new InvalidArgumentError('Choose exactly one of --preview or --apply.');
+    }
+    if (options.preview === true) {
+      const preview = await applicationData('migration.preview', {}) as Awaited<ReturnType<typeof previewLibraryMigration>>;
+      if (options.json === true) printJson(preview);
+      else printLibraryMigrationPreview(preview);
+      return;
+    }
+    if (options.yes !== true) {
+      throw new InvalidArgumentError('Applying library-v2 requires --yes after reviewing --preview.');
+    }
+    const preview = await applicationData('migration.preview', {}) as Awaited<ReturnType<typeof previewLibraryMigration>>;
+    const digest = options.previewDigest ?? preview.digest;
+    const receipt = await applicationData('migration.apply', { previewDigest: digest, yes: true });
+    if (options.json === true) printJson(receipt);
+    else console.log(`library-v2\tapplied\tartifacts=${numberField(receipt, 'artifactCount')}\treceipt=${stringField(receipt, 'id')}`);
+  });
+
+migrate
+  .command('status')
+  .description('Report canonical library migration state')
+  .option('--json', 'print machine-readable JSON')
+  .action(async (options: { json?: boolean }) => {
+    const status = await applicationData('migration.status', {});
+    if (options.json === true) printJson(status);
+    else console.log(`library-v2\t${stringField(status, 'state')}\tartifacts=${numberField(status, 'artifactCount')}`);
+  });
+
 program
   .command('scan')
   .description('Print detected providers and existing inventory')
@@ -195,6 +257,352 @@ program
     }
   });
 
+program
+  .command('open')
+  .description('Open a local Reglet or project path in the system file browser')
+  .argument('[path]', 'path to open', regletHome())
+  .action(async (targetPath: string) => {
+    await openSystemPath(path.resolve(targetPath));
+  });
+
+program
+  .command('list')
+  .description('List canonical library artifacts')
+  .argument('[kind]', 'instructions, skills, or mcp', parseLibraryKind)
+  .option('--archived', 'list archived artifacts instead of active artifacts')
+  .option('--all', 'include active and archived artifacts')
+  .option('--json', 'print machine-readable JSON')
+  .action(async (kind: ManagerArtifactKind | undefined, options: { archived?: boolean; all?: boolean; json?: boolean }) => {
+    const artifacts = await applicationData('library.list', {
+      ...(kind === undefined ? {} : { kind }),
+      ...(options.all === true ? {} : { lifecycle: options.archived === true ? 'archived' : 'active' }),
+    });
+    if (options.json === true) printJson(artifacts);
+    else for (const artifact of asArtifactList(artifacts)) console.log(`${artifact.id}\t${artifact.kind}\t${artifact.lifecycle}\t${artifact.slug}\t${artifact.title}`);
+  });
+
+program
+  .command('show')
+  .description('Show a canonical library artifact')
+  .argument('<artifact>', 'artifact ID or unambiguous slug')
+  .option('--json', 'print machine-readable JSON')
+  .action(async (artifact: string, options: { json?: boolean }) => {
+    const result = await applicationData('library.show', { artifact });
+    if (options.json === true) printJson(result);
+    else {
+      const content = readResultContent(result);
+      process.stdout.write(`${content}${content.endsWith('\n') ? '' : '\n'}`);
+    }
+  });
+
+program
+  .command('create')
+  .description('Create a canonical instruction, skill, or MCP artifact from stdin')
+  .argument('<kind>', 'instruction, skill, or mcp', parseLibraryKind)
+  .requiredOption('--slug <slug>', 'stable artifact slug')
+  .option('--title <title>', 'display title')
+  .option('-p, --provider <provider...>', 'target provider(s)', parseProviderList)
+  .option('--overlay <provider>', 'create a provider-overlay artifact', parseProvider)
+  .option('--json', 'print machine-readable JSON')
+  .action(async (kind: ManagerArtifactKind, options: {
+    slug: string;
+    title?: string;
+    provider?: ProviderId[];
+    overlay?: ProviderId;
+    json?: boolean;
+  }) => {
+    const content = await Bun.stdin.text();
+    if (content.length === 0) throw new InvalidArgumentError('Artifact content is required on stdin.');
+    const result = await applicationData('library.create', {
+      kind,
+      slug: options.slug,
+      title: options.title ?? titleFromCliSlug(options.slug),
+      content,
+      ...(options.provider === undefined ? {} : { targets: options.provider }),
+      ...(options.overlay === undefined ? {} : { scope: { kind: 'provider-overlay', provider: options.overlay } }),
+    });
+    printApplicationResult(result, options.json, 'created');
+  });
+
+program
+  .command('duplicate')
+  .description('Duplicate an artifact with a stable new ID and cleared targets')
+  .argument('<artifact>')
+  .option('--json')
+  .action(async (artifact: string, options: { json?: boolean }) => {
+    printApplicationResult(await applicationData('library.duplicate', { artifact }), options.json, 'duplicated');
+  });
+
+program
+  .command('rename')
+  .description('Rename an artifact without changing its ID')
+  .argument('<artifact>')
+  .argument('<slug>')
+  .option('--json')
+  .action(async (artifact: string, slug: string, options: { json?: boolean }) => {
+    printApplicationResult(await applicationData('library.rename', { artifact, slug }), options.json, 'renamed');
+  });
+
+program
+  .command('archive')
+  .description('Archive an artifact so it remains canonical but stops projecting')
+  .argument('<artifact>')
+  .option('--json')
+  .action(async (artifact: string, options: { json?: boolean }) => {
+    printApplicationResult(await applicationData('library.archive', { artifact }), options.json, 'archived');
+  });
+
+program
+  .command('delete')
+  .description('Permanently delete an artifact and retain recoverable history')
+  .argument('<artifact>')
+  .requiredOption('-y, --yes', 'confirm permanent deletion')
+  .option('--json')
+  .action(async (artifact: string, options: { yes: boolean; json?: boolean }) => {
+    printApplicationResult(await applicationData('library.delete', { artifact, confirmed: options.yes }), options.json, 'deleted');
+  });
+
+const project = program.command('project').description('Manage read-only project discovery roots');
+const projectRoot = project.command('root').description('Manage configured development roots');
+
+projectRoot
+  .command('add')
+  .argument('<path>')
+  .option('--label <label>')
+  .option('--json')
+  .action(async (rootPath: string, options: { label?: string; json?: boolean }) => {
+    printApplicationResult(await applicationData('project.root.add', {
+      path: path.resolve(rootPath),
+      ...(options.label === undefined ? {} : { label: options.label }),
+    }), options.json, 'root-added');
+  });
+
+projectRoot
+  .command('remove')
+  .argument('<root-id>')
+  .requiredOption('-y, --yes', 'confirm root removal')
+  .option('--json')
+  .action(async (rootId: string, options: { yes: boolean; json?: boolean }) => {
+    printApplicationResult(await applicationData('project.root.remove', { rootId, confirmed: options.yes }), options.json, 'root-removed');
+  });
+
+projectRoot
+  .command('list')
+  .option('--json')
+  .action(async (options: { json?: boolean }) => {
+    const roots = await applicationData('project.root.list', {});
+    if (options.json === true) printJson(roots);
+    else for (const root of asRecordList(roots)) console.log(`${stringField(root, 'id')}\t${stringField(root, 'label')}\t${stringField(root, 'path')}`);
+  });
+
+project
+  .command('scan')
+  .option('--root <root-id>')
+  .option('--reappear-changed-ignored')
+  .option('--json')
+  .action(async (options: { root?: string; reappearChangedIgnored?: boolean; json?: boolean }) => {
+    const result = await applicationData('project.scan', {
+      ...(options.root === undefined ? {} : { rootId: options.root }),
+      ...(options.reappearChangedIgnored === undefined ? {} : { reappearChangedIgnored: options.reappearChangedIgnored }),
+    });
+    printApplicationResult(result, options.json, 'scanned');
+  });
+
+project
+  .command('discoveries')
+  .option('--root <root-id>')
+  .option('--state <state>', 'new, changed, promoted, conflict, or ignored', parseDiscoveryState)
+  .option('--json')
+  .action(async (options: { root?: string; state?: DiscoveryState; json?: boolean }) => {
+    const discoveries = await applicationData('project.discoveries', {
+      ...(options.root === undefined ? {} : { rootId: options.root }),
+      ...(options.state === undefined ? {} : { state: options.state }),
+    });
+    if (options.json === true) printJson(discoveries);
+    else for (const discovery of asRecordList(discoveries)) console.log(`${stringField(discovery, 'id')}\t${stringField(discovery, 'state')}\t${stringField(discovery, 'kind')}\t${stringField(discovery, 'relativePath')}`);
+  });
+
+program
+  .command('promote')
+  .description('Promote a reviewed project discovery into the canonical library')
+  .argument('<discovery>')
+  .option('--mode <mode>', 'global-instruction, convert-to-skill, or disabled-draft', parsePromotionMode)
+  .option('-p, --provider <provider...>', 'target provider(s)', parseProviderList)
+  .option('--destination <artifact>', 'merge into an existing artifact')
+  .option('--server <name>', 'MCP server name when a source contains multiple servers')
+  .option('--confirm-executables', 'confirm reviewed executable skill files')
+  .option('--json')
+  .action(async (discoveryId: string, options: {
+    mode?: PromotionMode;
+    provider?: ProviderId[];
+    destination?: string;
+    server?: string;
+    confirmExecutables?: boolean;
+    json?: boolean;
+  }) => {
+    const result = await applicationData('project.promote', {
+      discoveryId,
+      ...(options.mode === undefined ? {} : { mode: options.mode }),
+      ...(options.provider === undefined ? {} : { targets: options.provider }),
+      ...(options.destination === undefined ? {} : { destinationArtifact: options.destination }),
+      ...(options.server === undefined ? {} : { serverName: options.server }),
+      ...(options.confirmExecutables === undefined ? {} : { confirmExecutables: options.confirmExecutables }),
+    });
+    printApplicationResult(result, options.json, 'promoted');
+  });
+
+const secret = program.command('secret').description('Bind local-only secret references');
+secret
+  .command('set')
+  .argument('<id>')
+  .requiredOption('--stdin', 'read the secret value from stdin')
+  .option('--json')
+  .action(async (id: string, options: { stdin: boolean; json?: boolean }) => {
+    const value = (await Bun.stdin.text()).replace(/[\r\n]+$/, '');
+    if (value.length === 0) throw new InvalidArgumentError('Secret value is required on stdin.');
+    const result = await applicationData('secret.set', { id, value });
+    if (options.json === true) printJson(result);
+    else console.log(`secret\tbound\t${id}`);
+  });
+secret
+  .command('delete')
+  .argument('<id>')
+  .requiredOption('-y, --yes', 'confirm secret deletion')
+  .option('--json')
+  .action(async (id: string, options: { json?: boolean }) => {
+    printApplicationResult(await applicationData('secret.delete', { id }), options.json, 'secret-deleted');
+  });
+secret
+  .command('status')
+  .argument('<id>')
+  .option('--json')
+  .action(async (id: string, options: { json?: boolean }) => {
+    const result = await applicationData('secret.status', { id });
+    if (options.json === true) printJson(result);
+    else console.log(`secret\t${booleanField(result, 'bound') ? 'bound' : 'unbound'}\t${id}`);
+  });
+
+const remote = program.command('remote').description('Manage optional remote Manager access');
+remote
+  .command('enable')
+  .argument('<endpoint>', 'Tailnet or custom HTTPS endpoint')
+  .option('--json')
+  .action(async (endpoint: string, options: { json?: boolean }) => {
+    printApplicationResult(await applicationData('remote.enable', { endpoint }), options.json, 'remote-enabled');
+  });
+remote
+  .command('disable')
+  .option('--json')
+  .action(async (options: { json?: boolean }) => {
+    printApplicationResult(await applicationData('remote.disable', {}), options.json, 'remote-disabled');
+  });
+remote
+  .command('status')
+  .option('--json')
+  .action(async (options: { json?: boolean }) => {
+    const result = await applicationData('remote.status', {});
+    if (options.json === true) printJson(result);
+    else console.log(`remote\t${booleanField(result, 'enabled') ? 'enabled' : 'disabled'}`);
+  });
+
+const session = program.command('session').description('Pair and revoke scoped remote sessions');
+session
+  .command('pair')
+  .option('--scope <scope>', 'read, write, or admin', parseSessionScope, 'read')
+  .option('--json')
+  .action(async (options: { scope: SessionScope; json?: boolean }) => {
+    printApplicationResult(await applicationData('session.pair', { scope: options.scope }), options.json, 'pairing-created');
+  });
+session
+  .command('list')
+  .option('--json')
+  .action(async (options: { json?: boolean }) => {
+    const sessions = await applicationData('session.list', {});
+    if (options.json === true) printJson(sessions);
+    else for (const item of asRecordList(sessions)) console.log(`${stringField(item, 'id')}\t${stringField(item, 'scope')}\t${stringField(item, 'createdAt')}`);
+  });
+session
+  .command('revoke')
+  .argument('<session-id>')
+  .requiredOption('-y, --yes', 'confirm session revocation')
+  .option('--json')
+  .action(async (sessionId: string, options: { json?: boolean }) => {
+    printApplicationResult(await applicationData('session.revoke', { sessionId }), options.json, 'session-revoked');
+  });
+
+program
+  .command('history')
+  .description('List retained canonical artifact revisions')
+  .argument('<artifact>')
+  .option('--json')
+  .action(async (artifact: string, options: { json?: boolean }) => {
+    const history = await applicationData('history.list', { artifact });
+    if (options.json === true) printJson(history);
+    else for (const item of asRecordList(history)) console.log(`${stringField(item, 'revision')}\t${stringField(item, 'createdAt')}\t${stringField(item, 'reason')}`);
+  });
+
+program
+  .command('undo')
+  .description('Restore an artifact revision')
+  .argument('<artifact>')
+  .option('--revision <revision>')
+  .requiredOption('-y, --yes', 'confirm history restore')
+  .option('--json')
+  .action(async (artifact: string, options: { revision?: string; json?: boolean }) => {
+    printApplicationResult(await applicationData('history.undo', {
+      artifact,
+      confirmed: true,
+      ...(options.revision === undefined ? {} : { revision: options.revision }),
+    }), options.json, 'restored');
+  });
+
+program
+  .command('diagnostics')
+  .description('Print redacted local Manager diagnostics')
+  .option('--json')
+  .action(async (options: { json?: boolean }) => {
+    const result = await applicationData('diagnostics', {});
+    if (options.json === true) printJson(result);
+    else console.log(`diagnostics\t${booleanField(result, 'healthy') ? 'healthy' : 'attention'}`);
+  });
+
+program
+  .command('serve')
+  .description('Run the persistent local Manager runtime')
+  .option('--hostname <hostname>', 'bind hostname', '127.0.0.1')
+  .option('--port <port>', 'bind port; 0 selects an available port', parsePort, 0)
+  .option('--json', 'print one machine-readable readiness line')
+  .option('--allow-remote', 'allow a non-loopback HTTPS binding')
+  .option('--allow-public-wildcard', 'advanced override for wildcard binding')
+  .option('--allow-insecure-lan-http', 'advanced override for raw LAN HTTP with a persistent warning')
+  .option('--tls-cert <path>', 'TLS certificate path')
+  .option('--tls-key <path>', 'TLS private key path')
+  .action(async (options: {
+    hostname: string;
+    port: number;
+    json?: boolean;
+    allowRemote?: boolean;
+    allowPublicWildcard?: boolean;
+    allowInsecureLanHttp?: boolean;
+    tlsCert?: string;
+    tlsKey?: string;
+  }) => {
+    const runtime = await serveManagerRuntime({
+      hostname: options.hostname,
+      port: options.port,
+      allowRemote: options.allowRemote,
+      allowPublicWildcard: options.allowPublicWildcard,
+      allowInsecureLanHttp: options.allowInsecureLanHttp,
+      tlsCertificate: options.tlsCert,
+      tlsPrivateKey: options.tlsKey,
+    });
+    if (options.json === true) printJson(runtime.startup);
+    else console.log(`manager\tready\t${runtime.startup.managerUrl}`);
+    for (const warning of runtime.startup.warnings ?? []) console.error(`warning\t${warning}`);
+    await waitForShutdownSignal();
+    await runtime.stop();
+  });
+
 const manager = program.command('manager').description('Read local-only manager state');
 
 manager
@@ -202,7 +610,7 @@ manager
   .description('Read one Manager RPC request from stdin and print one typed JSON response')
   .requiredOption('--json', 'print machine-readable JSON')
   .requiredOption('--protocol-version <version>', 'manager RPC protocol version', parseRpcProtocolVersion)
-  .action(async (options: { json: boolean; protocolVersion: 1 }) => {
+  .action(async (options: { json: boolean; protocolVersion: ManagerProtocolVersion }) => {
     const response = await handleManagerRpc(await readManagerRpcLine(), options.protocolVersion);
     printRpcJson(response);
   });
@@ -898,7 +1306,120 @@ try {
   } else {
     console.error(redactManagerValue(error instanceof Error ? error.message : String(error)));
   }
-  process.exitCode = 1;
+  process.exitCode = exitCodeForError(error);
+}
+
+type DiscoveryState = 'new' | 'changed' | 'promoted' | 'conflict' | 'ignored';
+type PromotionMode = 'global-instruction' | 'convert-to-skill' | 'disabled-draft';
+type SessionScope = 'read' | 'write' | 'admin';
+
+async function applicationData<Operation extends ManagerProtocolOperation>(
+  operation: Operation,
+  input: ManagerRpcInputs[Operation],
+): Promise<unknown> {
+  return (await managerApplication.execute({ operation, input } as ApplicationCommand)).data;
+}
+
+function parseLibraryKind(value: string): ManagerArtifactKind {
+  if (value === 'instruction' || value === 'instructions' || value === 'rules') return 'instruction';
+  if (value === 'skill' || value === 'skills') return 'skill';
+  if (value === 'mcp') return 'mcp';
+  throw new InvalidArgumentError(`Unknown artifact kind: ${value}`);
+}
+
+function parseDiscoveryState(value: string): DiscoveryState {
+  if (value === 'new' || value === 'changed' || value === 'promoted' || value === 'conflict' || value === 'ignored') return value;
+  throw new InvalidArgumentError(`Unknown discovery state: ${value}`);
+}
+
+function parsePromotionMode(value: string): PromotionMode {
+  if (value === 'global-instruction' || value === 'convert-to-skill' || value === 'disabled-draft') return value;
+  throw new InvalidArgumentError(`Unknown promotion mode: ${value}`);
+}
+
+function parseSessionScope(value: string): SessionScope {
+  if (value === 'read' || value === 'write' || value === 'admin') return value;
+  throw new InvalidArgumentError(`Unknown session scope: ${value}`);
+}
+
+function asArtifactList(value: unknown): Array<{
+  id: string;
+  kind: string;
+  lifecycle: string;
+  slug: string;
+  title: string;
+}> {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => isRecordValue(item) &&
+    typeof item.id === 'string' && typeof item.kind === 'string' &&
+    typeof item.lifecycle === 'string' && typeof item.slug === 'string' && typeof item.title === 'string'
+    ? [{ id: item.id, kind: item.kind, lifecycle: item.lifecycle, slug: item.slug, title: item.title }]
+    : []);
+}
+
+function asRecordList(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? value.filter(isRecordValue) : [];
+}
+
+function stringField(value: unknown, key: string): string {
+  if (!isRecordValue(value)) return '';
+  const field = value[key];
+  return typeof field === 'string' || typeof field === 'number' ? String(field) : '';
+}
+
+function numberField(value: unknown, key: string): number {
+  return isRecordValue(value) && typeof value[key] === 'number' ? value[key] : 0;
+}
+
+function booleanField(value: unknown, key: string): boolean {
+  return isRecordValue(value) && value[key] === true;
+}
+
+function readResultContent(value: unknown): string {
+  if (!isRecordValue(value) || typeof value.content !== 'string') throw new Error('Artifact content is unavailable.');
+  return value.content;
+}
+
+function printApplicationResult(value: unknown, json: boolean | undefined, label: string): void {
+  if (json === true) {
+    printJson(value);
+    return;
+  }
+  const artifact = isRecordValue(value) && isRecordValue(value.artifact) ? value.artifact : value;
+  const identity = stringField(artifact, 'id') || stringField(artifact, 'slug');
+  console.log(`manager\t${label}${identity.length === 0 ? '' : `\t${identity}`}`);
+}
+
+function titleFromCliSlug(slug: string): string {
+  return slug.split('-').filter(Boolean).map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`).join(' ') || slug;
+}
+
+async function openSystemPath(targetPath: string): Promise<void> {
+  await access(targetPath);
+  const command = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer.exe' : 'xdg-open';
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(command, [targetPath], { detached: true, stdio: 'ignore' });
+    child.once('error', reject);
+    child.once('spawn', () => {
+      child.unref();
+      resolve();
+    });
+  });
+}
+
+function exitCodeForError(error: unknown): 1 | 2 | 3 | 4 {
+  if (error instanceof ApplicationPermissionError) return 4;
+  if (error instanceof RevisionConflictError) return 2;
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  if (message.includes('authentication') || message.includes('permission') || message.includes('unauthorized')) return 4;
+  if (message.includes('drift') || message.includes('conflict')) return 2;
+  if (message.includes('validation') || message.includes('invalid') || message.includes('blocked') ||
+    message.includes('requires explicit') || message.includes('migration approval') || message.includes('unbound')) return 3;
+  return 1;
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 interface ProviderTarget {
@@ -1125,8 +1646,9 @@ function parseManagerContractVersion(value: string): ManagerContractVersion {
   throw new InvalidArgumentError(`Unsupported manager snapshot contract version: ${value}`);
 }
 
-function parseRpcProtocolVersion(value: string): 1 {
-  if (value === '1' || value === 'v1') return 1;
+function parseRpcProtocolVersion(value: string): ManagerProtocolVersion {
+  if (value === '1' || value === 'v1') return legacyManagerProtocolVersion;
+  if (value === '2' || value === 'v2') return managerProtocolVersion;
   throw new InvalidArgumentError(`Unsupported manager RPC protocol version: ${value}`);
 }
 
@@ -1150,38 +1672,34 @@ function parseProviderTarget(value: string): ProviderTarget {
   return { provider, content: parseContent(contentRaw) };
 }
 
-async function handleManagerRpc(rawInput: string, cliProtocolVersion: 1): Promise<ManagerRpcResponse> {
-  if (cliProtocolVersion !== managerProtocolVersion) {
-    return failureResponse('unknown', 'UNKNOWN_PROTOCOL_VERSION', 'Unsupported Manager RPC protocol version.', false);
-  }
-
+async function handleManagerRpc(rawInput: string, cliProtocolVersion: ManagerProtocolVersion): Promise<ManagerRpcResponse> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawInput) as unknown;
   } catch {
-    return failureResponse('unknown', 'MALFORMED_REQUEST', 'Request body must be exactly one JSON object.', false);
+    return failureResponse('unknown', 'MALFORMED_REQUEST', 'Request body must be exactly one JSON object.', false, cliProtocolVersion);
   }
 
   if (!isRecord(parsed)) {
-    return failureResponse('unknown', 'MALFORMED_REQUEST', 'Request body must be a JSON object.', false);
+    return failureResponse('unknown', 'MALFORMED_REQUEST', 'Request body must be a JSON object.', false, cliProtocolVersion);
   }
-  if (parsed.protocolVersion !== managerProtocolVersion) {
-    return failureResponse('unknown', 'UNKNOWN_PROTOCOL_VERSION', 'Unsupported Manager RPC protocol version.', false);
+  if (!isManagerProtocolVersion(parsed.protocolVersion) || parsed.protocolVersion !== cliProtocolVersion) {
+    return failureResponse('unknown', 'UNKNOWN_PROTOCOL_VERSION', 'Unsupported or mismatched Manager RPC protocol version.', false, cliProtocolVersion);
   }
   if (!isManagerProtocolOperation(parsed.operation)) {
-    return failureResponse('unknown', 'UNKNOWN_OPERATION', 'Unknown Manager RPC operation.', false);
+    return failureResponse('unknown', 'UNKNOWN_OPERATION', 'Unknown Manager RPC operation.', false, cliProtocolVersion);
   }
   if (!isManagerRpcEnvelope(parsed)) {
-    return failureResponse(parsed.operation, 'MALFORMED_REQUEST', 'Request envelope is malformed.', false);
+    return failureResponse(parsed.operation, 'MALFORMED_REQUEST', 'Request envelope is malformed.', false, cliProtocolVersion);
   }
   if (!managerRpcRequestValidator.validate(parsed)) {
-    return failureResponse(parsed.operation, 'INVALID_INPUT', 'Operation input is invalid.', false);
+    return failureResponse(parsed.operation, 'INVALID_INPUT', 'Operation input is invalid.', false, cliProtocolVersion);
   }
 
   try {
-    return successResponse(parsed.operation, toJsonValue(await dispatchManagerRpc(parsed)));
+    return successResponse(parsed.operation, toJsonValue(await dispatchManagerRpc(parsed)), parsed.protocolVersion);
   } catch (error) {
-    return managerRpcErrorResponse(parsed.operation, error);
+    return managerRpcErrorResponse(parsed.operation, error, parsed.protocolVersion);
   }
 }
 
@@ -1399,6 +1917,17 @@ async function dispatchManagerRpc(request: ManagerRpcRequest): Promise<unknown> 
       await requireSyncPreviewAcknowledged();
       await disconnectSyncV2({ localOnly: readOptionalBoolean(input, 'localOnly') });
       return buildSyncSnapshot();
+    case 'migration.preview':
+      return previewLibraryMigration();
+    case 'migration.apply':
+      return applyLibraryMigration({
+        previewDigest: readString(input, 'previewDigest'),
+        yes: readBoolean(input, 'yes'),
+      });
+    case 'migration.status':
+      return libraryMigrationStatus();
+    default:
+      throw new InvalidArgumentError(`Manager operation is not available in this integration phase: ${request.operation}`);
   }
 }
 
@@ -1541,11 +2070,15 @@ async function importDriftForRpc(provider: ProviderId, content: ApplyContent, sc
   return { version: 1, content: 'mcp', ...await importDriftedMcp(provider, regletHome(), scope) };
 }
 
-function managerRpcErrorResponse(operation: ManagerProtocolOperation, error: unknown): ManagerRpcResponse {
+function managerRpcErrorResponse(
+  operation: ManagerProtocolOperation,
+  error: unknown,
+  protocolVersion: ManagerProtocolVersion,
+): ManagerRpcResponse {
   const managerError = managerErrorFromUnknown(error, `manager.rpc.${operation}`);
   const code = protocolErrorCode(error, managerError.error.code);
   const message = redactManagerValue(error instanceof Error ? error.message : managerError.error.message);
-  return failureResponse(operation, code, message, code === 'INVALID_INPUT' ? false : managerError.error.recoverable);
+  return failureResponse(operation, code, message, code === 'INVALID_INPUT' ? false : managerError.error.recoverable, protocolVersion);
 }
 
 function protocolErrorCode(error: unknown, managerCode: ManagerIssueCodeV2): ManagerProtocolErrorCode {
@@ -2544,10 +3077,6 @@ function fallbackCommandPaths(command: string): string[] {
   const userDirs = Array.from(new Set([home, userProfile].filter((dir): dir is string => dir !== undefined)));
   const dirs = [
     ...(process.env.PATH?.split(path.delimiter) ?? []),
-    '/opt/homebrew/bin',
-    '/usr/local/bin',
-    '/usr/bin',
-    '/bin',
     ...userDirs.flatMap((dir) => [
       path.join(dir, '.local', 'bin'),
       path.join(dir, '.bun', 'bin'),
@@ -2556,6 +3085,10 @@ function fallbackCommandPaths(command: string): string[] {
       path.join(dir, '.cargo', 'bin'),
       path.join(dir, '.codex', 'packages', 'standalone', 'current', 'bin'),
     ]),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    '/usr/bin',
+    '/bin',
   ];
   return Array.from(new Set(dirs.filter((dir) => dir.length > 0).flatMap((dir) => commandPathCandidates(dir, command))));
 }
@@ -2664,6 +3197,22 @@ function printOnboardingPlan(plan: OnboardingPlanJson): void {
     console.log(`write\t${write.provider}\t${write.content}\t${write.path}`);
   }
   console.log('safety\tdaemon=off\tsync=off\tnotifications=off');
+}
+
+function printLibraryMigrationPreview(
+  preview: Awaited<ReturnType<typeof previewLibraryMigration>>,
+): void {
+  console.log(`library-v2\t${preview.required ? 'migration-required' : 'current'}\tartifacts=${preview.artifacts.length}`);
+  console.log(`digest\t${preview.digest}`);
+  for (const item of preview.artifacts) {
+    const scope = item.artifact.scope.kind === 'global'
+      ? 'global'
+      : `provider-overlay:${item.artifact.scope.provider}`;
+    const locator = item.artifact.locator.type === 'mcp-server'
+      ? `${item.artifact.locator.path}#${item.artifact.locator.serverName}`
+      : item.artifact.locator.path;
+    console.log(`${item.artifact.kind}\t${scope}\t${item.artifact.id}\t${locator}`);
+  }
 }
 
 function printJson(value: unknown): void {
@@ -2869,6 +3418,26 @@ function formatTarget(target: ProviderTarget): string {
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && 'code' in error;
+}
+
+function parsePort(value: string): number {
+  const port = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(port) || port < 0 || port > 65_535) {
+    throw new InvalidArgumentError('Port must be an integer from 0 through 65535.');
+  }
+  return port;
+}
+
+function waitForShutdownSignal(): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      process.off('SIGINT', done);
+      process.off('SIGTERM', done);
+      resolve();
+    };
+    process.once('SIGINT', done);
+    process.once('SIGTERM', done);
+  });
 }
 
 function osHome(): string {
