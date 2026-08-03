@@ -32,7 +32,9 @@ cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 ```
 
-Release builds first compile the standalone CLIs, stage each matching target-triple sidecar, then call `scripts/build-tauri-desktop.sh`. The script injects the tag version into both the package metadata and Rust update checker.
+Release builds first compile the standalone CLIs, stage each matching target-triple sidecar, then call `scripts/build-tauri-desktop.sh`. The script injects the tag version into package metadata and, when `REGLET_CREATE_UPDATER_ARTIFACTS=1`, enables Tauri’s signed updater artifacts. The required signing variables and one-time key setup are documented in [release.md](release.md#in-app-updater-signing).
+
+The normal tag workflow publishes the generated Homebrew formula and cask before making the GitHub Release public. Manually published releases are covered by `.github/workflows/homebrew-release.yml`, and an existing release can be replayed from the Actions UI by supplying its `vX.Y.Z` tag.
 
 ## Run or install the macOS Tauri app locally
 

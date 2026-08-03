@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 use tauri::{
+    ipc::Channel,
     menu::{MenuBuilder, SubmenuBuilder},
     AppHandle, Manager, State, WindowEvent,
 };
@@ -12,16 +13,16 @@ use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
     ShellExt,
 };
+use tauri_plugin_updater::{Update, UpdaterExt};
+use url::Url;
 
 const SIDECAR_NAME: &str = "reglet";
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(15);
-const RELEASE_API_URL: &str = "https://api.github.com/repos/elijahbutler/reglet/releases/latest";
-const RELEASE_PAGE_URL: &str = "https://github.com/elijahbutler/reglet/releases/latest";
+const UPDATE_ENDPOINT: &str =
+    "https://github.com/elijahbutler/reglet/releases/latest/download/latest.json";
+const UPDATER_PUBLIC_KEY: Option<&str> = option_env!("REGLET_UPDATER_PUBLIC_KEY");
 const RUNTIME_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
-const BUILD_VERSION: &str = match option_env!("REGLET_VERSION") {
-    Some(version) => version,
-    None => env!("CARGO_PKG_VERSION"),
-};
+const RUNTIME_STARTUP_MAX_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ManagerRpcError {
@@ -30,19 +31,37 @@ pub struct ManagerRpcError {
     recoverable: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct UpdateCheckResult {
-    current_version: String,
-    latest_version: String,
-    available: bool,
-    release_url: String,
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(
+    tag = "status",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum UpdateCheckResult {
+    Disabled {
+        current_version: String,
+        reason: String,
+    },
+    Current {
+        current_version: String,
+    },
+    Available {
+        current_version: String,
+        latest_version: String,
+        notes: Option<String>,
+    },
 }
 
-#[derive(Debug, Deserialize)]
-struct GitHubRelease {
-    tag_name: String,
-    html_url: String,
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(
+    tag = "event",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum UpdateDownloadEvent {
+    Started { content_length: Option<u64> },
+    Progress { chunk_length: usize },
+    Finished,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -63,6 +82,9 @@ struct ManagerRuntimeState {
     startup: Mutex<Option<ManagerRuntimeStartup>>,
 }
 
+#[derive(Default)]
+struct PendingUpdateState(Mutex<Option<Update>>);
+
 #[tauri::command]
 async fn manager_runtime_start(
     app: AppHandle,
@@ -82,25 +104,37 @@ async fn manager_runtime_start(
         .map_err(|_| runtime_start_error())?
         .args(["serve", "--hostname", "127.0.0.1", "--port", "0", "--json"]);
     let (mut events, child) = command.spawn().map_err(|_| runtime_start_error())?;
-    let startup = loop {
-        let event = tokio::time::timeout(RUNTIME_STARTUP_TIMEOUT, events.recv())
-            .await
-            .map_err(|_| runtime_start_error())?
-            .ok_or_else(runtime_start_error)?;
-        match event {
-            CommandEvent::Stdout(bytes) => {
-                let value = std::str::from_utf8(&bytes).ok().and_then(|text| {
-                    serde_json::from_str::<ManagerRuntimeStartup>(text.trim()).ok()
-                });
-                if let Some(candidate) = value {
-                    validate_runtime_startup(&candidate)?;
-                    break candidate;
+    let startup_result = tokio::time::timeout(RUNTIME_STARTUP_TIMEOUT, async {
+        let mut stdout = Vec::new();
+        loop {
+            let event = events.recv().await.ok_or_else(runtime_start_error)?;
+            match event {
+                CommandEvent::Stdout(bytes) => {
+                    if stdout.len().saturating_add(bytes.len()) > RUNTIME_STARTUP_MAX_BYTES {
+                        return Err(runtime_start_error());
+                    }
+                    stdout.extend_from_slice(&bytes);
+                    if let Some(candidate) = parse_runtime_startup(&stdout)? {
+                        return Ok(candidate);
+                    }
                 }
+                CommandEvent::Terminated(_) | CommandEvent::Error(_) => {
+                    return Err(runtime_start_error());
+                }
+                _ => {}
             }
-            CommandEvent::Terminated(_) | CommandEvent::Error(_) => {
-                return Err(runtime_start_error());
-            }
-            _ => {}
+        }
+    })
+    .await;
+    let startup = match startup_result {
+        Ok(Ok(startup)) => startup,
+        Ok(Err(error)) => {
+            let _ = child.kill();
+            return Err(error);
+        }
+        Err(_) => {
+            let _ = child.kill();
+            return Err(runtime_start_error());
         }
     };
     *state.child.lock().map_err(|_| runtime_state_error())? = Some(child);
@@ -147,6 +181,17 @@ fn validate_runtime_startup(startup: &ManagerRuntimeStartup) -> Result<(), Manag
     Ok(())
 }
 
+fn parse_runtime_startup(bytes: &[u8]) -> Result<Option<ManagerRuntimeStartup>, ManagerRpcError> {
+    match serde_json::from_slice(bytes) {
+        Ok(startup) => {
+            validate_runtime_startup(&startup)?;
+            Ok(Some(startup))
+        }
+        Err(error) if error.is_eof() => Ok(None),
+        Err(_) => Err(runtime_start_error()),
+    }
+}
+
 fn runtime_start_error() -> ManagerRpcError {
     update_error(
         "RUNTIME_START_FAILED",
@@ -162,76 +207,91 @@ fn runtime_state_error() -> ManagerRpcError {
 }
 
 #[tauri::command]
-async fn check_for_updates() -> Result<UpdateCheckResult, ManagerRpcError> {
-    let client = reqwest::Client::builder()
-        .timeout(UPDATE_TIMEOUT)
-        .build()
-        .map_err(|_| {
-            update_error(
-                "UPDATE_CHECK_FAILED",
-                "Reglet could not prepare the update check.",
-            )
-        })?;
-    let release = client
-        .get(RELEASE_API_URL)
-        .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "Reglet-Desktop")
-        .send()
-        .await
-        .and_then(reqwest::Response::error_for_status)
-        .map_err(|_| {
-            update_error(
-                "UPDATE_CHECK_FAILED",
-                "Reglet could not check GitHub Releases.",
-            )
-        })?
-        .json::<GitHubRelease>()
-        .await
-        .map_err(|_| {
-            update_error(
-                "UPDATE_CHECK_FAILED",
-                "GitHub returned an invalid release response.",
-            )
-        })?;
-
-    let current = semver::Version::parse(BUILD_VERSION.trim_start_matches('v')).map_err(|_| {
-        update_error(
-            "UPDATE_VERSION_INVALID",
-            "The installed Reglet version is invalid.",
-        )
-    })?;
-    let latest_text = release.tag_name.trim_start_matches('v');
-    let latest = semver::Version::parse(latest_text).map_err(|_| {
-        update_error(
-            "UPDATE_VERSION_INVALID",
-            "The latest Reglet version is invalid.",
-        )
-    })?;
-    let release_url = if release
-        .html_url
-        .starts_with("https://github.com/elijahbutler/reglet/releases/")
-    {
-        release.html_url
-    } else {
-        RELEASE_PAGE_URL.to_string()
+async fn check_for_updates(
+    app: AppHandle,
+    state: State<'_, PendingUpdateState>,
+) -> Result<UpdateCheckResult, ManagerRpcError> {
+    let current_version = app.package_info().version.to_string();
+    *state.0.lock().map_err(|_| update_state_error())? = None;
+    let Some(public_key) = UPDATER_PUBLIC_KEY.filter(|key| !key.trim().is_empty()) else {
+        return Ok(UpdateCheckResult::Disabled {
+            current_version,
+            reason: "This build has no embedded update verification key.".to_string(),
+        });
     };
-    Ok(UpdateCheckResult {
-        current_version: current.to_string(),
-        latest_version: latest.to_string(),
-        available: latest > current,
-        release_url,
-    })
+    let endpoint = Url::parse(UPDATE_ENDPOINT).map_err(|_| update_check_error())?;
+    let updater = app
+        .updater_builder()
+        .pubkey(public_key)
+        .endpoints(vec![endpoint])
+        .and_then(|builder| builder.timeout(UPDATE_TIMEOUT).build())
+        .map_err(|_| update_check_error())?;
+    let update = updater.check().await.map_err(|_| update_check_error())?;
+    let mut pending = state.0.lock().map_err(|_| update_state_error())?;
+    *pending = update;
+    match pending.as_ref() {
+        Some(update) => Ok(UpdateCheckResult::Available {
+            current_version: update.current_version.clone(),
+            latest_version: update.version.clone(),
+            notes: update.body.clone(),
+        }),
+        None => Ok(UpdateCheckResult::Current { current_version }),
+    }
 }
 
 #[tauri::command]
-fn open_release(app: AppHandle) -> Result<(), ManagerRpcError> {
-    #[allow(deprecated)]
-    app.shell().open(RELEASE_PAGE_URL, None).map_err(|_| {
-        update_error(
-            "OPEN_RELEASE_FAILED",
-            "Reglet could not open the release page.",
+async fn install_update(
+    app: AppHandle,
+    state: State<'_, PendingUpdateState>,
+    on_event: Channel<UpdateDownloadEvent>,
+) -> Result<(), ManagerRpcError> {
+    let update = state
+        .0
+        .lock()
+        .map_err(|_| update_state_error())?
+        .take()
+        .ok_or_else(|| {
+            update_error(
+                "UPDATE_NOT_PENDING",
+                "Check for updates again before installing.",
+            )
+        })?;
+    let mut started = false;
+    update
+        .download_and_install(
+            |chunk_length, content_length| {
+                if !started {
+                    started = true;
+                    let _ = on_event.send(UpdateDownloadEvent::Started { content_length });
+                }
+                let _ = on_event.send(UpdateDownloadEvent::Progress { chunk_length });
+            },
+            || {
+                let _ = on_event.send(UpdateDownloadEvent::Finished);
+            },
         )
-    })
+        .await
+        .map_err(|_| {
+            update_error(
+                "UPDATE_INSTALL_FAILED",
+                "Reglet could not verify or install the update. Check again and retry.",
+            )
+        })?;
+    app.restart();
+}
+
+fn update_check_error() -> ManagerRpcError {
+    update_error(
+        "UPDATE_CHECK_FAILED",
+        "Reglet could not securely check for updates. Check your connection and retry.",
+    )
+}
+
+fn update_state_error() -> ManagerRpcError {
+    update_error(
+        "UPDATE_STATE_FAILED",
+        "Reglet could not access the pending update. Check again and retry.",
+    )
 }
 
 #[tauri::command]
@@ -309,6 +369,7 @@ fn user_home() -> Option<PathBuf> {
 pub fn run() {
     tauri::Builder::default()
         .manage(ManagerRuntimeState::default())
+        .manage(PendingUpdateState::default())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -317,6 +378,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let handle = app.handle();
             let application = SubmenuBuilder::new(handle, "Reglet")
@@ -359,7 +421,7 @@ pub fn run() {
             manager_runtime_start,
             manager_runtime_stop,
             check_for_updates,
-            open_release,
+            install_update,
             open_file_location
         ])
         .run(tauri::generate_context!())
@@ -379,8 +441,56 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_version_is_semver() {
-        assert!(semver::Version::parse(BUILD_VERSION.trim_start_matches('v')).is_ok());
+    fn update_status_serializes_as_a_strict_frontend_contract() {
+        assert_eq!(
+            serde_json::to_value(UpdateCheckResult::Available {
+                current_version: "1.0.0".to_string(),
+                latest_version: "1.1.0".to_string(),
+                notes: Some("Safer updates".to_string()),
+            })
+            .expect("serializable update status"),
+            serde_json::json!({
+                "status": "available",
+                "currentVersion": "1.0.0",
+                "latestVersion": "1.1.0",
+                "notes": "Safer updates",
+            }),
+        );
+        assert_eq!(
+            serde_json::to_value(UpdateDownloadEvent::Started {
+                content_length: Some(4096),
+            })
+            .expect("serializable update progress"),
+            serde_json::json!({
+                "event": "started",
+                "contentLength": 4096,
+            }),
+        );
+    }
+
+    #[test]
+    fn manager_runtime_startup_accepts_chunked_pretty_json() {
+        let mut bytes = br#"{
+  "version": 1,
+  "listening": true,"#
+            .to_vec();
+        assert_eq!(parse_runtime_startup(&bytes), Ok(None));
+
+        bytes.extend_from_slice(
+            br#"
+  "url": "http://127.0.0.1:43210",
+  "managerUrl": "http://127.0.0.1:43210/manager/#pair=ABC123",
+  "pairingExpiresAt": "2026-08-02T03:11:46.054Z",
+  "remote": false,
+  "protocolVersion": 2
+}
+"#,
+        );
+
+        let startup = parse_runtime_startup(&bytes)
+            .expect("valid startup JSON")
+            .expect("complete startup JSON");
+        assert_eq!(startup.url, "http://127.0.0.1:43210");
     }
 
     #[test]

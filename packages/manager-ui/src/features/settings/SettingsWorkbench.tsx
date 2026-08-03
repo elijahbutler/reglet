@@ -1,7 +1,8 @@
-import { Database, FolderRoot, KeyRound, Laptop, Radio, Settings, Shield, Stethoscope } from 'lucide-react';
+import { CheckCircle2, Database, Download, FolderRoot, KeyRound, Laptop, Radio, RefreshCw, Settings, Shield, ShieldAlert, ShieldCheck, Stethoscope } from 'lucide-react';
 import { useState } from 'react';
+import type { ReactNode } from 'react';
 import type { ManagerSnapshotV3 } from '@reglet/manager-protocol';
-import type { ManagerHostActions, ManagerUpdateStatus } from '../../app/ManagerApp.js';
+import type { ManagerHostActions, ManagerUpdateDownloadEvent, ManagerUpdateStatus } from '../../app/ManagerApp.js';
 import type { ManagerClient } from '../../client/ManagerClient.js';
 import { Button } from '../../design-system/Button.js';
 import { Pane, PaneHeader } from '../../design-system/Pane.js';
@@ -19,9 +20,11 @@ const sections = [
 
 type SettingsSection = (typeof sections)[number]['id'];
 
-export function SettingsWorkbench({ client, hostActions, snapshot, onRefresh, onError }: {
+export function SettingsWorkbench({ client, hostActions, updateStatus, onUpdateStatus, snapshot, onRefresh, onError }: {
   client: ManagerClient;
   hostActions?: ManagerHostActions;
+  updateStatus: ManagerUpdateStatus | null;
+  onUpdateStatus: (status: ManagerUpdateStatus | null) => void;
   snapshot: ManagerSnapshotV3 | null;
   onRefresh: () => Promise<void>;
   onError: (message: string) => void;
@@ -46,7 +49,7 @@ export function SettingsWorkbench({ client, hostActions, snapshot, onRefresh, on
       <Pane label="Settings detail" className="rg-operation-canvas">
         <PaneHeader><span>{sections.find((candidate) => candidate.id === section)?.label}</span></PaneHeader>
         <div className="rg-detail-document">
-          {section === 'general' ? <GeneralSettings hostActions={hostActions} snapshot={snapshot} onError={onError} /> : null}
+          {section === 'general' ? <GeneralSettings hostActions={hostActions} updateStatus={updateStatus} onUpdateStatus={onUpdateStatus} snapshot={snapshot} /> : null}
           {section === 'roots' ? <RootsSettings snapshot={snapshot} rootPath={rootPath} onRootPath={setRootPath} busy={busy} onAdd={() => void run(async () => {
             await client.command('project.root.add', { path: rootPath });
             setRootPath('');
@@ -76,15 +79,80 @@ function SectionHeader({ title, description }: { title: string; description: str
   return <header><span className="rg-detail-icon"><Settings size={18} /></span><div><h1>{title}</h1><p>{description}</p></div></header>;
 }
 
-function GeneralSettings({ hostActions, snapshot, onError }: { hostActions?: ManagerHostActions; snapshot: ManagerSnapshotV3 | null; onError: (message: string) => void }) {
+interface InstallProgress {
+  phase: 'idle' | 'downloading' | 'installing';
+  downloadedBytes: number;
+  totalBytes: number | null;
+}
+
+function GeneralSettings({ hostActions, updateStatus, onUpdateStatus, snapshot }: {
+  hostActions?: ManagerHostActions;
+  updateStatus: ManagerUpdateStatus | null;
+  onUpdateStatus: (status: ManagerUpdateStatus | null) => void;
+  snapshot: ManagerSnapshotV3 | null;
+}) {
   const [checking, setChecking] = useState(false);
-  const [update, setUpdate] = useState<ManagerUpdateStatus | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [installProgress, setInstallProgress] = useState<InstallProgress>({ phase: 'idle', downloadedBytes: 0, totalBytes: null });
   const check = async () => {
     if (hostActions?.checkForUpdates === undefined) return;
     setChecking(true);
-    try { setUpdate(await hostActions.checkForUpdates()); } catch (error) { onError(error instanceof Error ? error.message : 'The update check failed.'); } finally { setChecking(false); }
+    setUpdateError(null);
+    setInstallProgress({ phase: 'idle', downloadedBytes: 0, totalBytes: null });
+    try { onUpdateStatus(await hostActions.checkForUpdates()); } catch (error) { onUpdateStatus(null); setUpdateError(updateMessageFrom(error, 'The secure update check failed. Check your connection and retry.')); } finally { setChecking(false); }
   };
-  return <><SectionHeader title="General" description="Canonical library and local runtime status." /><dl className="rg-key-values"><div><dt>Library schema</dt><dd>v{snapshot?.library.schemaVersion ?? '—'}</dd></div><div><dt>Protocol</dt><dd>v{snapshot?.protocolVersion ?? '—'}</dd></div><div><dt>Revision</dt><dd>{snapshot?.revision ?? '—'}</dd></div><div><dt>Migration</dt><dd>{snapshot?.library.migration.status ?? '—'}</dd></div></dl>{hostActions?.checkForUpdates !== undefined ? <section className="rg-settings-group"><h2>Desktop updates</h2><Button disabled={checking} onClick={() => void check()}>{checking ? 'Checking…' : 'Check for updates'}</Button>{update === null ? null : <div className="rg-inline-notice"><span>{update.available ? `Reglet ${update.latestVersion} is available. You have ${update.currentVersion}.` : `Reglet ${update.currentVersion} is current.`}</span>{update.available && hostActions.openRelease !== undefined ? <Button onClick={() => void hostActions.openRelease?.().catch((error: unknown) => onError(error instanceof Error ? error.message : 'The release page could not be opened.'))}>Open release</Button> : null}</div>}</section> : null}</>;
+  const install = async () => {
+    if (hostActions?.installUpdate === undefined || updateStatus?.status !== 'available') return;
+    setUpdateError(null);
+    setInstallProgress({ phase: 'downloading', downloadedBytes: 0, totalBytes: null });
+    try {
+      await hostActions.installUpdate((event) => setInstallProgress((progress) => progressFromEvent(progress, event)));
+    } catch (error) {
+      setInstallProgress({ phase: 'idle', downloadedBytes: 0, totalBytes: null });
+      onUpdateStatus(null);
+      setUpdateError(updateMessageFrom(error, 'Reglet could not verify or install the update. Check again and retry.'));
+    }
+  };
+  const installing = installProgress.phase !== 'idle';
+  return <><SectionHeader title="General" description="Canonical library and local runtime status." /><dl className="rg-key-values"><div><dt>Library schema</dt><dd>v{snapshot?.library.schemaVersion ?? '—'}</dd></div><div><dt>Protocol</dt><dd>v{snapshot?.protocolVersion ?? '—'}</dd></div><div><dt>Revision</dt><dd>{snapshot?.revision ?? '—'}</dd></div><div><dt>Migration</dt><dd>{snapshot?.library.migration.status ?? '—'}</dd></div></dl>{hostActions?.checkForUpdates !== undefined ? <section className="rg-settings-group rg-update-panel" aria-labelledby="desktop-updates-title">
+    <div className="rg-update-panel__header"><div><h2 id="desktop-updates-title">Desktop updates</h2><p>Updates are downloaded from Reglet Releases and verified before installation.</p></div><Button disabled={checking || installing} icon={<RefreshCw className={checking ? 'rg-spin' : undefined} size={14} />} onClick={() => void check()}>{checking ? 'Checking…' : updateStatus === null ? 'Check for updates' : 'Check again'}</Button></div>
+    <div className="rg-update-state" aria-live="polite">
+      {checking ? <UpdateSummary icon={<ShieldCheck size={18} />} title="Checking for a signed update…" detail="Reglet is comparing this installation with the latest desktop release." /> : null}
+      {!checking && updateStatus === null && updateError === null ? <UpdateSummary icon={<ShieldCheck size={18} />} title="Automatic checks are ready" detail="Reglet checks quietly after launch. You stay in control of installation." /> : null}
+      {!checking && updateStatus?.status === 'current' ? <UpdateSummary tone="success" icon={<CheckCircle2 size={18} />} title={`Reglet ${updateStatus.currentVersion} is current`} detail="No newer signed desktop release is available." /> : null}
+      {!checking && updateStatus?.status === 'disabled' ? <UpdateSummary tone="warning" icon={<ShieldAlert size={18} />} title="Automatic updates are unavailable in this build" detail={updateStatus.reason} /> : null}
+      {!checking && updateStatus?.status === 'available' ? <div className="rg-update-available"><UpdateSummary tone="accent" icon={<Download size={18} />} title={`Reglet ${updateStatus.latestVersion} is ready`} detail={`You are running ${updateStatus.currentVersion}. Installation will relaunch Reglet.`} />{updateStatus.notes === null || updateStatus.notes.trim().length === 0 ? null : <p className="rg-update-notes">{updateStatus.notes}</p>}{installing ? <UpdateProgress progress={installProgress} /> : <Button tone="primary" disabled={hostActions.installUpdate === undefined} onClick={() => void install()}>Install and restart</Button>}</div> : null}
+      {updateError === null ? null : <div className="rg-update-error" role="alert"><ShieldAlert size={17} /><span><strong>Update interrupted</strong><small>{updateError}</small></span></div>}
+    </div>
+  </section> : null}</>;
+}
+
+function UpdateSummary({ detail, icon, title, tone = 'neutral' }: { detail: string; icon: ReactNode; title: string; tone?: 'neutral' | 'success' | 'warning' | 'accent' }) {
+  return <div className={`rg-update-summary rg-update-summary--${tone}`}>{icon}<span><strong>{title}</strong><small>{detail}</small></span></div>;
+}
+
+function UpdateProgress({ progress }: { progress: InstallProgress }) {
+  const percent = progress.totalBytes === null || progress.totalBytes === 0 ? null : Math.min(100, Math.round((progress.downloadedBytes / progress.totalBytes) * 100));
+  const installing = progress.phase === 'installing';
+  return <div className="rg-update-progress"><div><strong>{installing ? 'Installing verified update…' : 'Downloading update…'}</strong><span>{installing ? 'Reglet will relaunch when installation finishes.' : percent === null ? formatBytes(progress.downloadedBytes) : `${percent}% · ${formatBytes(progress.downloadedBytes)} of ${formatBytes(progress.totalBytes ?? 0)}`}</span></div><progress max={progress.totalBytes ?? undefined} value={progress.totalBytes === null ? undefined : progress.downloadedBytes} aria-label={installing ? 'Installing update' : 'Downloading update'} /></div>;
+}
+
+function progressFromEvent(progress: InstallProgress, event: ManagerUpdateDownloadEvent): InstallProgress {
+  if (event.event === 'started') return { phase: 'downloading', downloadedBytes: 0, totalBytes: event.contentLength };
+  if (event.event === 'progress') return { ...progress, phase: 'downloading', downloadedBytes: progress.downloadedBytes + event.chunkLength };
+  return { ...progress, phase: 'installing' };
+}
+
+function updateMessageFrom(value: unknown, fallback: string): string {
+  if (value instanceof Error && value.message.length > 0) return value.message;
+  if (typeof value === 'object' && value !== null && 'message' in value && typeof value.message === 'string' && value.message.length > 0) return value.message;
+  return fallback;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function RootsSettings({ snapshot, rootPath, onRootPath, busy, onAdd }: { snapshot: ManagerSnapshotV3 | null; rootPath: string; onRootPath: (value: string) => void; busy: boolean; onAdd: () => void }) {

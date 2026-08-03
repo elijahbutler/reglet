@@ -596,7 +596,7 @@ program
       tlsCertificate: options.tlsCert,
       tlsPrivateKey: options.tlsKey,
     });
-    if (options.json === true) printJson(runtime.startup);
+    if (options.json === true) printJsonLine(runtime.startup);
     else console.log(`manager\tready\t${runtime.startup.managerUrl}`);
     for (const warning of runtime.startup.warnings ?? []) console.error(`warning\t${warning}`);
     await waitForShutdownSignal();
@@ -3217,6 +3217,10 @@ function printLibraryMigrationPreview(
 
 function printJson(value: unknown): void {
   console.log(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function printJsonLine(value: unknown): void {
+  process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
 function writeJsonToStderr(value: unknown): void {

@@ -209,6 +209,16 @@
   padding: 0 12px;
 }
 
+.rg-update-command {
+  border-color: var(--rg-coral-line) !important;
+  color: var(--rg-text);
+  background: var(--rg-coral-soft);
+}
+
+.rg-update-command .rg-button__icon {
+  color: var(--rg-coral);
+}
+
 .rg-button,
 .rg-icon-button {
   display: inline-flex;
@@ -1066,6 +1076,164 @@
 .rg-settings-group .rg-inline-notice {
   align-items: center;
   margin: 0;
+}
+
+.rg-update-panel {
+  width: 100%;
+  gap: 14px;
+}
+
+.rg-update-panel__header {
+  display: flex;
+  width: 100%;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.rg-update-panel__header > div {
+  min-width: 0;
+}
+
+.rg-update-panel__header p {
+  max-width: 62ch;
+  margin: 4px 0 0;
+  color: var(--rg-muted);
+}
+
+.rg-update-panel__header .rg-button {
+  flex: 0 0 auto;
+}
+
+.rg-update-state,
+.rg-update-available {
+  display: grid;
+  width: 100%;
+  gap: 12px;
+}
+
+.rg-update-state {
+  padding-top: 13px;
+  border-top: 1px solid var(--rg-line);
+}
+
+.rg-update-summary,
+.rg-update-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.rg-update-summary > svg,
+.rg-update-error > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.rg-update-summary > span,
+.rg-update-error > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.rg-update-summary strong,
+.rg-update-error strong,
+.rg-update-progress strong {
+  font-weight: 620;
+}
+
+.rg-update-summary small,
+.rg-update-error small {
+  max-width: 66ch;
+  color: var(--rg-muted);
+  font-size: 12px;
+}
+
+.rg-update-summary--neutral > svg {
+  color: var(--rg-muted);
+}
+
+.rg-update-summary--success > svg {
+  color: var(--rg-success);
+}
+
+.rg-update-summary--warning > svg {
+  color: var(--rg-warning);
+}
+
+.rg-update-summary--accent > svg {
+  color: var(--rg-coral);
+}
+
+.rg-update-notes {
+  max-width: 66ch;
+  max-height: 6.4em;
+  margin: 0 0 0 28px !important;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.rg-update-available > .rg-button {
+  justify-self: start;
+  margin-left: 28px;
+}
+
+.rg-update-progress {
+  display: grid;
+  gap: 8px;
+  margin-left: 28px;
+}
+
+.rg-update-progress > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.rg-update-progress span {
+  color: var(--rg-muted);
+  font-size: 12px;
+}
+
+.rg-update-progress progress {
+  width: min(100%, 520px);
+  height: 5px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 3px;
+  accent-color: var(--rg-coral);
+  background: var(--rg-control);
+}
+
+.rg-update-progress progress::-webkit-progress-bar {
+  background: var(--rg-control);
+}
+
+.rg-update-progress progress::-webkit-progress-value {
+  background: var(--rg-coral);
+}
+
+.rg-update-error {
+  padding: 9px 10px;
+  border-radius: var(--rg-radius-control);
+  color: var(--rg-error);
+  background: var(--rg-error-soft);
+}
+
+.rg-update-error small {
+  color: color-mix(in srgb, var(--rg-error) 76%, var(--rg-text));
+}
+
+.rg-spin {
+  animation: rg-spin 800ms linear infinite;
+}
+
+@keyframes rg-spin {
+  to { transform: rotate(360deg); }
 }
 
 .rg-detail-document > .rg-field {
