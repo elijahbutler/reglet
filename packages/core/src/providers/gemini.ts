@@ -1,4 +1,4 @@
-import { detectDir, inventoryFor, providerPath } from './common.js';
+import { detectDir, inventoryFor, providerPathAt } from './common.js';
 import { applyJsonMcp, readJsonMcpServerNames } from './json-mcp.js';
 import type { ProviderAdapter } from './types.js';
 export const geminiAdapter: ProviderAdapter = {
@@ -66,11 +66,11 @@ export const geminiAdapter: ProviderAdapter = {
     { capability: 'mcp', fixture: 'gemini/mcp', expectedSchemaVersion: 2 },
   ],
   detect: () => detectDir('.gemini'),
-  rulesPath: () => providerPath('.gemini', 'GEMINI.md'),
-  skillsDir: () => providerPath('.gemini', 'skills'),
-  mcpPath: () => providerPath('.gemini', 'settings.json'),
+  rulesPath: (root) => providerPathAt(root, '.gemini', 'GEMINI.md'),
+  skillsDir: (root) => providerPathAt(root, '.gemini', 'skills'),
+  mcpPath: (root) => providerPathAt(root, '.gemini', 'settings.json'),
   applyMcp(servers, ctx) {
-    return applyJsonMcp('gemini', this.mcpPath() ?? providerPath('.gemini', 'settings.json'), servers, ctx);
+    return applyJsonMcp('gemini', this.mcpPath(ctx.providerHome) ?? providerPathAt(ctx.providerHome, '.gemini', 'settings.json'), servers, ctx);
   },
   async inventory() {
     const mcpPath = this.mcpPath();

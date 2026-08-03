@@ -1,4 +1,4 @@
-import { detectDir, inventoryFor, providerPath } from './common.js';
+import { detectDir, inventoryFor, providerPathAt } from './common.js';
 import { applyOpenCodeMcp, readOpenCodeMcpServerNames } from './opencode-mcp.js';
 import type { ProviderAdapter } from './types.js';
 export const opencodeAdapter: ProviderAdapter = {
@@ -102,12 +102,12 @@ export const opencodeAdapter: ProviderAdapter = {
     { capability: 'mcp', fixture: 'opencode/mcp', expectedSchemaVersion: 2 },
   ],
   detect: () => detectDir('.config', 'opencode'),
-  rulesPath: () => providerPath('.config', 'opencode', 'AGENTS.md'),
-  skillsDir: () => providerPath('.config', 'opencode', 'skills'),
-  mcpPath: () => providerPath('.config', 'opencode', 'opencode.json'),
+  rulesPath: (root) => providerPathAt(root, '.config', 'opencode', 'AGENTS.md'),
+  skillsDir: (root) => providerPathAt(root, '.config', 'opencode', 'skills'),
+  mcpPath: (root) => providerPathAt(root, '.config', 'opencode', 'opencode.json'),
   applyMcp(servers, ctx) {
     return applyOpenCodeMcp(
-      this.mcpPath() ?? providerPath('.config', 'opencode', 'opencode.json'),
+      this.mcpPath(ctx.providerHome) ?? providerPathAt(ctx.providerHome, '.config', 'opencode', 'opencode.json'),
       servers,
       ctx,
     );

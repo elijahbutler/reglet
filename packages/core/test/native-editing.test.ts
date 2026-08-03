@@ -131,7 +131,7 @@ describe('native MCP editing', () => {
     const codexScope = path.join(root, 'mcp', 'providers', 'codex');
     await Bun.write(path.join(codexScope, 'servers.json'), '{"mcpServers":{"bad":{"command":"node","env":{"TOKEN":"provider-secret"}}}}\n');
 
-    const preview = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root });
+    const preview = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root, providerHome });
     expect(preview.validationIssues).toEqual([]);
     expect(preview.entries[0]?.operation).toBe('write');
     expect(JSON.stringify(preview)).not.toContain('provider-secret');
@@ -154,7 +154,7 @@ describe('native MCP editing', () => {
       '{"mcpServers":{"legacy":{"command":"node","env":{"TOKEN":"raw-preview-secret"}}}}\n',
     );
 
-    const preview = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root });
+    const preview = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root, providerHome });
     expect(preview.validationIssues).toContain('mcp/legacy: env.TOKEN must be a process-env reference, not a raw string');
     expect(JSON.stringify(preview)).not.toContain('raw-preview-secret');
   });
@@ -176,7 +176,7 @@ describe('native MCP editing', () => {
     const output = path.join(providerHome, '.claude.json');
     await writeFile(output, '{"theme":"dark","mcpServers":{"local":{"command":"ruby"}}}\n');
 
-    const preview = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root });
+    const preview = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root, providerHome });
     expect(preview.entries[0]?.diff).toContain('"theme": "dark"');
     expect(preview.entries[0]?.diff).toContain('<redacted:TOKEN>');
     expect(preview.entries[0]?.diff).not.toContain('super-secret');
@@ -192,23 +192,23 @@ describe('native MCP editing', () => {
       output,
       '{"mcpServers":{"managed":{"command":"node","env":{"TOKEN":"provider-secret-one"}}}}\n',
     );
-    const changedProviderSecret = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root });
+    const changedProviderSecret = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root, providerHome });
     await writeFile(
       output,
       '{"mcpServers":{"managed":{"command":"node","env":{"TOKEN":"provider-secret-two"}}}}\n',
     );
-    const rotatedProviderSecret = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root });
+    const rotatedProviderSecret = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root, providerHome });
     expect(rotatedProviderSecret.digest).not.toBe(changedProviderSecret.digest);
     expect(JSON.stringify(rotatedProviderSecret)).not.toContain('provider-secret-two');
 
-    const sameFilesNewEnv = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root });
+    const sameFilesNewEnv = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root, providerHome });
     process.env.REGLET_TEST_TOKEN = 'rotated-secret';
-    const changedEnv = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root });
+    const changedEnv = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root, providerHome });
     expect(changedEnv.digest).not.toBe(sameFilesNewEnv.digest);
     expect(JSON.stringify(changedEnv)).not.toContain('rotated-secret');
 
     await writeFile(output, '{"theme":"light","mcpServers":{}}\n');
-    await expect(applyStructuredPreview(preview.digest, { providers: ['claude'], contents: ['mcp'], home: root }))
+    await expect(applyStructuredPreview(preview.digest, { providers: ['claude'], contents: ['mcp'], home: root, providerHome }))
       .rejects.toThrow('stale');
   });
 
@@ -226,11 +226,48 @@ describe('native MCP editing', () => {
       env: { TOKEN: { source: 'process-env', name: 'REGLET_TEST_TOKEN' } },
     }, root);
 
-    const preview = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root });
+    const preview = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home: root, providerHome });
     expect(preview.validationIssues).toContain('Missing process environment for MCP server managed: TOKEN:REGLET_TEST_TOKEN');
     expect(preview.entries[0]).toMatchObject({ operation: 'skip', after: 'claude:mcp blocked by validation' });
-    await expect(applyStructuredPreview('unused', { providers: ['claude'], contents: ['mcp'], home: root }))
+    await expect(applyStructuredPreview('unused', { providers: ['claude'], contents: ['mcp'], home: root, providerHome }))
       .rejects.toThrow('Missing process environment');
     expect(await Bun.file(path.join(providerHome, '.claude.json')).exists()).toBe(false);
+  });
+
+  test('isolates concurrent MCP previews across provider homes', async () => {
+    const roots = await Promise.all([
+      mkdtemp(path.join(tmpdir(), 'reglet-native-parallel-a-')),
+      mkdtemp(path.join(tmpdir(), 'reglet-native-parallel-b-')),
+    ]);
+    const providerRoots = await Promise.all([
+      mkdtemp(path.join(tmpdir(), 'reglet-provider-parallel-a-')),
+      mkdtemp(path.join(tmpdir(), 'reglet-provider-parallel-b-')),
+    ]);
+    try {
+      await Promise.all(roots.map(async (root, index) => {
+        await initMasterDir(root);
+        const config = await loadConfig(root);
+        config.providers.claude.enabled = true;
+        config.providers.claude.mcp = true;
+        await saveConfig(config, root);
+        await upsertMcpServer('managed', { command: 'node' }, root);
+        await writeFile(
+          path.join(providerRoots[index]!, '.claude.json'),
+          JSON.stringify({ theme: index === 0 ? 'dark' : 'light', mcpServers: {} }),
+        );
+      }));
+
+      const previews = await Promise.all(roots.map((root, index) => previewApplyStructured({
+        providers: ['claude'],
+        contents: ['mcp'],
+        home: root,
+        providerHome: providerRoots[index],
+      })));
+
+      expect(previews[0]?.entries[0]?.diff).toContain('"theme": "dark"');
+      expect(previews[1]?.entries[0]?.diff).toContain('"theme": "light"');
+    } finally {
+      await Promise.all([...roots, ...providerRoots].map((directory) => rm(directory, { recursive: true, force: true })));
+    }
   });
 });

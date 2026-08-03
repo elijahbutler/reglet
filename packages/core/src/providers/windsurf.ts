@@ -1,4 +1,4 @@
-import { detectDir, inventoryFor, providerPath } from './common.js';
+import { detectDir, inventoryFor, providerPathAt } from './common.js';
 import { applyJsonMcp, readJsonMcpServerNames } from './json-mcp.js';
 import type { ProviderAdapter } from './types.js';
 export const windsurfAdapter: ProviderAdapter = {
@@ -57,13 +57,13 @@ export const windsurfAdapter: ProviderAdapter = {
     { capability: 'mcp', fixture: 'windsurf/mcp', expectedSchemaVersion: 2 },
   ],
   detect: () => detectDir('.codeium', 'windsurf'),
-  rulesPath: () => providerPath('.codeium', 'windsurf', 'memories', 'global_rules.md'),
+  rulesPath: (root) => providerPathAt(root, '.codeium', 'windsurf', 'memories', 'global_rules.md'),
   skillsDir: () => null,
-  mcpPath: () => providerPath('.codeium', 'windsurf', 'mcp_config.json'),
+  mcpPath: (root) => providerPathAt(root, '.codeium', 'windsurf', 'mcp_config.json'),
   applyMcp(servers, ctx) {
     return applyJsonMcp(
       'windsurf',
-      this.mcpPath() ?? providerPath('.codeium', 'windsurf', 'mcp_config.json'),
+      this.mcpPath(ctx.providerHome) ?? providerPathAt(ctx.providerHome, '.codeium', 'windsurf', 'mcp_config.json'),
       servers,
       ctx,
     );

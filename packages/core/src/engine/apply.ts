@@ -19,6 +19,7 @@ export interface ApplyAllOptions {
   contents?: ApplyContent[];
   dryRun?: boolean;
   home?: string;
+  providerHome?: string;
   reviewedReplacement?: boolean;
   structuredPreviewDigest?: string;
   testHooks?: {
@@ -69,7 +70,7 @@ async function applyAllWithHome(opts: ApplyAllOptions, home: string): Promise<Ap
         contents: opts.contents,
         structuredPreviewDigest: opts.structuredPreviewDigest,
         masterRevision: revisions.masterRevision,
-        compositionRevisions: appliedCompositionRevisions(config, revisions, selectedProviders, selectedContents),
+        compositionRevisions: appliedCompositionRevisions(config, revisions, selectedProviders, selectedContents, opts.providerHome),
       });
 
   try {
@@ -109,6 +110,7 @@ async function applyAllWithHome(opts: ApplyAllOptions, home: string): Promise<Ap
         const mcpResult = adapter.applyMcp(await resolveEffectiveMcpServersEnv(adapter.id, home), {
           dryRun,
           home,
+          providerHome: opts.providerHome,
           operation,
           masterRevision: revisions.masterRevision,
           compositionRevision: revisions.compositionRevisions[adapter.id].mcp,
@@ -135,6 +137,7 @@ function appliedCompositionRevisions(
   revisions: MasterRevisionSet,
   providers: readonly ProviderAdapter[],
   contents: readonly ApplyContent[],
+  providerHome: string | undefined,
 ): Record<string, string> {
   const applied: Record<string, string> = {};
   for (const adapter of providers) {
@@ -142,10 +145,10 @@ function appliedCompositionRevisions(
     if (!providerConfig.enabled) continue;
     for (const content of contents) {
       const destination = content === 'rules'
-        ? adapter.rulesPath()
+        ? adapter.rulesPath(providerHome)
         : content === 'skills'
-          ? adapter.skillsDir()
-          : adapter.mcpPath();
+          ? adapter.skillsDir(providerHome)
+          : adapter.mcpPath(providerHome);
       if (providerConfig[content] && destination !== null) {
         applied[compositionRevisionKey(adapter.id, content)] = revisions.compositionRevisions[adapter.id][content];
       }
@@ -198,7 +201,7 @@ async function applyRules(
   masterRevision: string,
   compositionRevision: string,
 ): Promise<ApplyResult> {
-  const outputPath = adapter.rulesPath();
+  const outputPath = adapter.rulesPath(opts.providerHome);
   if (outputPath === null) {
     return skipped(adapter, 'rules', `${adapter.id}:rules unsupported`);
   }
@@ -235,7 +238,7 @@ async function applySkills(
   masterRevision: string,
   compositionRevision: string,
 ): Promise<ApplyResult[]> {
-  const skillsDir = adapter.skillsDir();
+  const skillsDir = adapter.skillsDir(opts.providerHome);
   if (skillsDir === null) {
     return [skipped(adapter, 'skills', `${adapter.id}:skills unsupported`)];
   }
