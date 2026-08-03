@@ -24,7 +24,8 @@ if [[ "${REGLET_CREATE_UPDATER_ARTIFACTS:-0}" == "1" ]]; then
     echo "Signed updater builds require REGLET_UPDATER_PUBLIC_KEY and TAURI_SIGNING_PRIVATE_KEY." >&2
     exit 1
   fi
-  CONFIG_ARGS+=(--config "$ROOT_DIR/apps/desktop/src-tauri/tauri.updater.conf.json")
+  UPDATER_CONFIG="$(bun "$ROOT_DIR/scripts/generate-tauri-updater-config.ts")"
+  CONFIG_ARGS+=(--config "$UPDATER_CONFIG")
 fi
 
 bun run --cwd "$ROOT_DIR/apps/desktop" tauri build \

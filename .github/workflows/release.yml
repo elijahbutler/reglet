@@ -107,7 +107,7 @@ jobs:
       - run: bun run desktop:typecheck
       - run: bun run desktop:lint
       - run: bun run desktop:test
-      - run: bun test scripts/generate-tauri-updater-manifest.test.ts
+      - run: bun test scripts/generate-tauri-updater-config.test.ts scripts/generate-tauri-updater-manifest.test.ts
       - run: bun run test:homebrew-publisher
       - run: bash scripts/stage-tauri-check-sidecar.sh
       - run: bun run desktop:cargo:check
