@@ -1,4 +1,4 @@
-import { detectDir, inventoryFor, providerPath } from './common.js';
+import { detectDir, inventoryFor, providerPathAt } from './common.js';
 import { applyJsonMcp, readJsonMcpServerNames } from './json-mcp.js';
 import type { ProviderAdapter } from './types.js';
 export const cursorAdapter: ProviderAdapter = {
@@ -86,10 +86,10 @@ export const cursorAdapter: ProviderAdapter = {
   ],
   detect: () => detectDir('.cursor'),
   rulesPath: () => null,
-  skillsDir: () => providerPath('.cursor', 'skills'),
-  mcpPath: () => providerPath('.cursor', 'mcp.json'),
+  skillsDir: (root) => providerPathAt(root, '.cursor', 'skills'),
+  mcpPath: (root) => providerPathAt(root, '.cursor', 'mcp.json'),
   applyMcp(servers, ctx) {
-    return applyJsonMcp('cursor', this.mcpPath() ?? providerPath('.cursor', 'mcp.json'), servers, ctx);
+    return applyJsonMcp('cursor', this.mcpPath(ctx.providerHome) ?? providerPathAt(ctx.providerHome, '.cursor', 'mcp.json'), servers, ctx);
   },
   async inventory() {
     const mcpPath = this.mcpPath();

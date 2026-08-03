@@ -42,6 +42,7 @@ export interface ApplyResult {
 export interface ApplyContext {
   dryRun: boolean;
   home?: string;
+  providerHome?: string;
   operation?: OperationContext;
   masterRevision?: string;
   compositionRevision?: string;
@@ -66,9 +67,9 @@ export interface ProviderAdapter {
   compatibilityFixtures: CompatibilityFixture[];
   configuredDiscoveries?(): Promise<ProviderDiscoveryDeclaration[]>;
   detect(): Promise<boolean>;
-  rulesPath(): string | null;
-  skillsDir(): string | null;
-  mcpPath(): string | null;
+  rulesPath(providerHome?: string): string | null;
+  skillsDir(providerHome?: string): string | null;
+  mcpPath(providerHome?: string): string | null;
   applyMcp(servers: Record<string, ResolvedMcpServerDef>, ctx: ApplyContext): Promise<ApplyResult> | null;
   inventory(): Promise<ProviderInventory>;
 }

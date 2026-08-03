@@ -6,6 +6,7 @@ import {
   isNodeError,
   isRecord,
   providerPath,
+  providerPathAt,
 } from './common.js';
 import { applyCodexMcp, readCodexMcpServerNames } from './codex-mcp.js';
 import type {
@@ -135,12 +136,12 @@ export const codexAdapter: ProviderAdapter = {
   ],
   configuredDiscoveries: codexConfiguredProjectDiscoveries,
   detect: () => detectDir('.codex'),
-  rulesPath: () => providerPath('.codex', 'AGENTS.md'),
-  skillsDir: () => providerPath('.agents', 'skills'),
-  mcpPath: () => providerPath('.codex', 'config.toml'),
+  rulesPath: (root) => providerPathAt(root, '.codex', 'AGENTS.md'),
+  skillsDir: (root) => providerPathAt(root, '.agents', 'skills'),
+  mcpPath: (root) => providerPathAt(root, '.codex', 'config.toml'),
   applyMcp(servers, ctx) {
     return applyCodexMcp(
-      this.mcpPath() ?? providerPath('.codex', 'config.toml'),
+      this.mcpPath(ctx.providerHome) ?? providerPathAt(ctx.providerHome, '.codex', 'config.toml'),
       servers,
       ctx,
     );

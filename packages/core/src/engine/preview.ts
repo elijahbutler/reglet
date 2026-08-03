@@ -20,6 +20,7 @@ export interface StructuredApplyPreviewOptions {
   providers?: ProviderId[];
   contents?: ApplyContent[];
   home?: string;
+  providerHome?: string;
 }
 
 export interface StructuredApplyPreview {
@@ -96,6 +97,7 @@ export async function applyStructuredPreview(
     providers: options.providers,
     contents: options.contents,
     home: options.home,
+    providerHome: options.providerHome,
     reviewedReplacement: true,
     structuredPreviewDigest: preview.digest,
   });
@@ -128,10 +130,10 @@ async function previewApplyStructuredBody(
         continue;
       }
       if (content === 'rules') {
-        entries.push(await previewRules(adapter, [...master.rules, ...master.providerRules[adapter.id]], home, driftByPath, revisions.compositionRevisions[adapter.id].rules));
+        entries.push(await previewRules(adapter, [...master.rules, ...master.providerRules[adapter.id]], home, driftByPath, revisions.compositionRevisions[adapter.id].rules, options.providerHome));
       }
-      if (content === 'skills') entries.push(...(await previewSkills(adapter, master, config, home, driftByPath, revisions.compositionRevisions[adapter.id].skills)));
-      if (content === 'mcp') entries.push(await previewMcp(adapter, home, driftByPath, validationIssues, revisions.compositionRevisions[adapter.id].mcp));
+      if (content === 'skills') entries.push(...(await previewSkills(adapter, master, config, home, driftByPath, revisions.compositionRevisions[adapter.id].skills, options.providerHome)));
+      if (content === 'mcp') entries.push(await previewMcp(adapter, home, driftByPath, validationIssues, revisions.compositionRevisions[adapter.id].mcp, options.providerHome));
     }
   }
 
@@ -180,8 +182,9 @@ async function previewRules(
   home: string,
   driftByPath: ReadonlyMap<string, DriftStatus>,
   compositionRevision: string,
+  providerRoot: string | undefined,
 ): Promise<StructuredApplyPreviewEntry> {
-  const outputPath = adapter.rulesPath();
+  const outputPath = adapter.rulesPath(providerRoot);
   if (outputPath === null) return skipEntry(adapter.id, 'rules', `${adapter.id}:rules unsupported`);
   const before = await readOptionalFile(outputPath);
   const after = renderRulesFile(adapter.id, rules);
@@ -195,8 +198,9 @@ async function previewSkills(
   home: string,
   driftByPath: ReadonlyMap<string, DriftStatus>,
   compositionRevision: string,
+  providerRoot: string | undefined,
 ): Promise<StructuredApplyPreviewEntry[]> {
-  const skillsDir = adapter.skillsDir();
+  const skillsDir = adapter.skillsDir(providerRoot);
   if (skillsDir === null) return [skipEntry(adapter.id, 'skills', `${adapter.id}:skills unsupported`)];
   const resolved = new Map<string, string>();
   for (const skill of master.skills) {
@@ -251,8 +255,10 @@ async function previewMcp(
   driftByPath: ReadonlyMap<string, DriftStatus>,
   validationIssues: readonly string[],
   compositionRevision: string,
+  providerRootOverride: string | undefined,
 ): Promise<StructuredApplyPreviewEntry> {
-  const outputPath = adapter.mcpPath();
+  const providerRoot = providerRootOverride ?? providerHome();
+  const outputPath = adapter.mcpPath(providerRoot);
   if (outputPath === null) {
     return skipEntry(adapter.id, 'mcp', `${adapter.id}:mcp unsupported`);
   }
@@ -267,11 +273,11 @@ async function previewMcp(
   } catch {
     return skipEntry(adapter.id, 'mcp', `${adapter.id}:mcp blocked by validation`);
   }
-  if (adapter.applyMcp(resolvedServers, { dryRun: true, home }) === null) {
+  if (adapter.applyMcp(resolvedServers, { dryRun: true, home, providerHome: providerRoot }) === null) {
     return skipEntry(adapter.id, 'mcp', `${adapter.id}:mcp unsupported`);
   }
   const rawBefore = await readOptionalFile(outputPath);
-  const rawAfter = await renderMcpInSandbox(adapter, outputPath, home);
+  const rawAfter = await renderMcpInSandbox(adapter, outputPath, home, providerRoot);
   const before = await redactMcpSecrets(rawBefore, redactionServers);
   const after = await redactMcpSecrets(rawAfter, redactionServers);
   return makeEntry(
@@ -298,25 +304,22 @@ async function renderMcpInSandbox(
   adapter: ProviderAdapter,
   outputPath: string,
   home: string,
+  providerRoot: string,
 ): Promise<string | null> {
   const sandbox = await mkdtemp(path.join(tmpdir(), 'reglet-preview-'));
   const sandboxHome = path.join(sandbox, 'reglet');
   const sandboxProviderHome = path.join(sandbox, 'provider');
-  const relativeOutput = path.relative(providerHome(), outputPath);
+  const relativeOutput = path.relative(providerRoot, outputPath);
   const sandboxOutput = path.join(sandboxProviderHome, relativeOutput);
-  const previousProviderHome = process.env.REGLET_PROVIDER_HOME;
   try {
     await mkdir(path.join(sandboxHome, 'mcp'), { recursive: true });
     await copyIfPresent(path.join(home, 'reglet.toml'), path.join(sandboxHome, 'reglet.toml'));
     await copyIfPresent(path.join(home, 'mcp', 'servers.json'), path.join(sandboxHome, 'mcp', 'servers.json'));
     await copyIfPresent(path.join(home, 'mcp', 'providers'), path.join(sandboxHome, 'mcp', 'providers'));
     await copyIfPresent(outputPath, sandboxOutput);
-    process.env.REGLET_PROVIDER_HOME = sandboxProviderHome;
-    await applyAll({ providers: [adapter.id], contents: ['mcp'], home: sandboxHome });
+    await applyAll({ providers: [adapter.id], contents: ['mcp'], home: sandboxHome, providerHome: sandboxProviderHome });
     return readOptionalFile(sandboxOutput);
   } finally {
-    if (previousProviderHome === undefined) delete process.env.REGLET_PROVIDER_HOME;
-    else process.env.REGLET_PROVIDER_HOME = previousProviderHome;
     await rm(sandbox, { recursive: true, force: true });
   }
 }

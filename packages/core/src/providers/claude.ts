@@ -1,4 +1,4 @@
-import { detectDir, inventoryFor, providerPath } from './common.js';
+import { detectDir, inventoryFor, providerPathAt } from './common.js';
 import { applyJsonMcp, readJsonMcpServerNames } from './json-mcp.js';
 import type { ProviderAdapter } from './types.js';
 export const claudeAdapter: ProviderAdapter = {
@@ -66,11 +66,11 @@ export const claudeAdapter: ProviderAdapter = {
     { capability: 'mcp', fixture: 'claude/mcp', expectedSchemaVersion: 2 },
   ],
   detect: () => detectDir('.claude'),
-  rulesPath: () => providerPath('.claude', 'CLAUDE.md'),
-  skillsDir: () => providerPath('.claude', 'skills'),
-  mcpPath: () => providerPath('.claude.json'),
+  rulesPath: (root) => providerPathAt(root, '.claude', 'CLAUDE.md'),
+  skillsDir: (root) => providerPathAt(root, '.claude', 'skills'),
+  mcpPath: (root) => providerPathAt(root, '.claude.json'),
   applyMcp(servers, ctx) {
-    return applyJsonMcp('claude', this.mcpPath() ?? providerPath('.claude.json'), servers, ctx);
+    return applyJsonMcp('claude', this.mcpPath(ctx.providerHome) ?? providerPathAt(ctx.providerHome, '.claude.json'), servers, ctx);
   },
   async inventory() {
     const mcpPath = this.mcpPath();

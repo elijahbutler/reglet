@@ -4,7 +4,11 @@ import { providerHome } from '../paths.js';
 import type { ProviderInventory } from './types.js';
 
 export function providerPath(...parts: string[]): string {
-  return path.join(providerHome(), ...parts);
+  return providerPathAt(undefined, ...parts);
+}
+
+export function providerPathAt(root: string | undefined, ...parts: string[]): string {
+  return path.join(root ?? providerHome(), ...parts);
 }
 
 export async function pathExists(filePath: string): Promise<boolean> {
