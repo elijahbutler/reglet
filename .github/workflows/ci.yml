@@ -26,7 +26,7 @@ jobs:
       - run: bun run lint
         if: runner.os == 'Linux'
       - run: bun run test
-      - run: bun test scripts/generate-tauri-updater-manifest.test.ts
+      - run: bun test scripts/generate-tauri-updater-config.test.ts scripts/generate-tauri-updater-manifest.test.ts
         if: runner.os == 'Linux'
       - run: bun run test:homebrew-publisher
         if: runner.os == 'Linux'
