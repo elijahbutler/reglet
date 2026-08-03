@@ -18,7 +18,16 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
 fi
 
 export REGLET_VERSION="$VERSION"
+CONFIG_ARGS=(--config "{\"version\":\"$VERSION\"}")
+if [[ "${REGLET_CREATE_UPDATER_ARTIFACTS:-0}" == "1" ]]; then
+  if [[ -z "${REGLET_UPDATER_PUBLIC_KEY:-}" || -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+    echo "Signed updater builds require REGLET_UPDATER_PUBLIC_KEY and TAURI_SIGNING_PRIVATE_KEY." >&2
+    exit 1
+  fi
+  CONFIG_ARGS+=(--config "$ROOT_DIR/apps/desktop/src-tauri/tauri.updater.conf.json")
+fi
+
 bun run --cwd "$ROOT_DIR/apps/desktop" tauri build \
   --target "$TARGET" \
   --bundles "$BUNDLES" \
-  --config "{\"version\":\"$VERSION\"}"
+  "${CONFIG_ARGS[@]}"

@@ -28,6 +28,11 @@ jobs:
       - run: bun run build:binaries -- windows-x64
       - run: bash scripts/stage-tauri-sidecars.sh x86_64-pc-windows-msvc
       - run: bash scripts/build-tauri-desktop.sh x86_64-pc-windows-msvc nsis
+        env:
+          REGLET_CREATE_UPDATER_ARTIFACTS: "1"
+          REGLET_UPDATER_PUBLIC_KEY: ${{ vars.REGLET_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - name: Collect Windows desktop artifacts
         shell: bash
         run: |
@@ -35,7 +40,9 @@ jobs:
           mkdir -p dist/desktop
           installer="$(find apps/desktop/src-tauri/target -path '*/bundle/nsis/*' -type f -name '*.exe' | head -n 1)"
           test -n "$installer"
+          test -f "$installer.sig"
           cp "$installer" dist/desktop/reglet-desktop-windows-x64-setup.exe
+          cp "$installer.sig" dist/desktop/reglet-desktop-windows-x64-setup.exe.sig
       - uses: actions/upload-artifact@v4
         with:
           name: tauri-windows-unsigned
@@ -60,6 +67,11 @@ jobs:
       - run: bun audit --production
       - run: bun test packages/core/test/sync-v2-credentials.test.ts
       - run: REGLET_ARCH=x86_64 bun run build:macos-release
+        env:
+          REGLET_CREATE_UPDATER_ARTIFACTS: "1"
+          REGLET_UPDATER_PUBLIC_KEY: ${{ vars.REGLET_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - uses: actions/upload-artifact@v4
         with:
           name: tauri-macos-intel
@@ -67,6 +79,8 @@ jobs:
             dist/reglet-darwin-x64
             dist/desktop/reglet-desktop-macos-x86_64.app.zip
             dist/desktop/reglet-desktop-macos-x86_64.dmg
+            dist/desktop/reglet-desktop-macos-x86_64.app.tar.gz
+            dist/desktop/reglet-desktop-macos-x86_64.app.tar.gz.sig
 
   publish-release:
     needs: [build-tauri-windows, build-tauri-macos-intel]
@@ -93,11 +107,18 @@ jobs:
       - run: bun run desktop:typecheck
       - run: bun run desktop:lint
       - run: bun run desktop:test
+      - run: bun test scripts/generate-tauri-updater-manifest.test.ts
+      - run: bun run test:homebrew-publisher
       - run: bash scripts/stage-tauri-check-sidecar.sh
       - run: bun run desktop:cargo:check
       - run: bun run desktop:cargo:test
       - name: Build ad-hoc-signed unnotarized Apple silicon Tauri artifacts
         run: REGLET_ARCH=arm64 bun run build:macos-release
+        env:
+          REGLET_CREATE_UPDATER_ARTIFACTS: "1"
+          REGLET_UPDATER_PUBLIC_KEY: ${{ vars.REGLET_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - uses: actions/download-artifact@v4
         with:
           name: tauri-windows-unsigned
@@ -106,6 +127,7 @@ jobs:
         with:
           name: tauri-macos-intel
           path: dist
+      - run: bun run build:updater-manifest
       - name: Create checksums and release provenance
         shell: bash
         run: |
@@ -120,7 +142,7 @@ jobs:
           )
           {
             printf 'commit=%s\nref=%s\nrun=%s\n' "$GITHUB_SHA" "$GITHUB_REF_NAME" "$GITHUB_RUN_ID"
-            printf 'artifacts=%s\n' "standalone CLI binaries, ad-hoc-signed unnotarized Tauri macOS artifacts, unsigned Tauri Windows artifacts"
+            printf 'artifacts=%s\n' "standalone CLI binaries, platform installers, and cryptographically signed Tauri updater artifacts plus latest.json"
           } > dist/provenance.txt
       - run: bun run build:homebrew-formula
       - name: Attest release artifacts
@@ -148,7 +170,7 @@ jobs:
               --draft \
               --title "$GITHUB_REF_NAME" \
               --generate-notes \
-              --notes "Includes standalone CLI binaries, ad-hoc-signed unnotarized macOS desktop artifacts, and unsigned Windows desktop artifacts. macOS artifacts are not Developer ID signed and Windows may require SmartScreen approval. Linux GUI packaging is structurally prepared but not published."
+              --notes "Includes standalone CLI binaries, ad-hoc-signed unnotarized macOS desktop artifacts, unsigned Windows desktop artifacts, and cryptographically signed in-app updater artifacts. macOS artifacts are not Developer ID signed and Windows may require SmartScreen approval. Linux GUI packaging is structurally prepared but not published."
           fi
           gh release upload "$GITHUB_REF_NAME" --clobber \
             dist/reglet-darwin-arm64 \
@@ -160,28 +182,7 @@ jobs:
       - name: Update Homebrew tap
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${HOMEBREW_TAP_TOKEN:-}" ]]; then
-            echo "HOMEBREW_TAP_TOKEN is required to publish Reglet releases. It must push Formula/reglet.rb and Casks/reglet.rb to elijahbutler/homebrew-reglet." >&2
-            exit 1
-          fi
-
-          TAP_DIR="$RUNNER_TEMP/homebrew-reglet"
-          git clone --depth 1 "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/elijahbutler/homebrew-reglet.git" "$TAP_DIR"
-          mkdir -p "$TAP_DIR/Formula" "$TAP_DIR/Casks"
-          cp dist/homebrew/Formula/reglet.rb "$TAP_DIR/Formula/reglet.rb"
-          cp dist/homebrew/Casks/reglet.rb "$TAP_DIR/Casks/reglet.rb"
-
-          git -C "$TAP_DIR" config user.name "github-actions[bot]"
-          git -C "$TAP_DIR" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git -C "$TAP_DIR" add Formula/reglet.rb Casks/reglet.rb
-          if git -C "$TAP_DIR" diff --cached --quiet; then
-            echo "Homebrew tap already up to date."
-            exit 0
-          fi
-          git -C "$TAP_DIR" commit -m "reglet ${GITHUB_REF_NAME}"
-          git -C "$TAP_DIR" push origin HEAD:main
+        run: bash scripts/publish-homebrew-tap.sh
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -18,6 +18,7 @@ import {
   Settings,
   SlidersHorizontal,
   Trash2,
+  Download,
 } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -62,15 +63,19 @@ export interface ManagerAppProps {
   initialDestination?: Destination;
 }
 
-export interface ManagerUpdateStatus {
-  available: boolean;
-  currentVersion: string;
-  latestVersion: string;
-}
+export type ManagerUpdateStatus =
+  | { status: 'disabled'; currentVersion: string; reason: string }
+  | { status: 'current'; currentVersion: string }
+  | { status: 'available'; currentVersion: string; latestVersion: string; notes: string | null };
+
+export type ManagerUpdateDownloadEvent =
+  | { event: 'started'; contentLength: number | null }
+  | { event: 'progress'; chunkLength: number }
+  | { event: 'finished' };
 
 export interface ManagerHostActions {
   checkForUpdates?: () => Promise<ManagerUpdateStatus>;
-  openRelease?: () => Promise<void>;
+  installUpdate?: (onProgress: (event: ManagerUpdateDownloadEvent) => void) => Promise<void>;
 }
 
 export function ManagerApp({ client, hostActions, initialDestination = 'library' }: ManagerAppProps) {
@@ -87,6 +92,7 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
   const [error, setError] = useState<string | null>(null);
   const [sheet, setSheet] = useState<ArtifactSheet>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<ManagerUpdateStatus | null>(null);
   const [preparedPreview, setPreparedPreview] = useState<{ batchDigest: string; artifactId: string; provider: ManagerArtifactProjectionV3['provider']; unitDigests: Record<string, string> } | null>(null);
 
   const refresh = useCallback(async () => {
@@ -106,6 +112,22 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
     void refresh();
     return client.subscribe(() => void refresh());
   }, [client, refresh]);
+
+  useEffect(() => {
+    if (hostActions?.checkForUpdates === undefined || updateStatus !== null) return;
+    let disposed = false;
+    const timer = window.setTimeout(() => {
+      void hostActions.checkForUpdates?.().then((status) => {
+        if (!disposed) setUpdateStatus(status);
+      }).catch(() => {
+        // Background checks stay quiet; Settings exposes an explicit retry path.
+      });
+    }, 8_000);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [hostActions, updateStatus]);
 
   const artifacts = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -263,6 +285,9 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
           <span>Search or run command</span>
         </button>
         <div className="rg-command-actions">
+          {updateStatus?.status === 'available' ? <Button className="rg-update-command" tone="secondary" icon={<Download size={15} />} onClick={() => setDestination('settings')}>
+            Update {updateStatus.latestVersion}
+          </Button> : null}
           <Button tone="secondary" icon={<Plus size={15} />} onClick={() => setSheet('create')}>New</Button>
           <Button tone="secondary" icon={<FileDiff size={15} />} onClick={() => void preparePreview()} disabled={busy || selectedArtifact === null}>
             Preview diff
@@ -315,7 +340,7 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
         ) : destination === 'projects' ? <ProjectInboxWorkbench client={client} snapshot={snapshot} onRefresh={refresh} onError={setError} />
           : destination === 'providers' ? <ProvidersWorkbench client={client} snapshot={snapshot} onError={setError} />
             : destination === 'activity' ? <ActivityWorkbench snapshot={snapshot} />
-              : <SettingsWorkbench client={client} hostActions={hostActions} snapshot={snapshot} onRefresh={refresh} onError={setError} />}
+              : <SettingsWorkbench client={client} hostActions={hostActions} updateStatus={updateStatus} onUpdateStatus={setUpdateStatus} snapshot={snapshot} onRefresh={refresh} onError={setError} />}
       </main>
 
       <CommandPalette

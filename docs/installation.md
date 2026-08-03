@@ -2,7 +2,7 @@
 
 ## Requirements
 
-Public releases include macOS arm64, macOS x64, and Windows x64 CLI binaries plus ad-hoc-signed/unnotarized macOS and unsigned Windows desktop artifacts. Linux GUI artifacts are deferred.
+Public releases include macOS arm64, macOS x64, and Windows x64 CLI binaries plus ad-hoc-signed/unnotarized macOS and unsigned Windows desktop artifacts. Installed desktop builds can check for a signed update in **Settings → General**, download it with visible progress, install it, and relaunch Reglet. Linux GUI artifacts are deferred.
 
 ## Homebrew
 
