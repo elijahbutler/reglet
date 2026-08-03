@@ -1,70 +1,103 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420" role="img" aria-labelledby="title desc">
   <title id="title">Reglet engineering control plane</title>
-  <desc id="desc">A terminal-style systems diagram showing Reglet compiling one master directory into local AI agent provider outputs.</desc>
+  <desc id="desc">Reglet keeps one auditable master directory and explicitly applies its contents to local AI coding tools.</desc>
+
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0b1020"/>
-      <stop offset="1" stop-color="#111827"/>
-    </linearGradient>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0 0L8 4L0 8Z" fill="#7f8082"/>
+    </marker>
     <style>
-      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-      .sans { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      .panel { fill: #0f172a; stroke: #334155; stroke-width: 1.5; }
-      .muted { fill: #94a3b8; }
-      .text { fill: #e5e7eb; }
-      .green { fill: #34d399; }
-      .blue { fill: #60a5fa; }
-      .amber { fill: #fbbf24; }
-      .line { stroke: #64748b; stroke-width: 2; fill: none; }
+      .ui { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+      .text { fill: #e6e6e6; }
+      .muted { fill: #a9a9aa; }
+      .faint { fill: #7f8082; }
+      .coral { fill: #ff6363; }
+      .success { fill: #9acb69; }
+      .panel { fill: #0b0c0e; stroke: #2f3031; stroke-width: 1; }
+      .rule { stroke: #2f3031; stroke-width: 1; }
     </style>
   </defs>
 
-  <rect width="1280" height="420" fill="url(#bg)"/>
-  <rect x="32" y="28" width="1216" height="364" rx="14" class="panel"/>
+  <rect width="1280" height="420" fill="#040506"/>
+  <rect x="28" y="24" width="1224" height="372" rx="14" fill="#07080a" stroke="#2f3031"/>
 
-  <g class="sans">
-    <text x="70" y="82" class="muted" font-size="18" font-weight="700">REGLET</text>
-    <text x="70" y="126" class="text" font-size="38" font-weight="800">Agent config as local infrastructure</text>
-    <text x="70" y="158" class="muted" font-size="18">One auditable master directory compiled into every local AI coding tool.</text>
+  <g class="ui">
+    <g transform="translate(64 45)">
+      <circle cx="11" cy="11" r="10.5" fill="#111214" stroke="#6f3537"/>
+      <text x="11" y="15" text-anchor="middle" class="coral" font-size="10" font-weight="750">R</text>
+      <text x="32" y="16" class="text" font-size="15" font-weight="650">Reglet</text>
+    </g>
+
+    <text x="64" y="116" class="text" font-size="38" font-weight="760" letter-spacing="-0.8">Agent config as local infrastructure</text>
+    <text x="64" y="151" class="muted" font-size="17">One auditable master directory, compiled into every</text>
+    <text x="64" y="176" class="muted" font-size="17">local AI coding tool.</text>
   </g>
 
-  <g transform="translate(70 196)">
-    <rect width="505" height="148" rx="10" fill="#020617" stroke="#1e293b"/>
-    <circle cx="24" cy="24" r="5" fill="#ef4444"/>
-    <circle cx="42" cy="24" r="5" fill="#f59e0b"/>
-    <circle cx="60" cy="24" r="5" fill="#22c55e"/>
-    <text x="24" y="60" class="mono green" font-size="15">$ reglet plan --provider claude,codex --content rules,mcp --json</text>
-    <text x="24" y="90" class="mono text" font-size="15">reads:  ~/.claude/CLAUDE.md, ~/.codex/config.toml</text>
-    <text x="24" y="116" class="mono text" font-size="15">writes: ~/.reglet/rules/*, provider outputs</text>
-    <text x="24" y="142" class="mono amber" font-size="15">daemon=off network=local notifications=off</text>
+  <g transform="translate(64 207)">
+    <rect width="558" height="157" rx="12" fill="#040506" stroke="#2f3031"/>
+    <path d="M0 37H558" class="rule"/>
+    <circle cx="18" cy="18" r="4" fill="#ff6363"/>
+    <circle cx="33" cy="18" r="4" fill="#7f8082"/>
+    <circle cx="48" cy="18" r="4" fill="#454647"/>
+    <text x="70" y="23" class="mono faint" font-size="12">preview — no files changed</text>
+
+    <g class="mono" font-size="13.5">
+      <text x="18" y="66" class="coral">$ reglet apply-structured preview</text>
+      <text x="18" y="92" class="text">provider  claude, codex  ·  content  rules, mcp</text>
+      <text x="18" y="118" class="muted">reads     provider state + ~/.reglet/</text>
+      <text x="18" y="144" class="success">writes    nothing until explicit apply</text>
+    </g>
   </g>
 
-  <g transform="translate(644 82)" class="mono">
-    <rect width="250" height="236" rx="10" class="panel"/>
-    <text x="24" y="36" class="blue" font-size="15" font-weight="700">~/.reglet/</text>
-    <text x="24" y="72" class="text" font-size="15">rules/*.md</text>
-    <text x="24" y="102" class="text" font-size="15">skills/*/SKILL.md</text>
-    <text x="24" y="132" class="text" font-size="15">mcp/servers.json</text>
-    <text x="24" y="162" class="text" font-size="15">reglet.toml</text>
-    <text x="24" y="202" class="muted" font-size="13">manifest + backups</text>
+  <g transform="translate(690 68)" class="mono">
+    <rect width="218" height="240" rx="12" class="panel"/>
+    <text x="18" y="33" class="coral" font-size="14" font-weight="700">~/.reglet/</text>
+    <path d="M18 49H200" class="rule"/>
+    <text x="18" y="78" class="text" font-size="13.5">rules/*.md</text>
+    <text x="18" y="107" class="text" font-size="13.5">skills/*/SKILL.md</text>
+    <text x="18" y="136" class="text" font-size="13.5">mcp/servers.json</text>
+    <text x="18" y="165" class="text" font-size="13.5">reglet.toml</text>
+    <path d="M18 187H200" class="rule"/>
+    <circle cx="23" cy="211" r="4" fill="#9acb69"/>
+    <text x="36" y="216" class="muted" font-size="12.5">canonical library</text>
   </g>
 
-  <path d="M894 198 H956" class="line"/>
-  <path d="M948 190 L960 198 L948 206" fill="none" stroke="#64748b" stroke-width="2"/>
-
-  <g transform="translate(966 70)" class="mono">
-    <rect width="220" height="260" rx="10" class="panel"/>
-    <text x="22" y="38" class="blue" font-size="15" font-weight="700">provider outputs</text>
-    <text x="22" y="76" class="text" font-size="14">claude  CLAUDE.md</text>
-    <text x="22" y="106" class="text" font-size="14">codex   AGENTS.md</text>
-    <text x="22" y="136" class="text" font-size="14">cursor  mcp.json</text>
-    <text x="22" y="166" class="text" font-size="14">gemini  settings.json</text>
-    <text x="22" y="196" class="text" font-size="14">windsurf mcp_config</text>
-    <text x="22" y="226" class="text" font-size="14">opencode opencode.json</text>
+  <g class="mono">
+    <path d="M922 188H956" stroke="#7f8082" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <text x="939" y="174" text-anchor="middle" class="faint" font-size="11">apply</text>
   </g>
 
-  <g class="sans">
-    <rect x="644" y="344" width="542" height="30" rx="6" fill="#172554" stroke="#1d4ed8"/>
-    <text x="664" y="365" fill="#bfdbfe" font-size="14" font-weight="700">deterministic apply  |  drift detection  |  restore/revert  |  local-only V1</text>
+  <g transform="translate(968 68)" class="mono">
+    <rect width="248" height="240" rx="12" class="panel"/>
+    <text x="18" y="33" class="text" font-size="14" font-weight="700">provider outputs</text>
+    <path d="M18 49H230" class="rule"/>
+
+    <g font-size="12.5">
+      <text x="18" y="77" class="muted">claude</text>
+      <text x="94" y="77" class="text">CLAUDE.md</text>
+      <text x="18" y="104" class="muted">codex</text>
+      <text x="94" y="104" class="text">AGENTS.md</text>
+      <text x="18" y="131" class="muted">cursor</text>
+      <text x="94" y="131" class="text">mcp.json</text>
+      <text x="18" y="158" class="muted">gemini</text>
+      <text x="94" y="158" class="text">settings.json</text>
+      <text x="18" y="185" class="muted">windsurf</text>
+      <text x="94" y="185" class="text">mcp_config.json</text>
+      <text x="18" y="212" class="muted">opencode</text>
+      <text x="94" y="212" class="text">opencode.json</text>
+    </g>
+  </g>
+
+  <g transform="translate(690 328)" class="ui">
+    <path d="M0 0H526" class="rule"/>
+    <circle cx="4" cy="23" r="4" fill="#ff6363"/>
+    <text x="18" y="28" class="text" font-size="13.5" font-weight="600">Reviewable</text>
+    <text x="107" y="28" class="faint" font-size="13.5">·</text>
+    <text x="125" y="28" class="text" font-size="13.5" font-weight="600">drift-aware</text>
+    <text x="223" y="28" class="faint" font-size="13.5">·</text>
+    <text x="241" y="28" class="text" font-size="13.5" font-weight="600">reversible</text>
+    <text x="322" y="28" class="faint" font-size="13.5">·</text>
+    <text x="340" y="28" class="muted" font-size="13.5">local-first</text>
   </g>
 </svg>
