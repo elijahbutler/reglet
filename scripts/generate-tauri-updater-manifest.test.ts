@@ -8,7 +8,7 @@ const files = [
   'reglet-desktop-macos-arm64.app.tar.gz',
   'reglet-desktop-macos-x86_64.app.tar.gz',
   'reglet-desktop-windows-x64-setup.exe',
-  'reglet-desktop-linux-x86_64.AppImage.tar.gz',
+  'reglet-desktop-linux-x86_64.AppImage',
 ] as const;
 
 describe('Tauri updater manifest', () => {
@@ -30,8 +30,8 @@ describe('Tauri updater manifest', () => {
         url: 'https://github.com/elijahbutler/reglet/releases/download/v1.2.3/reglet-desktop-windows-x64-setup.exe',
       });
       expect(manifest.platforms['linux-x86_64']).toEqual({
-        signature: 'signature-reglet-desktop-linux-x86_64.AppImage.tar.gz',
-        url: 'https://github.com/elijahbutler/reglet/releases/download/v1.2.3/reglet-desktop-linux-x86_64.AppImage.tar.gz',
+        signature: 'signature-reglet-desktop-linux-x86_64.AppImage',
+        url: 'https://github.com/elijahbutler/reglet/releases/download/v1.2.3/reglet-desktop-linux-x86_64.AppImage',
       });
     } finally {
       await rm(directory, { recursive: true, force: true });

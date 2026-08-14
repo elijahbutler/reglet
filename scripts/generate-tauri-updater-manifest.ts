@@ -18,7 +18,7 @@ const artifacts = [
   { platform: 'darwin-aarch64', file: 'reglet-desktop-macos-arm64.app.tar.gz' },
   { platform: 'darwin-x86_64', file: 'reglet-desktop-macos-x86_64.app.tar.gz' },
   { platform: 'windows-x86_64', file: 'reglet-desktop-windows-x64-setup.exe' },
-  { platform: 'linux-x86_64', file: 'reglet-desktop-linux-x86_64.AppImage.tar.gz' },
+  { platform: 'linux-x86_64', file: 'reglet-desktop-linux-x86_64.AppImage' },
 ] as const;
 
 export async function createUpdaterManifest({ directory, repository, version }: {

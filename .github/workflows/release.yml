@@ -120,15 +120,12 @@ jobs:
           mkdir -p dist/desktop
           deb="$(find apps/desktop/src-tauri/target -path '*/bundle/deb/*' -type f -name '*.deb' | head -n 1)"
           appimage="$(find apps/desktop/src-tauri/target -path '*/bundle/appimage/*' -type f -name '*.AppImage' | head -n 1)"
-          updater="$(find apps/desktop/src-tauri/target -path '*/bundle/appimage/*' -type f -name '*.AppImage.tar.gz' | head -n 1)"
           test -n "$deb"
           test -n "$appimage"
-          test -n "$updater"
-          test -f "$updater.sig"
+          test -f "$appimage.sig"
           cp "$deb" dist/desktop/reglet-desktop-linux-x86_64.deb
           cp "$appimage" dist/desktop/reglet-desktop-linux-x86_64.AppImage
-          cp "$updater" dist/desktop/reglet-desktop-linux-x86_64.AppImage.tar.gz
-          cp "$updater.sig" dist/desktop/reglet-desktop-linux-x86_64.AppImage.tar.gz.sig
+          cp "$appimage.sig" dist/desktop/reglet-desktop-linux-x86_64.AppImage.sig
       - uses: actions/upload-artifact@v4
         with:
           name: tauri-linux
