@@ -28,7 +28,14 @@ if [[ "${REGLET_CREATE_UPDATER_ARTIFACTS:-0}" == "1" ]]; then
   CONFIG_ARGS+=(--config "$UPDATER_CONFIG")
 fi
 
-bun run --cwd "$ROOT_DIR/apps/desktop" tauri build \
-  --target "$TARGET" \
-  --bundles "$BUNDLES" \
+TAURI_ARGS=(
+  build
+  --target "$TARGET"
+  --bundles "$BUNDLES"
   "${CONFIG_ARGS[@]}"
+)
+if [[ "${REGLET_TAURI_VERBOSE:-0}" == "1" ]]; then
+  TAURI_ARGS+=(--verbose)
+fi
+
+bun run --cwd "$ROOT_DIR/apps/desktop" tauri "${TAURI_ARGS[@]}"

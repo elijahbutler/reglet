@@ -81,3 +81,27 @@ jobs:
         run: bash scripts/stage-tauri-check-sidecar.sh
       - run: cd apps/desktop/src-tauri && cargo check
       - run: cd apps/desktop/src-tauri && cargo test
+
+  linux-release-package:
+    name: Linux release package
+    runs-on: ubuntu-22.04
+    env:
+      NO_STRIP: "true"
+      REGLET_TAURI_VERBOSE: "1"
+      REGLET_VERSION: 0.0.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Install Linux desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - run: bun install --frozen-lockfile
+      - run: bun run build:binaries -- linux-x64
+      - run: bash scripts/stage-tauri-sidecars.sh x86_64-unknown-linux-gnu
+      - run: bash scripts/build-tauri-desktop.sh x86_64-unknown-linux-gnu deb,appimage
