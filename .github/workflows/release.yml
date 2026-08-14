@@ -84,7 +84,7 @@ jobs:
 
   build-tauri-linux:
     name: Build Tauri Linux artifacts
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -107,6 +107,7 @@ jobs:
       - run: bash scripts/stage-tauri-sidecars.sh x86_64-unknown-linux-gnu
       - run: bash scripts/build-tauri-desktop.sh x86_64-unknown-linux-gnu deb,appimage
         env:
+          NO_STRIP: "true"
           REGLET_CREATE_UPDATER_ARTIFACTS: "1"
           REGLET_UPDATER_PUBLIC_KEY: ${{ vars.REGLET_UPDATER_PUBLIC_KEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
