@@ -63,7 +63,11 @@
         "depends": []
       },
       "appimage": {
-        "bundleMediaFramework": false
+        "bundleMediaFramework": false,
+        "files": {
+          "/usr/bin/reglet": "appimage/reglet",
+          "/usr/libexec/reglet/reglet": "bin/reglet-x86_64-unknown-linux-gnu"
+        }
       }
     },
     "resources": []

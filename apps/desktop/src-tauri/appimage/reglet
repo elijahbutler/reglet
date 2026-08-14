@@ -1,0 +1,3 @@
+#!/bin/sh
+# linuxdeploy patches ELF files in usr/bin, which corrupts Bun standalone executables.
+exec "${0%/*}/../libexec/reglet/reglet" "$@"
