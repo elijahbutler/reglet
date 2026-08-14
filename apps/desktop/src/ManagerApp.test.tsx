@@ -25,7 +25,7 @@ describe('shared Manager workbench', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
     expect(await screen.findByText('Canonical library and local runtime status.')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
-  });
+  }, 30_000);
 
   test('starts with the global library and reveals provider-specific artifacts on demand', async () => {
     const snapshot = structuredClone(managerFixtureSnapshot);

@@ -5,7 +5,7 @@
   "main": "src/index.ts",
   "dependencies": {
     "@reglet/core": "workspace:*",
-    "hono": "^4.6.0"
+    "hono": "^4.12.34"
   },
   "devDependencies": {
     "@noble/curves": "^2.2.0"
