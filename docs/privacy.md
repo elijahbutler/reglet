@@ -2,17 +2,17 @@
 
 ## Local-only configuration
 
-Public V1 manages files on the current machine only. It does not create an account, pair devices, upload configuration, fetch remote configuration, or start a background network service. Rules, skills, MCP definitions, operation journals, recovery snapshots, and receipts remain in the local master directory.
+Reglet manages files on the current machine by default. It does not create an account or start background sync. Rules, skills, MCP definitions, operation journals, recovery snapshots, and receipts remain in the local master directory unless the user explicitly connects encrypted canonical-library sync to a self-hosted server.
 
 MCP process-environment references are resolved only in memory while a provider output is being rendered. Reglet does not store or display their resolved values in its own state, previews, diagnostics, journals, or receipts.
 
 ## Network requests
 
-The configuration engine and retained manager refresh path make no network requests. Network-capable exceptions are separate user actions: update checks and optional AI rules drafting.
+The configuration engine and retained manager refresh path make no network requests. Network-capable exceptions are separate user actions: encrypted sync, update checks, and optional AI rules drafting.
 
 Before each AI draft, the desktop manager shows the selected external CLI and provider source filenames and requires consent. Reglet passes those files' contents and any optional user guidance to the installed tool, whose provider privacy terms apply, and receives an editable proposal without saving or applying it. Declining consent runs nothing. CLI users invoke the equivalent transfer explicitly with `reglet rules merge-draft`.
 
-Automatic update checks are disabled by default and can be enabled explicitly in the desktop app. macOS desktop artifacts are ad-hoc signed and unnotarized; Windows artifacts are unsigned. Linux GUI publishing is deferred.
+Encrypted sync transfers only end-to-end encrypted canonical-library objects and never project paths, drafts, provider output, or secrets. Automatic update checks are disabled by default and can be enabled explicitly in the desktop app. macOS desktop artifacts are ad-hoc signed and unnotarized; Windows artifacts are unsigned; Linux ships as `.deb` and AppImage.
 
 Provider outputs may cause their respective provider to make requests when that provider runs. Reglet does not control those providers' independent network behavior.
 

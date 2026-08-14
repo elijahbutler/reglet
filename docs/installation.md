@@ -2,7 +2,7 @@
 
 ## Requirements
 
-Public releases include macOS arm64, macOS x64, and Windows x64 CLI binaries plus ad-hoc-signed/unnotarized macOS and unsigned Windows desktop artifacts. Installed desktop builds can check for a signed update in **Settings → General**, download it with visible progress, install it, and relaunch Reglet. Linux GUI artifacts are deferred.
+Public releases include macOS arm64/x64, Windows x64, and Linux arm64/x64 CLI binaries, plus desktop artifacts for macOS, Windows, and Linux. Installed desktop builds can check for a signed update in **Settings → General**, download it with visible progress, install it, and relaunch Reglet. macOS is ad-hoc signed/unnotarized, Windows is unsigned, and Linux ships as `.deb` and AppImage.
 
 ## Homebrew
 
@@ -41,6 +41,8 @@ Download the matching CLI artifact from the GitHub Release:
 - `reglet-darwin-arm64`
 - `reglet-darwin-x64`
 - `reglet-windows-x64.exe`
+- `reglet-linux-arm64`
+- `reglet-linux-x64`
 
 On macOS, make the downloaded architecture-specific binary executable before running it:
 

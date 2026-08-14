@@ -55,6 +55,40 @@ async function migrate(app: RegletApplication): Promise<number> {
 }
 
 describe('RegletApplication', () => {
+  test('sets up an empty machine with one global default and reviewed project discovery', async () => {
+    currentHome = await mkdtemp(path.join(tmpdir(), 'reglet-application-empty-'));
+    currentProviderHome = await mkdtemp(path.join(tmpdir(), 'reglet-application-provider-'));
+    process.env.REGLET_PROVIDER_HOME = currentProviderHome;
+    const project = await mkdtemp(path.join(tmpdir(), 'reglet-setup-project-'));
+    currentProjects.push(project);
+    await writeFile(path.join(project, 'AGENTS.md'), '# Project-only rules\n');
+    const app = new RegletApplication({ home: currentHome, secretStore: new MemorySecretStore() });
+
+    const setup = await app.execute({
+      operation: 'setup.complete',
+      input: {
+        createGlobalDefaults: true,
+        globalInstructionContent: '# Shared machine defaults\n',
+        targets: ['codex'],
+        rootPath: project,
+        scanProject: true,
+      },
+    });
+    const snapshot = (await app.execute({ operation: 'snapshot', input: {} })).data as ManagerSnapshotV3;
+    const artifact = snapshot.library.artifacts[0];
+
+    expect(setup.data).toMatchObject({ completed: true, discoveries: 1 });
+    expect(snapshot.settings.setup.completed).toBe(true);
+    expect(artifact?.metadata).toMatchObject({
+      kind: 'instruction',
+      scope: { kind: 'global' },
+      targets: ['codex'],
+    });
+    expect(snapshot.projectInbox?.roots).toHaveLength(1);
+    expect(snapshot.projectInbox?.discoveries).toHaveLength(1);
+    expect(await Bun.file(path.join(currentProviderHome, '.codex', 'AGENTS.md')).exists()).toBe(false);
+  });
+
   test('requires explicit migration approval and produces a strict Snapshot V3', async () => {
     const { app } = await applicationWithLegacyRule();
 

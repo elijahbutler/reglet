@@ -120,6 +120,7 @@ export const managerProtocolOperations = [
   'migration.preview',
   'migration.apply',
   'migration.status',
+  'setup.complete',
 ] as const;
 
 export const managerProtocolErrorCodes = [
@@ -346,6 +347,13 @@ export type ExternalTargetInput = JsonObject & {
 };
 export type ExternalInput = JsonObject & { target: ExternalTargetInput };
 export type MigrationApplyInput = JsonObject & { yes: boolean; previewDigest: string };
+export type SetupCompleteInput = JsonObject & {
+  createGlobalDefaults: boolean;
+  globalInstructionContent?: string;
+  targets?: ManagerProviderId[];
+  rootPath?: string;
+  scanProject?: boolean;
+};
 
 export interface ManagerRpcInputs {
   snapshot: SnapshotInput;
@@ -445,6 +453,7 @@ export interface ManagerRpcInputs {
   'migration.preview': JsonObject;
   'migration.apply': MigrationApplyInput;
   'migration.status': JsonObject;
+  'setup.complete': SetupCompleteInput;
 }
 
 export type ManagerRpcRequestFor<Operation extends ManagerProtocolOperation> = {
@@ -674,6 +683,13 @@ export const operationInputSchemas: Record<ManagerProtocolOperation, JsonObject>
   'migration.preview': objectSchema({}),
   'migration.apply': objectSchema({ yes: { const: true }, previewDigest: { type: 'string' } }, ['yes', 'previewDigest']),
   'migration.status': objectSchema({}),
+  'setup.complete': objectSchema({
+    createGlobalDefaults: { type: 'boolean' },
+    globalInstructionContent: { type: 'string' },
+    targets: { type: 'array', items: { enum: providerIds } },
+    rootPath: { type: 'string' },
+    scanProject: { type: 'boolean' },
+  }, ['createGlobalDefaults']),
 };
 
 export const managerRpcRequestValidator: RuntimeValidator<ManagerRpcRequest> = {
@@ -1055,6 +1071,10 @@ function isOperationInput(operation: ManagerProtocolOperation, input: JsonObject
       return exact(input, ['target']) && isExternalTarget(input.target);
     case 'migration.apply':
       return exact(input, ['yes', 'previewDigest']) && input.yes === true && typeof input.previewDigest === 'string';
+    case 'setup.complete':
+      return exact(input, ['createGlobalDefaults', 'globalInstructionContent', 'targets', 'rootPath', 'scanProject']) &&
+        typeof input.createGlobalDefaults === 'boolean' && optionalString(input.globalInstructionContent) &&
+        optionalProviderArray(input.targets) && optionalString(input.rootPath) && optionalBoolean(input.scanProject);
   }
 }
 

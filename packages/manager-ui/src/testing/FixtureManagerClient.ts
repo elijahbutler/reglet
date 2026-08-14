@@ -41,6 +41,29 @@ export class FixtureManagerClient implements ManagerClient {
     if (operation === 'migration.preview') {
       return { revision: this.state.revision, changed: false, data: { digest: 'fixture-migration-digest', artifacts: [] } };
     }
+    if (operation === 'setup.complete') {
+      this.state = {
+        ...this.state,
+        revision: this.state.revision + 1,
+        settings: { ...this.state.settings, setup: { completed: true } },
+      };
+      const invalidation: ManagerInvalidation = { revision: this.state.revision, reason: 'command' };
+      for (const listener of this.listeners) listener(invalidation);
+      return { revision: this.state.revision, changed: true, data: { completed: true } };
+    }
+    if (operation === 'sync.run') {
+      this.state = {
+        ...this.state,
+        revision: this.state.revision + 1,
+        settings: {
+          ...this.state.settings,
+          sync: { ...this.state.settings.sync, state: 'idle', lastCompletedAt: '2026-08-13T12:00:00.000Z' },
+        },
+      };
+      const invalidation: ManagerInvalidation = { revision: this.state.revision, reason: 'command' };
+      for (const listener of this.listeners) listener(invalidation);
+      return { revision: this.state.revision, changed: true, data: { pulled: [], pushed: [], merged: [], deleted: [], conflicts: [] } };
+    }
     const mutating = isMutating(operation);
     if (mutating) {
       this.state = { ...this.state, revision: this.state.revision + 1 };

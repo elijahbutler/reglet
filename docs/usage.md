@@ -112,6 +112,6 @@ Pre-V1 network state is inert and only reports file paths/counts; Reglet never r
 
 ## Encrypted sync preview
 
-Protocol-v2 manual sync is available behind `REGLET_EXPERIMENTAL_SYNC=1` for a constrained personal homeserver test. It stores keys and device tokens in macOS Keychain or Windows Credential Manager, transfers only encrypted Master objects, and never applies provider files during pull.
+Protocol-v2 manual sync is available under `reglet sync` for a constrained personal homeserver preview. Start with `reglet sync connect --invite <url> --device-name <name>`, confirm the fingerprint with `reglet sync connection-complete`, then run the required initial exchange with `reglet sync run`. Keys and device tokens use macOS Keychain, Windows Credential Manager, or Linux Secret Service. Sync transfers only encrypted canonical library objects and never applies provider files during pull.
 
 See the [encrypted sync homeserver runbook](sync-server.md) for the security boundary, first-device bootstrap, authenticated pairing, Windows-to-Mac skill/rules flow, backup procedure, and remaining preview limitations.

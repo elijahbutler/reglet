@@ -19,6 +19,7 @@ import {
   SlidersHorizontal,
   Trash2,
   Download,
+  Cloud,
 } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -43,6 +44,7 @@ import { CommandPalette } from '../features/command-palette/CommandPalette.js';
 import { ProjectInboxWorkbench } from '../features/projects/ProjectInboxWorkbench.js';
 import { ProvidersWorkbench } from '../features/providers/ProvidersWorkbench.js';
 import { SettingsWorkbench } from '../features/settings/SettingsWorkbench.js';
+import { SetupOnboarding } from '../features/onboarding/SetupOnboarding.js';
 
 const destinations = [
   { id: 'library', label: 'Library', icon: Library },
@@ -54,6 +56,8 @@ const destinations = [
 
 type Destination = (typeof destinations)[number]['id'];
 type LifecycleFilter = 'active' | 'drafts' | 'archived';
+type ScopeFilter = 'global' | 'provider';
+type KindFilter = 'all' | ManagerArtifactV3['metadata']['kind'];
 type SaveState = 'canonical' | 'saving' | 'draft';
 type ArtifactSheet = 'create' | 'rename' | 'delete' | 'history' | null;
 
@@ -86,6 +90,8 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
   const [loadedContent, setLoadedContent] = useState('');
   const [saveState, setSaveState] = useState<SaveState>('canonical');
   const [filter, setFilter] = useState<LifecycleFilter>('active');
+  const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('global');
+  const [kindFilter, setKindFilter] = useState<KindFilter>('all');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -135,18 +141,27 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
       const matchesLifecycle = filter === 'drafts'
         ? artifact.draft !== undefined
         : artifact.metadata.lifecycle === filter;
+      const matchesScope = scopeFilter === 'global'
+        ? artifact.metadata.scope.kind === 'global'
+        : artifact.metadata.scope.kind === 'provider-overlay';
+      const matchesKind = kindFilter === 'all' || artifact.metadata.kind === kindFilter;
       const matchesQuery = normalizedQuery.length === 0 ||
         `${artifact.metadata.title} ${artifact.metadata.slug} ${artifact.metadata.tags.join(' ')}`
           .toLocaleLowerCase()
           .includes(normalizedQuery);
-      return matchesLifecycle && matchesQuery;
+      return matchesLifecycle && matchesScope && matchesKind && matchesQuery;
     });
-  }, [filter, query, snapshot]);
+  }, [filter, kindFilter, query, scopeFilter, snapshot]);
 
   const selectedArtifact = useMemo(
     () => snapshot?.library.artifacts.find((artifact) => artifact.metadata.id === selectedArtifactId) ?? null,
     [selectedArtifactId, snapshot],
   );
+
+  useEffect(() => {
+    if (destination !== 'library' || artifacts.some((artifact) => artifact.metadata.id === selectedArtifactId)) return;
+    setSelectedArtifactId(artifacts[0]?.metadata.id ?? null);
+  }, [artifacts, destination, selectedArtifactId]);
 
   useEffect(() => {
     setPreparedPreview(null);
@@ -193,6 +208,7 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
         setPaletteOpen(true);
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === 'n') {
+        if (destination !== 'library') return;
         event.preventDefault();
         setSheet('create');
       }
@@ -203,7 +219,7 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [destination]);
 
   const preparePreview = async () => {
     if (selectedArtifact === null) return;
@@ -269,8 +285,22 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
     }
   };
 
+  const initialSyncRequired = snapshot?.settings.sync.enabled === true && snapshot.settings.sync.lastCompletedAt === undefined;
+  const runInitialSync = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await client.command('sync.run', {});
+      await refresh();
+    } catch (syncError) {
+      setError(messageFrom(syncError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
-    <div className="rg-manager" data-testid="manager-workbench">
+    <div className={`rg-manager${initialSyncRequired ? ' rg-manager--notice' : ''}`} data-testid="manager-workbench">
       <header className="rg-command-bar">
         <div className="rg-brand" aria-label="Reglet">
           <span className="rg-brand__mark" aria-hidden="true">R</span>
@@ -278,7 +308,7 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
         </div>
         <div className="rg-breadcrumb" aria-label="Current location">
           <span>{labelForDestination(destination)}</span>
-          {selectedArtifact === null ? null : <><span aria-hidden="true">›</span><strong>{selectedArtifact.metadata.title}</strong></>}
+          {destination !== 'library' || selectedArtifact === null ? null : <><span aria-hidden="true">›</span><strong>{selectedArtifact.metadata.title}</strong></>}
         </div>
         <button type="button" className="rg-command-search" aria-label="Search or run a command" onClick={() => setPaletteOpen(true)}>
           <Shortcut keys={['⌘', 'K']} />
@@ -288,16 +318,13 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
           {updateStatus?.status === 'available' ? <Button className="rg-update-command" tone="secondary" icon={<Download size={15} />} onClick={() => setDestination('settings')}>
             Update {updateStatus.latestVersion}
           </Button> : null}
-          <Button tone="secondary" icon={<Plus size={15} />} onClick={() => setSheet('create')}>New</Button>
-          <Button tone="secondary" icon={<FileDiff size={15} />} onClick={() => void preparePreview()} disabled={busy || selectedArtifact === null}>
-            Preview diff
-          </Button>
-          <Button tone="secondary" onClick={() => void apply()} disabled={busy || preparedPreview === null}>
-            Apply changes
-          </Button>
+          {initialSyncRequired ? <Button tone="secondary" icon={<Cloud size={15} />} disabled={busy} onClick={() => void runInitialSync()}>Initial sync</Button> : null}
+          {destination === 'library' ? <><Button tone="secondary" icon={<Plus size={15} />} onClick={() => setSheet('create')}>New</Button><Button tone="secondary" icon={<FileDiff size={15} />} onClick={() => void preparePreview()} disabled={busy || selectedArtifact === null}>Preview diff</Button><Button tone="secondary" onClick={() => void apply()} disabled={busy || preparedPreview === null}>Apply changes</Button></> : null}
           <button type="button" className="rg-icon-button" aria-label="More actions"><MoreHorizontal size={17} /></button>
         </div>
       </header>
+
+      {initialSyncRequired ? <div className="rg-sync-notice" role="status"><Cloud size={15} aria-hidden="true" /><span><strong>Initial sync required</strong> Your encrypted server is connected, but this library has not been exchanged yet.</span><button type="button" disabled={busy} onClick={() => void runInitialSync()}>{busy ? 'Syncing…' : 'Sync now'}</button></div> : null}
 
       <main className="rg-workbench">
         <Pane label="Primary navigation" className="rg-navigation" tone="raised">
@@ -321,11 +348,15 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
             content={artifactContent}
             baseline={loadedContent}
             filter={filter}
+            scopeFilter={scopeFilter}
+            kindFilter={kindFilter}
             loading={loading}
             query={query}
             selected={selectedArtifact}
             snapshot={snapshot}
             onFilter={setFilter}
+            onScopeFilter={setScopeFilter}
+            onKindFilter={setKindFilter}
             onQuery={setQuery}
             onSelect={setSelectedArtifactId}
             onContent={setArtifactContent}
@@ -357,6 +388,14 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
         client={client}
         legacyCount={snapshot.library.migration.legacyArtifacts}
         onComplete={refresh}
+        onError={setError}
+      /> : null}
+
+      {snapshot !== null && snapshot.library.migration.status !== 'available' && !snapshot.settings.setup.completed ? <SetupOnboarding
+        client={client}
+        snapshot={snapshot}
+        onRefresh={refresh}
+        onComplete={(openProjectInbox) => setDestination(openProjectInbox ? 'projects' : 'library')}
         onError={setError}
       /> : null}
 
@@ -406,14 +445,10 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
       <footer className="rg-shortcut-bar">
         <div>
           <Shortcut keys={['⌘', 'K']} label="Search" />
-          <Shortcut keys={['⌘', 'N']} label="New artifact" />
-          <Shortcut keys={['⌘', '⇧', 'P']} label="Preview diff" />
-          <Shortcut keys={['⌘', '↵']} label="Apply changes" />
+          {destination === 'library' ? <><Shortcut keys={['⌘', 'N']} label="New artifact" /><Shortcut keys={['⌘', '⇧', 'P']} label="Preview diff" /><Shortcut keys={['⌘', '↵']} label="Apply changes" /></> : null}
           <Shortcut keys={['?']} label="Show shortcuts" />
         </div>
-        <Button tone="primary" onClick={() => void apply()} disabled={busy || preparedPreview === null}>
-          Apply changes
-        </Button>
+        {destination === 'library' ? <Button tone="primary" onClick={() => void apply()} disabled={busy || preparedPreview === null}>Apply changes</Button> : <span className="rg-footer-location">{labelForDestination(destination)}</span>}
       </footer>
     </div>
   );
@@ -424,12 +459,16 @@ interface LibraryWorkbenchProps {
   baseline: string;
   content: string;
   filter: LifecycleFilter;
+  scopeFilter: ScopeFilter;
+  kindFilter: KindFilter;
   loading: boolean;
   query: string;
   selected: ManagerArtifactV3 | null;
   snapshot: ManagerSnapshotV3 | null;
   saveState: SaveState;
   onFilter: (filter: LifecycleFilter) => void;
+  onScopeFilter: (filter: ScopeFilter) => void;
+  onKindFilter: (filter: KindFilter) => void;
   onQuery: (query: string) => void;
   onSelect: (id: string) => void;
   onContent: (content: string) => void;
@@ -446,12 +485,16 @@ function LibraryWorkbench({
   baseline,
   content,
   filter,
+  scopeFilter,
+  kindFilter,
   loading,
   query,
   selected,
   snapshot,
   saveState,
   onFilter,
+  onScopeFilter,
+  onKindFilter,
   onQuery,
   onSelect,
   onContent,
@@ -486,6 +529,16 @@ function LibraryWorkbench({
           <FilterTab label="Active" count={snapshot?.library.counts.active ?? 0} active={filter === 'active'} onClick={() => onFilter('active')} />
           <FilterTab label="Drafts" count={snapshot?.library.counts.drafts ?? 0} active={filter === 'drafts'} onClick={() => onFilter('drafts')} />
           <FilterTab label="Archived" count={snapshot?.library.counts.archived ?? 0} active={filter === 'archived'} onClick={() => onFilter('archived')} />
+        </div>
+        <div className="rg-library-scope" role="tablist" aria-label="Artifact scope">
+          <button type="button" role="tab" aria-selected={scopeFilter === 'global'} onClick={() => onScopeFilter('global')}>Global <small>{scopeCount(snapshot, 'global')}</small></button>
+          <button type="button" role="tab" aria-selected={scopeFilter === 'provider'} onClick={() => onScopeFilter('provider')}>Provider-specific <small>{scopeCount(snapshot, 'provider')}</small></button>
+        </div>
+        <div className="rg-kind-filter" role="group" aria-label="Artifact kind">
+          <KindButton label="All" value="all" active={kindFilter === 'all'} onClick={onKindFilter} />
+          <KindButton label="Agent rules" value="instruction" active={kindFilter === 'instruction'} onClick={onKindFilter} />
+          <KindButton label="Skills" value="skill" active={kindFilter === 'skill'} onClick={onKindFilter} />
+          <KindButton label="MCPs" value="mcp" active={kindFilter === 'mcp'} onClick={onKindFilter} />
         </div>
         <div className="rg-collection-label">Artifacts</div>
         <div className="rg-artifact-list" ref={list}>
@@ -617,6 +670,14 @@ function Revision({ label, hash }: { label: string; hash?: string }) {
 
 function FilterTab({ active, count, label, onClick }: { active: boolean; count: number; label: string; onClick: () => void }) {
   return <button type="button" role="tab" aria-selected={active} onClick={onClick}><span>{label}</span><small>{count}</small></button>;
+}
+
+function KindButton({ active, label, value, onClick }: { active: boolean; label: string; value: KindFilter; onClick: (value: KindFilter) => void }) {
+  return <button type="button" aria-pressed={active} onClick={() => onClick(value)}>{label}</button>;
+}
+
+function scopeCount(snapshot: ManagerSnapshotV3 | null, scope: ScopeFilter): number {
+  return (snapshot?.library.artifacts ?? []).filter((artifact) => scope === 'global' ? artifact.metadata.scope.kind === 'global' : artifact.metadata.scope.kind === 'provider-overlay').length;
 }
 
 function CollectionMessage({ icon, title }: { icon: ReactNode; title: string }) {

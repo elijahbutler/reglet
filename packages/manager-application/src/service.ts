@@ -14,6 +14,7 @@ import {
   createManagedSyncV2Invitation,
   createArtifactMetadata,
   createSkill,
+  defaultLibraryManifest,
   deriveProjectionStatus,
   disconnectSyncV2,
   duplicateLibraryArtifact,
@@ -50,6 +51,7 @@ import {
   renameManagedSyncV2Device,
   scanProjectRoot,
   saveConfig,
+  saveLibraryManifest,
   secretReferenceStatus,
   setArtifactLifecycle,
   setArtifactTargets,
@@ -453,6 +455,8 @@ async function executeCommand(
     }
     case 'migration.status':
       return libraryMigrationStatus(home);
+    case 'setup.complete':
+      return completeSetup(command.input, home, state);
     default:
       throw new UnsupportedApplicationOperationError(command.operation);
   }
@@ -522,6 +526,10 @@ async function managerSnapshot(
     ...(projectInbox === undefined ? {} : { projectInbox }),
     activity,
     settings: {
+      setup: {
+        completed: state.setting('setup.completed') === 'true' ||
+          artifacts.length > 0 || (projectInbox?.roots.length ?? 0) > 0,
+      },
       sync: await encryptedSyncStatus(home),
       remote: remoteStatus(state),
       secretBindings: bindings,
@@ -530,6 +538,75 @@ async function managerSnapshot(
     diagnostics: diagnosticState,
   };
 }
+
+async function completeSetup(
+  input: ManagerRpcInputs['setup.complete'],
+  home: string,
+  state: LocalState,
+): Promise<unknown> {
+  const migration = await libraryMigrationStatus(home);
+  if (migration.state === 'available') {
+    throw new Error('Review the existing canonical library migration before completing setup.');
+  }
+  if (migration.state === 'not-needed') {
+    await saveLibraryManifest(defaultLibraryManifest(), home);
+  }
+
+  const manifest = await loadLibraryManifest(home);
+  let defaultArtifact = manifest.artifacts.find((artifact) =>
+    artifact.kind === 'instruction' && artifact.scope.kind === 'global' && artifact.lifecycle === 'active');
+  if (input.createGlobalDefaults && defaultArtifact === undefined) {
+    defaultArtifact = await createCanonicalArtifact({
+      kind: 'instruction',
+      slug: 'global-agent-defaults',
+      title: 'Global agent defaults',
+      description: 'Baseline instructions shared with every selected provider.',
+      content: input.globalInstructionContent?.trim() || defaultGlobalInstruction,
+      targets: input.targets ?? [],
+      scope: { kind: 'global' },
+    }, home);
+  } else if (input.createGlobalDefaults && defaultArtifact !== undefined) {
+    const currentContent = await readArtifactText(defaultArtifact.id, home);
+    if (currentContent.trim() === '' || currentContent.includes('<!-- Add shared instructions here. -->')) {
+      await commitArtifactText(
+        defaultArtifact.id,
+        input.globalInstructionContent?.trim() || defaultGlobalInstruction,
+        [],
+        home,
+      );
+    }
+    if (input.targets !== undefined) {
+      defaultArtifact = await setArtifactTargets(defaultArtifact.id, input.targets, home);
+    }
+  }
+
+  let rootId: string | undefined;
+  let discoveries = 0;
+  const rootPath = input.rootPath?.trim();
+  if (rootPath !== undefined && rootPath.length > 0) {
+    const root = state.addProjectRoot(rootPath);
+    rootId = root.id;
+    if (input.scanProject !== false) {
+      const scan = await scanConfiguredRoots(root.id, false, state);
+      discoveries = scan.reduce((count, result) => count + result.count, 0);
+    }
+  }
+  state.setSetting('setup.completed', 'true');
+  state.setSetting('setup.projectReview', input.scanProject === false ? 'later' : 'inbox');
+  return {
+    completed: true,
+    ...(defaultArtifact === undefined ? {} : { defaultArtifactId: defaultArtifact.id }),
+    ...(rootId === undefined ? {} : { rootId }),
+    discoveries,
+  };
+}
+
+const defaultGlobalInstruction = `# Global agent defaults
+
+- Follow the nearest project instructions.
+- Preserve user work and explain consequential changes.
+- Prefer clear, verifiable results over hidden automation.
+`;
 
 async function createCanonicalArtifact(
   input: ManagerRpcInputs['library.create'],
@@ -1240,6 +1317,7 @@ const adminOperations = new Set<ManagerProtocolOperation>([
   'session.pair', 'session.list', 'session.revoke', 'migration.preview', 'migration.apply', 'migration.status',
   'sync.preview.set', 'sync.snapshot', 'sync.bootstrap.start', 'sync.invitation.create', 'sync.pair.request', 'sync.pair.approve',
   'sync.pair.status', 'sync.pair.complete', 'sync.pair.cancel', 'sync.run', 'sync.device.rename', 'sync.device.revoke', 'sync.disconnect',
+  'setup.complete',
 ]);
 const mutatingOperations = new Set<ManagerProtocolOperation>([
   'library.create', 'library.duplicate', 'library.save', 'library.rename', 'library.archive', 'library.restore', 'library.delete', 'library.targets',
@@ -1248,6 +1326,7 @@ const mutatingOperations = new Set<ManagerProtocolOperation>([
   'remote.enable', 'remote.disable', 'session.pair', 'session.revoke', 'migration.apply',
   'sync.preview.set', 'sync.bootstrap.start', 'sync.invitation.create', 'sync.pair.request', 'sync.pair.approve', 'sync.pair.complete',
   'sync.pair.cancel', 'sync.run', 'sync.device.rename', 'sync.device.revoke', 'sync.disconnect',
+  'setup.complete',
 ]);
 
 function requiredScopeFor(operation: ManagerProtocolOperation): ManagerSessionScope {
@@ -1262,7 +1341,8 @@ function scopeAllows(actual: ManagerSessionScope, required: ManagerSessionScope)
 }
 
 function indexesCanonicalContent(operation: ManagerProtocolOperation): boolean {
-  return operation.startsWith('library.') || operation === 'history.undo' || operation === 'migration.apply' || operation === 'project.promote';
+  return operation.startsWith('library.') || operation === 'history.undo' || operation === 'migration.apply' ||
+    operation === 'project.promote' || operation === 'setup.complete';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

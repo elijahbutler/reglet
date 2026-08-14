@@ -89,6 +89,7 @@ export const managerFixtureSnapshot: ManagerSnapshotV3 = {
   projectInbox: { roots: [], discoveries: [] },
   activity: [],
   settings: {
+    setup: { completed: true },
     sync: { enabled: false, state: 'disabled', conflictCount: 0 },
     remote: { enabled: false },
     secretBindings: [],

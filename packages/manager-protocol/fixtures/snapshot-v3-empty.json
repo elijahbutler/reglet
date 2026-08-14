@@ -29,6 +29,9 @@
   },
   "activity": [],
   "settings": {
+    "setup": {
+      "completed": false
+    },
     "sync": {
       "enabled": false,
       "state": "disabled",

@@ -19,8 +19,10 @@ Outputs:
 - `dist/reglet-darwin-arm64`
 - `dist/reglet-darwin-x64`
 - `dist/reglet-windows-x64.exe`
+- `dist/reglet-linux-arm64`
+- `dist/reglet-linux-x64`
 
-Public release automation publishes ad-hoc-signed/unnotarized macOS and unsigned Windows Tauri desktop artifacts; Linux GUI artifacts are structurally prepared but deferred.
+Public release automation publishes ad-hoc-signed/unnotarized macOS, unsigned Windows, and Linux `.deb`/AppImage Tauri desktop artifacts.
 
 The Tauri app requires a Rust toolchain. Validate the frontend and fixed sidecar bridge without starting a development server:
 

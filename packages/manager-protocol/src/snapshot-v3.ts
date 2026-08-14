@@ -187,6 +187,9 @@ export interface ManagerSnapshotV3 {
   projectInbox?: ManagerProjectInboxV3;
   activity: ManagerActivityV3[];
   settings: {
+    setup: {
+      completed: boolean;
+    };
     sync: {
       enabled: boolean;
       state: 'disabled' | 'idle' | 'syncing' | 'conflict' | 'error';
@@ -479,10 +482,14 @@ function isActivity(value: unknown): boolean {
 }
 
 function isSettings(value: unknown): boolean {
-  return isRecord(value) && exact(value, ['sync', 'remote', 'secretBindings', 'sessions']) &&
-    isSyncSettings(value.sync) && isRemoteSettings(value.remote) &&
+  return isRecord(value) && exact(value, ['setup', 'sync', 'remote', 'secretBindings', 'sessions']) &&
+    isSetupSettings(value.setup) && isSyncSettings(value.sync) && isRemoteSettings(value.remote) &&
     isArrayOf(value.secretBindings, isSecretBinding) &&
     (value.sessions === undefined || isArrayOf(value.sessions, isSession));
+}
+
+function isSetupSettings(value: unknown): boolean {
+  return isRecord(value) && exact(value, ['completed']) && typeof value.completed === 'boolean';
 }
 
 function isSyncSettings(value: unknown): boolean {

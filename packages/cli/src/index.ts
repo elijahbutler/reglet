@@ -1245,9 +1245,7 @@ mcp
     else console.log(`mcp\tdeleted\t${id}`);
   });
 
-if (process.env.REGLET_EXPERIMENTAL_SYNC === '1') {
-  registerSyncV2PreviewCommands(program);
-}
+registerSyncV2PreviewCommands(program);
 
 const daemon = program.command('daemon').description('Run or manage the background daemon');
 

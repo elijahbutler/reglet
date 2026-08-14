@@ -58,9 +58,11 @@ project guidance into global guidance without a scope decision.
 - Project content and provenance remain local unless content is deliberately
   promoted into the canonical library.
 - Sync is optional, canonical-only, and cannot block local editing or apply.
-- Hosted sync remains deferred until client-side end-to-end encryption exists.
-- The first supported desktop packages are macOS and Windows; the shared manager
-  must also remain usable through a local web endpoint.
+- Self-hosted end-to-end encrypted sync is opt-in; a managed hosted sync service
+  remains deferred.
+- Desktop and CLI releases target macOS, Windows, and Linux from the same
+  manager contract; the manager also remains usable through a local web
+  endpoint.
 
 ## Brand Commitments
 

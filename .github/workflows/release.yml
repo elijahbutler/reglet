@@ -82,8 +82,61 @@ jobs:
             dist/desktop/reglet-desktop-macos-x86_64.app.tar.gz
             dist/desktop/reglet-desktop-macos-x86_64.app.tar.gz.sig
 
+  build-tauri-linux:
+    name: Build Tauri Linux artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Install Linux desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - run: bun install --frozen-lockfile
+      - run: bun audit --production
+      - run: bun run typecheck
+      - run: bun run desktop:test
+      - run: bun run build:binaries -- linux-x64 linux-arm64
+      - run: bash scripts/stage-tauri-sidecars.sh x86_64-unknown-linux-gnu
+      - run: bash scripts/build-tauri-desktop.sh x86_64-unknown-linux-gnu deb,appimage
+        env:
+          REGLET_CREATE_UPDATER_ARTIFACTS: "1"
+          REGLET_UPDATER_PUBLIC_KEY: ${{ vars.REGLET_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - name: Collect Linux desktop artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/desktop
+          deb="$(find apps/desktop/src-tauri/target -path '*/bundle/deb/*' -type f -name '*.deb' | head -n 1)"
+          appimage="$(find apps/desktop/src-tauri/target -path '*/bundle/appimage/*' -type f -name '*.AppImage' | head -n 1)"
+          updater="$(find apps/desktop/src-tauri/target -path '*/bundle/appimage/*' -type f -name '*.AppImage.tar.gz' | head -n 1)"
+          test -n "$deb"
+          test -n "$appimage"
+          test -n "$updater"
+          test -f "$updater.sig"
+          cp "$deb" dist/desktop/reglet-desktop-linux-x86_64.deb
+          cp "$appimage" dist/desktop/reglet-desktop-linux-x86_64.AppImage
+          cp "$updater" dist/desktop/reglet-desktop-linux-x86_64.AppImage.tar.gz
+          cp "$updater.sig" dist/desktop/reglet-desktop-linux-x86_64.AppImage.tar.gz.sig
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tauri-linux
+          path: |
+            dist/reglet-linux-x64
+            dist/reglet-linux-arm64
+            dist/desktop/*
+
   publish-release:
-    needs: [build-tauri-windows, build-tauri-macos-intel]
+    needs: [build-tauri-windows, build-tauri-macos-intel, build-tauri-linux]
     runs-on: macos-latest
     permissions:
       contents: write
@@ -127,6 +180,10 @@ jobs:
         with:
           name: tauri-macos-intel
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: tauri-linux
+          path: dist
       - run: bun run build:updater-manifest
       - name: Create checksums and release provenance
         shell: bash
@@ -138,6 +195,8 @@ jobs:
               reglet-darwin-arm64 \
               reglet-darwin-x64 \
               reglet-windows-x64.exe \
+              reglet-linux-arm64 \
+              reglet-linux-x64 \
               desktop/* > SHA256SUMS.txt
           )
           {
@@ -152,6 +211,8 @@ jobs:
             dist/reglet-darwin-arm64
             dist/reglet-darwin-x64
             dist/reglet-windows-x64.exe
+            dist/reglet-linux-arm64
+            dist/reglet-linux-x64
             dist/desktop/*
             dist/SHA256SUMS.txt
       - name: Create or reuse draft GitHub release
@@ -170,12 +231,14 @@ jobs:
               --draft \
               --title "$GITHUB_REF_NAME" \
               --generate-notes \
-              --notes "Includes standalone CLI binaries, ad-hoc-signed unnotarized macOS desktop artifacts, unsigned Windows desktop artifacts, and cryptographically signed in-app updater artifacts. macOS artifacts are not Developer ID signed and Windows may require SmartScreen approval. Linux GUI packaging is structurally prepared but not published."
+              --notes "Includes standalone CLI binaries for macOS, Windows, and Linux; desktop artifacts for all three platforms; and cryptographically signed in-app updater artifacts. macOS artifacts are not Developer ID signed and Windows may require SmartScreen approval."
           fi
           gh release upload "$GITHUB_REF_NAME" --clobber \
             dist/reglet-darwin-arm64 \
             dist/reglet-darwin-x64 \
             dist/reglet-windows-x64.exe \
+            dist/reglet-linux-arm64 \
+            dist/reglet-linux-x64 \
             dist/desktop/* \
             dist/SHA256SUMS.txt \
             dist/provenance.txt

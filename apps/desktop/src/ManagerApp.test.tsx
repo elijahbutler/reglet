@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, test, vi } from 'vitest';
 import { ManagerApp } from '@reglet/manager-ui';
 import type { ManagerHostActions } from '@reglet/manager-ui';
@@ -13,6 +13,8 @@ describe('shared Manager workbench', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Project Inbox' }));
     expect(await screen.findByText('Read-only discoveries')).toBeInTheDocument();
+    expect(within(screen.getByLabelText('Current location')).getByText('Project Inbox')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Providers' }));
     expect(await screen.findByText('Adapter registry')).toBeInTheDocument();
@@ -23,6 +25,54 @@ describe('shared Manager workbench', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
     expect(await screen.findByText('Canonical library and local runtime status.')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+  });
+
+  test('starts with the global library and reveals provider-specific artifacts on demand', async () => {
+    const snapshot = structuredClone(managerFixtureSnapshot);
+    const source = snapshot.library.artifacts[0];
+    if (source === undefined) throw new Error('Fixture needs a source artifact.');
+    snapshot.library.artifacts.push({
+      ...structuredClone(source),
+      metadata: {
+        ...structuredClone(source.metadata),
+        id: 'artifact-codex-overlay',
+        title: 'Codex machine override',
+        slug: 'codex-machine-override',
+        scope: { kind: 'provider-overlay', provider: 'codex' },
+      },
+    });
+    snapshot.library.counts.active += 1;
+    render(<ManagerApp client={new FixtureManagerClient(snapshot)} />);
+
+    expect(await screen.findByRole('tab', { name: 'Global 9' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByText('Codex machine override')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Provider-specific 1' }));
+    expect((await screen.findAllByText('Codex machine override')).length).toBeGreaterThan(0);
+  });
+
+  test('keeps initial sync visible until the first exchange completes', async () => {
+    const snapshot = structuredClone(managerFixtureSnapshot);
+    snapshot.settings.sync = { enabled: true, state: 'idle', conflictCount: 0 };
+    render(<ManagerApp client={new FixtureManagerClient(snapshot)} />);
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Initial sync required');
+    fireEvent.click(screen.getByRole('button', { name: 'Sync now' }));
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+  });
+
+  test('guides first-run machine, global library, and connection setup', async () => {
+    const snapshot = structuredClone(managerFixtureSnapshot);
+    snapshot.settings.setup.completed = false;
+    render(<ManagerApp client={new FixtureManagerClient(snapshot)} />);
+
+    expect(await screen.findByRole('dialog', { name: 'Set up this machine' })).toBeInTheDocument();
+    expect(screen.getByText('Step 1 of 3')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByRole('heading', { name: 'Create your global defaults' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByRole('heading', { name: 'Connect your library anywhere' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Finish setup' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
   test('blocks legacy content behind explicit reviewed migration onboarding', async () => {

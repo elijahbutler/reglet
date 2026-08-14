@@ -1,8 +1,8 @@
 # Reglet CLI
 
-Reglet manages global AI agent rules, skills, and MCP server configs from one local master directory. The public V1 CLI is local-only: it has no account, pairing, remote-management, or network-transfer commands.
+Reglet manages global AI agent rules, skills, and MCP server configs from one local master directory. Local management is the default; the explicit `reglet sync` command group can connect a machine to an opt-in, self-hosted encrypted server.
 
-Public releases ship CLI artifacts for macOS arm64, macOS x64, and Windows x64. The macOS manager remains source-level only.
+CLI binary targets cover macOS arm64/x64, Windows x64, and Linux arm64/x64. The shared Manager contract also powers the desktop and local web surfaces.
 
 See the repository README for full documentation:
 

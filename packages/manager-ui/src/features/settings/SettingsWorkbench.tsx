@@ -7,6 +7,7 @@ import type { ManagerClient } from '../../client/ManagerClient.js';
 import { Button } from '../../design-system/Button.js';
 import { Pane, PaneHeader } from '../../design-system/Pane.js';
 import { Row } from '../../design-system/Row.js';
+import { SyncConnectionPanel } from './SyncConnectionPanel.js';
 
 const sections = [
   { id: 'general', label: 'General', icon: Settings },
@@ -60,7 +61,7 @@ export function SettingsWorkbench({ client, hostActions, updateStatus, onUpdateS
             setSecretValue('');
             await onRefresh();
           })} /> : null}
-          {section === 'sync' ? <SyncSettings snapshot={snapshot} busy={busy} onDisable={() => void run(async () => { await client.command('sync.disable', {}); await onRefresh(); })} /> : null}
+          {section === 'sync' ? <SyncSettings client={client} snapshot={snapshot} busy={busy} onRefresh={onRefresh} onError={onError} onDisable={() => void run(async () => { await client.command('sync.disable', {}); await onRefresh(); })} /> : null}
           {section === 'remote' ? <RemoteSettings snapshot={snapshot} busy={busy} onDisable={() => void run(async () => { await client.command('remote.disable', {}); await onRefresh(); })} /> : null}
           {section === 'backups' ? <BackupsSettings /> : null}
           {section === 'diagnostics' ? <DiagnosticsSettings snapshot={snapshot} /> : null}
@@ -156,16 +157,16 @@ function formatBytes(bytes: number): string {
 }
 
 function RootsSettings({ snapshot, rootPath, onRootPath, busy, onAdd }: { snapshot: ManagerSnapshotV3 | null; rootPath: string; onRootPath: (value: string) => void; busy: boolean; onAdd: () => void }) {
-  return <><SectionHeader title="Project roots" description="Read-only directories scanned for provider guidance." /><label className="rg-field"><span>Absolute root path</span><input value={rootPath} onChange={(event) => onRootPath(event.target.value)} placeholder="/Users/me/Code" /></label><Button disabled={busy || rootPath.trim().length === 0} onClick={onAdd}>Add root</Button><div className="rg-settings-list">{(snapshot?.projectInbox?.roots ?? []).map((root) => <div key={root.id}><strong>{root.label}</strong><code>{root.path}</code></div>)}</div></>;
+  return <><SectionHeader title="Project roots" description="Read-only directories scanned for provider guidance." /><label className="rg-field"><span>Absolute root path</span><input value={rootPath} onChange={(event) => onRootPath(event.target.value)} placeholder="Absolute path to your projects" /></label><Button disabled={busy || rootPath.trim().length === 0} onClick={onAdd}>Add root</Button><div className="rg-settings-list">{(snapshot?.projectInbox?.roots ?? []).map((root) => <div key={root.id}><strong>{root.label}</strong><code>{root.path}</code></div>)}</div></>;
 }
 
 function SecretSettings({ snapshot, id, value, busy, onId, onValue, onBind }: { snapshot: ManagerSnapshotV3 | null; id: string; value: string; busy: boolean; onId: (value: string) => void; onValue: (value: string) => void; onBind: () => void }) {
   return <><SectionHeader title="Secrets" description="Values remain in the native keychain and never enter APIs or canonical content." /><label className="rg-field"><span>Reference ID</span><input value={id} onChange={(event) => onId(event.target.value)} autoComplete="off" /></label><label className="rg-field"><span>Secret value</span><input type="password" value={value} onChange={(event) => onValue(event.target.value)} autoComplete="new-password" /></label><Button disabled={busy || id.trim().length === 0 || value.length === 0} onClick={onBind}>Bind locally</Button><div className="rg-settings-list">{snapshot?.settings.secretBindings.map((binding) => <div key={binding.id}><strong>{binding.id}</strong><span>{binding.bound ? 'Bound' : 'Unbound'}</span></div>)}</div></>;
 }
 
-function SyncSettings({ snapshot, busy, onDisable }: { snapshot: ManagerSnapshotV3 | null; busy: boolean; onDisable: () => void }) {
+function SyncSettings({ client, snapshot, busy, onRefresh, onError, onDisable }: { client: ManagerClient; snapshot: ManagerSnapshotV3 | null; busy: boolean; onRefresh: () => Promise<void>; onError: (message: string) => void; onDisable: () => void }) {
   const sync = snapshot?.settings.sync;
-  return <><SectionHeader title="Sync & devices" description="Optional, self-hosted, end-to-end encrypted canonical-library sync." /><dl className="rg-key-values"><div><dt>Status</dt><dd>{sync?.state ?? 'disabled'}</dd></div><div><dt>Conflicts</dt><dd>{sync?.conflictCount ?? 0}</dd></div><div><dt>Manager sessions</dt><dd>{snapshot?.settings.sessions?.length ?? 0}</dd></div></dl>{sync?.enabled ? <Button tone="danger" disabled={busy} onClick={onDisable}>Disable sync</Button> : <div className="rg-inline-notice"><Shield size={15} /><span>Sync is disabled. All manager workflows remain available.</span></div>}</>;
+  return <><SectionHeader title="Sync & devices" description="Optional, self-hosted, end-to-end encrypted canonical-library sync." /><dl className="rg-key-values"><div><dt>Status</dt><dd>{sync?.state ?? 'disabled'}</dd></div><div><dt>Conflicts</dt><dd>{sync?.conflictCount ?? 0}</dd></div><div><dt>Manager sessions</dt><dd>{snapshot?.settings.sessions?.length ?? 0}</dd></div></dl><section className="rg-settings-group"><h2>Server connection</h2><SyncConnectionPanel client={client} snapshot={snapshot} onRefresh={onRefresh} onError={onError} /></section>{sync?.enabled ? <section className="rg-settings-group"><h2>Disconnect</h2><p>Local editing and provider Apply remain available after disconnecting.</p><Button tone="danger" disabled={busy} onClick={onDisable}>Disable sync</Button></section> : null}</>;
 }
 
 function RemoteSettings({ snapshot, busy, onDisable }: { snapshot: ManagerSnapshotV3 | null; busy: boolean; onDisable: () => void }) {
