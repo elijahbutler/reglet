@@ -21,6 +21,7 @@
     { "protocolVersion": 2, "operation": "project.root.remove", "input": { "rootId": "root-id", "confirmed": true } },
     { "protocolVersion": 2, "operation": "project.root.list", "input": {} },
     { "protocolVersion": 2, "operation": "project.scan", "input": { "rootId": "root-id" } },
+    { "protocolVersion": 2, "operation": "setup.complete", "input": { "createGlobalDefaults": true, "globalInstructionContent": "# Global defaults", "targets": ["codex"], "rootPath": "/work", "scanProject": true } },
     { "protocolVersion": 2, "operation": "project.discoveries", "input": { "state": "new" } },
     { "protocolVersion": 2, "operation": "project.ignore", "input": { "discoveryId": "discovery-id" } },
     { "protocolVersion": 2, "operation": "project.promotion-preview", "input": { "discoveryId": "discovery-id", "mode": "convert-to-skill" } },

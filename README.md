@@ -4,7 +4,7 @@
 
 Reglet is a local-only CLI and cross-platform Tauri desktop manager for global AI-agent rules, skills, and MCP configurations. It keeps one versionable master directory, renders it to the six supported providers, makes every provider write reviewable, and retains recovery data indefinitely.
 
-The default Public V1 CLI has no account, device-linking, remote configuration, background network transfer, or network management commands. Its configuration path stays on the current machine. Encrypted sync is separate, explicitly gated desktop preview functionality for personal self-hosted testing. Desktop update checks are manual unless a user explicitly opts into automatic checks. macOS desktop artifacts are ad-hoc signed and unnotarized; Windows artifacts are unsigned. Linux GUI artifacts are deferred.
+Reglet manages the current machine by default and starts no background network transfer. Encrypted multi-device sync is a separate, explicit Preview workflow available from the desktop or `reglet sync` against a personal self-hosted server. Desktop update checks are manual unless a user explicitly opts into automatic checks. macOS desktop artifacts are ad-hoc signed and unnotarized; Windows artifacts are unsigned; Linux ships as `.deb` and AppImage.
 
 ```text
 ~/.reglet/                 provider outputs
@@ -35,7 +35,7 @@ brew install elijahbutler/reglet/reglet
 
 To install the desktop app with Homebrew, use `brew install --cask elijahbutler/reglet/reglet`. If you installed the old 0.1.6 cask, follow the [cask migration steps](docs/installation.md#migrate-from-the-016-app-cask).
 
-Or download the matching CLI binary from the GitHub Release. Use `reglet-darwin-arm64` on Apple silicon, `reglet-darwin-x64` on Intel Macs, or `reglet-windows-x64.exe` on Windows x64. Ad-hoc-signed/unnotarized macOS and unsigned Windows desktop artifacts are also published; expect Gatekeeper or SmartScreen warnings. Linux GUI packaging is prepared but not published yet.
+Or download the matching CLI binary from the GitHub Release. Use `reglet-darwin-arm64` or `reglet-darwin-x64` on macOS, `reglet-windows-x64.exe` on Windows, and `reglet-linux-arm64` or `reglet-linux-x64` on Linux. Desktop artifacts are published for macOS, Windows, and Linux (`.deb` and AppImage). The macOS builds are ad-hoc signed/unnotarized and Windows builds are unsigned, so expect Gatekeeper or SmartScreen warnings.
 
 ```bash
 # macOS: choose the matching architecture

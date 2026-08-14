@@ -91,6 +91,14 @@ async function runRpc(
 }
 
 describe('reglet CLI', () => {
+  test('exposes invitation-based encrypted device connection without a feature flag', async () => {
+    const { home, providerHome } = await useTempHomes();
+    const result = await runCli(['sync', '--help'], home, providerHome);
+    expect(result.stdout).toContain('connect');
+    expect(result.stdout).toContain('connection-status');
+    expect(result.stdout).toContain('connection-complete');
+  });
+
   test('migrate library-v2 previews and applies only after explicit approval', async () => {
     const { home, providerHome } = await useTempHomes();
     await mkdir(path.join(home, 'rules'), { recursive: true });
@@ -1334,16 +1342,15 @@ describe('reglet CLI', () => {
     });
   });
 
-  test('public CLI does not expose sync commands', async () => {
+  test('public CLI exposes explicit encrypted sync without account commands or eager state', async () => {
     const { home, providerHome } = await useTempHomes();
 
     const help = (await runCli(['--help'], home, providerHome)).stdout;
 
     expect(help).not.toContain(' login');
     expect(help).not.toContain(' register');
-    expect(help).not.toContain(' pair');
-    expect(help).not.toContain(' sync');
-    await expect(runCli(['sync'], home, providerHome)).rejects.toMatchObject({ code: 1 });
+    expect(help).toContain(' sync');
+    expect((await runCli(['sync', '--help'], home, providerHome)).stdout).toContain('connect');
     await expect(runCli(['login', 'http://reglet.test', '--token', 'dev-token'], home, providerHome)).rejects.toMatchObject({ code: 1 });
     expect(await Bun.file(path.join(home, '.state', 'sync.json')).exists()).toBe(false);
   });

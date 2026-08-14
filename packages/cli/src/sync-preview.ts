@@ -4,20 +4,78 @@ import {
   approveSyncV2Pairing,
   bootstrapSyncV2,
   completeSyncV2Pairing,
+  completeSyncV2BootstrapConnection,
   listManagedSyncV2Devices,
   loadSyncV2State,
   logoutSyncV2,
   pendingSyncV2PairingStatus,
+  pendingSyncV2ConnectionStatus,
   renameManagedSyncV2Device,
   requestSyncV2Pairing,
   revokeManagedSyncV2Device,
   syncOnceV2,
+  startSyncV2BootstrapConnection,
 } from '@reglet/core';
 
 export function registerSyncV2PreviewCommands(program: Command): void {
   const sync = program
     .command('sync')
-    .description('Manually test end-to-end encrypted multi-device sync (preview)');
+    .description('Connect devices and manually exchange end-to-end encrypted library content (preview)');
+
+  sync
+    .command('connect')
+    .description('Connect this machine with an invitation from a Reglet server or trusted device')
+    .requiredOption('--invite <url>', 'short-lived Reglet Connect invitation URL')
+    .requiredOption('--device-name <name>', 'name for this device')
+    .action(async (options: { invite: string; deviceName: string }) => {
+      if (connectionKind(options.invite) === 'pair') {
+        const request = await requestSyncV2Pairing({ connectUrl: options.invite, deviceName: options.deviceName });
+        console.log(`sync\tconnection-pending\tmethod=pair\tcode=${request.code}\texpires=${request.expiresAt}`);
+        console.log('Approve this request on a connected Reglet device, then run: reglet sync connection-complete');
+        return;
+      }
+      const request = await startSyncV2BootstrapConnection({ connectUrl: options.invite, deviceName: options.deviceName });
+      console.log(`sync\tconnection-pending\tmethod=bootstrap\tfingerprint=${request.fingerprint}\texpires=${request.expiresAt}`);
+      console.log('Approve this device in the owner dashboard, compare the fingerprint, then run: reglet sync connection-complete');
+    });
+
+  sync
+    .command('connection-status')
+    .description('Check the pending invitation approval for this machine')
+    .option('--json', 'print machine-readable status')
+    .action(async (options: { json?: boolean }) => {
+      const status = await pendingSyncV2ConnectionStatus();
+      if (options.json === true) {
+        console.log(JSON.stringify({ version: 2, ...status }, null, 2));
+        return;
+      }
+      console.log(`sync\tconnection-${status.status}\tmethod=${status.method}\tdevice=${status.deviceName}\texpires=${status.expiresAt}`);
+      if (status.method === 'pair') console.log(`Request code: ${status.code}`);
+      if (status.fingerprint !== null) console.log(`Fingerprint: ${status.fingerprint}`);
+    });
+
+  sync
+    .command('connection-complete')
+    .description('Finish a pending connection only after comparing its fingerprint')
+    .option('--fingerprint <value>', 'confirmed fingerprint for non-interactive completion')
+    .action(async (options: { fingerprint?: string }) => {
+      const status = await pendingSyncV2ConnectionStatus();
+      if (status.fingerprint === null) throw new Error('Connection approval and fingerprint are not available yet');
+      console.log(`Fingerprint: ${status.fingerprint}`);
+      let confirmed = options.fingerprint;
+      if (confirmed === undefined) {
+        if (!process.stdin.isTTY) throw new Error('--fingerprint is required for non-interactive connection completion');
+        const accepted = await confirm({ message: 'Does this exactly match the fingerprint on the approving Reglet surface?' });
+        if (isCancel(accepted) || accepted !== true) throw new Error('Connection fingerprint was not confirmed');
+        confirmed = status.fingerprint;
+      }
+      if (status.method === 'bootstrap') {
+        await completeSyncV2BootstrapConnection({ confirmedFingerprint: confirmed });
+      } else {
+        await completeSyncV2Pairing({ confirmedSas: confirmed });
+      }
+      console.log('sync\tconnected\tinitial-sync=required\tprovider-apply=required');
+    });
 
   sync
     .command('bootstrap')
@@ -199,4 +257,12 @@ async function requireConfirmation(alreadyConfirmed: boolean, message: string): 
   if (!process.stdin.isTTY) throw new Error('Use --yes for non-interactive confirmation');
   const accepted = await confirm({ message });
   if (isCancel(accepted) || accepted !== true) throw new Error('Cancelled');
+}
+
+function connectionKind(value: string): 'bootstrap' | 'pair' {
+  try {
+    return new URLSearchParams(new URL(value.trim()).hash.slice(1)).get('kind') === 'pair' ? 'pair' : 'bootstrap';
+  } catch {
+    return 'bootstrap';
+  }
 }

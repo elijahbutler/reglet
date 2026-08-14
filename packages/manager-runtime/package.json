@@ -9,6 +9,6 @@
     "@reglet/core": "workspace:*",
     "@reglet/manager-application": "workspace:*",
     "@reglet/manager-protocol": "workspace:*",
-    "hono": "^4.6.0"
+    "hono": "^4.12.34"
   }
 }

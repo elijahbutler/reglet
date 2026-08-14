@@ -2,17 +2,18 @@
 
 ## Artifact requirements
 
-Public releases include standalone CLI binaries plus ad-hoc-signed/unnotarized macOS and unsigned Windows desktop artifacts. The desktop artifacts also have Tauri updater signatures, which authenticate in-app downloads independently of Apple Developer ID or Windows Authenticode signing. Linux GUI packaging is configured for `.deb` and AppImage, but Linux desktop artifacts are deferred until after macOS and Windows stabilize. Release automation fails unless it can:
+Public releases include standalone CLI binaries for macOS, Windows, and Linux, plus desktop artifacts for all three platforms. Linux ships as `.deb` and AppImage. The desktop artifacts also have Tauri updater signatures, which authenticate in-app downloads independently of Apple Developer ID or Windows Authenticode signing. macOS remains ad-hoc signed/unnotarized and Windows remains unsigned. Release automation fails unless it can:
 
 1. run Bun, Tauri frontend, and Rust checks and tests;
-2. build `reglet-darwin-arm64`, `reglet-darwin-x64`, and `reglet-windows-x64.exe`;
+2. build `reglet-darwin-arm64`, `reglet-darwin-x64`, `reglet-windows-x64.exe`, `reglet-linux-arm64`, and `reglet-linux-x64`;
 3. build ad-hoc-signed, unnotarized Tauri macOS desktop artifacts for Apple silicon and Intel Macs;
 4. build unsigned Windows x64 NSIS/WebView2 desktop artifacts;
-5. publish SHA-256 checksums and GitHub build provenance for all release artifacts;
-6. generate the Homebrew formula and cask;
-7. generate signed updater archives for macOS arm64, macOS x64, and Windows x64, then publish a matching `latest.json` manifest;
-8. update `Formula/reglet.rb` and `Casks/reglet.rb` in `elijahbutler/homebrew-reglet` using `HOMEBREW_TAP_TOKEN`;
-9. publish the GitHub Release only after the tap update succeeds.
+5. build Linux x64 `.deb` and AppImage desktop artifacts;
+6. publish SHA-256 checksums and GitHub build provenance for all release artifacts;
+7. generate the Homebrew formula and cask;
+8. generate signed updater archives for macOS arm64/x64, Windows x64, and Linux x64, then publish a matching `latest.json` manifest;
+9. update `Formula/reglet.rb` and `Casks/reglet.rb` in `elijahbutler/homebrew-reglet` using `HOMEBREW_TAP_TOKEN`;
+10. publish the GitHub Release only after the tap update succeeds.
 
 `HOMEBREW_TAP_TOKEN` is a repository secret backed by a fine-grained token with **Contents: Read and write** access to `elijahbutler/homebrew-reglet`. If the secret is absent, cloning fails, committing fails, or pushing fails, the workflow fails and leaves the GitHub Release as a draft.
 
@@ -88,9 +89,11 @@ Each tag release includes:
 
 - arm64 and Intel macOS CLI binaries;
 - Windows x64 CLI binary;
+- Linux arm64 and x64 CLI binaries;
 - ad-hoc-signed, unnotarized Apple silicon and Intel macOS Tauri desktop artifacts;
 - unsigned Windows x64 Tauri NSIS desktop installer artifacts;
-- signed Tauri updater packages and `latest.json` for macOS arm64, macOS x64, and Windows x64;
+- Linux x64 Tauri `.deb` and AppImage artifacts;
+- signed Tauri updater packages and `latest.json` for macOS arm64/x64, Windows x64, and Linux x64;
 - `SHA256SUMS.txt`;
 - `provenance.txt` and GitHub artifact attestation.
 
@@ -101,7 +104,7 @@ Before publishing a release candidate, record the date, platform, artifact check
 | Check | Required result |
 |---|---|
 | macOS Homebrew install | Formula installs the matching CLI and cask installs the matching desktop app from `elijahbutler/homebrew-reglet`. |
-| Direct binary launch | Downloaded macOS and Windows binaries report the expected version. |
+| Direct binary launch | Downloaded macOS, Windows, and Linux binaries report the expected version. |
 | Onboarding | Detects existing supported providers and writes nothing until review/apply. |
 | Review/apply | Redacted diff, current digest, receipt, and snapshots are shown. |
 | Drift | Plain apply refuses replacement; reviewed replacement succeeds only after fresh preview. |

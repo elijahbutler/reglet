@@ -17,7 +17,7 @@ build_target() {
 
 targets=("$@")
 if [[ ${#targets[@]} -eq 0 ]]; then
-  targets=(darwin-arm64 darwin-x64 windows-x64)
+  targets=(darwin-arm64 darwin-x64 windows-x64 linux-arm64 linux-x64)
 fi
 
 for target in "${targets[@]}"; do
@@ -25,6 +25,8 @@ for target in "${targets[@]}"; do
     darwin-arm64) build_target bun-darwin-arm64 reglet-darwin-arm64 ;;
     darwin-x64) build_target bun-darwin-x64 reglet-darwin-x64 ;;
     windows-x64) build_target bun-windows-x64 reglet-windows-x64.exe ;;
+    linux-arm64) build_target bun-linux-arm64 reglet-linux-arm64 ;;
+    linux-x64) build_target bun-linux-x64 reglet-linux-x64 ;;
     *) echo "Unsupported binary target: $target" >&2; exit 2 ;;
   esac
 done

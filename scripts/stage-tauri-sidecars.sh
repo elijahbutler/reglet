@@ -28,19 +28,16 @@ stage_triple() {
     x86_64-apple-darwin) stage_sidecar reglet-darwin-x64 "$1" ;;
     x86_64-pc-windows-msvc) stage_sidecar reglet-windows-x64.exe "$1" .exe ;;
     x86_64-unknown-linux-gnu)
-      if [[ -f "$DIST_DIR/reglet-linux-x64" ]]; then
-        stage_sidecar reglet-linux-x64 "$1"
-      else
-        echo "Linux sidecar staging is configured; dist/reglet-linux-x64 is not built by the current release gate."
-      fi
+      stage_sidecar reglet-linux-x64 "$1"
       ;;
+    aarch64-unknown-linux-gnu) stage_sidecar reglet-linux-arm64 "$1" ;;
     *) echo "Unsupported Tauri sidecar target: $1" >&2; exit 2 ;;
   esac
 }
 
 targets=("$@")
 if [[ ${#targets[@]} -eq 0 ]]; then
-  targets=(aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-msvc x86_64-unknown-linux-gnu)
+  targets=(aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-msvc x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu)
 fi
 for target in "${targets[@]}"; do
   stage_triple "$target"
