@@ -105,3 +105,19 @@ jobs:
       - run: bun run build:binaries -- linux-x64
       - run: bash scripts/stage-tauri-sidecars.sh x86_64-unknown-linux-gnu
       - run: bash scripts/build-tauri-desktop.sh x86_64-unknown-linux-gnu deb,appimage
+      - name: Verify AppImage sidecar
+        shell: bash
+        run: |
+          set -euo pipefail
+          appimage="$(find apps/desktop/src-tauri/target -path '*/bundle/appimage/*' -type f -name '*.AppImage' | head -n 1)"
+          test -n "$appimage"
+          appimage="$(realpath "$appimage")"
+          extract_dir="$(mktemp -d)"
+          (
+            cd "$extract_dir"
+            "$appimage" --appimage-extract >/dev/null
+          )
+          cmp \
+            apps/desktop/src-tauri/bin/reglet-x86_64-unknown-linux-gnu \
+            "$extract_dir/squashfs-root/usr/libexec/reglet/reglet"
+          "$extract_dir/squashfs-root/usr/bin/reglet" --version
