@@ -1,5 +1,5 @@
 import { AlertTriangle, FileSearch, FolderPlus, Inbox, ScanSearch, ShieldCheck } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { JsonValue, ManagerSnapshotV3 } from '@reglet/manager-protocol';
 import type { ManagerClient } from '../../client/ManagerClient.js';
 import { Button } from '../../design-system/Button.js';
@@ -23,10 +23,15 @@ export function ProjectInboxWorkbench({ client, snapshot, onRefresh, onError }: 
     () => discoveries.find((discovery) => discovery.id === selectedId) ?? discoveries[0],
     [discoveries, selectedId],
   );
+  const selectedDiscoveryRef = useRef(selected?.id);
+  const previewRequestRef = useRef(0);
+  selectedDiscoveryRef.current = selected?.id;
 
   useEffect(() => {
+    previewRequestRef.current += 1;
     setPreview(undefined);
     setConfirmedExecutable(false);
+    return () => { previewRequestRef.current += 1; };
   }, [selected?.id]);
 
   const run = async (action: () => Promise<void>) => {
@@ -36,9 +41,20 @@ export function ProjectInboxWorkbench({ client, snapshot, onRefresh, onError }: 
 
   const previewPromotion = () => run(async () => {
     if (selected === undefined) return;
+    const discoveryId = selected.id;
+    const requestId = ++previewRequestRef.current;
+    const requestIsCurrent = () => requestId === previewRequestRef.current &&
+      selectedDiscoveryRef.current === discoveryId;
     setPreview(undefined);
     setConfirmedExecutable(false);
-    const response = await client.command('project.promotion-preview', { discoveryId: selected.id });
+    let response: Awaited<ReturnType<ManagerClient['command']>>;
+    try {
+      response = await client.command('project.promotion-preview', { discoveryId });
+    } catch (error) {
+      if (!requestIsCurrent()) return;
+      throw error;
+    }
+    if (!requestIsCurrent()) return;
     setPreview(response.data);
   });
 

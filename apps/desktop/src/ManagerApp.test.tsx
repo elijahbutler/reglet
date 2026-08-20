@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, test, vi } from 'vitest';
 import {
   ManagerApp,
@@ -118,6 +118,95 @@ describe('shared Manager workbench', () => {
       discoveryId: 'fixture-executable-discovery',
       confirmedExecutableRevision: 'fixture-project-skill-revision',
     }));
+  });
+
+  test('discards a promotion preview after selecting another discovery', async () => {
+    const snapshot = structuredClone(managerFixtureSnapshot);
+    snapshot.projectInbox = {
+      roots: [{
+        id: 'fixture-project-root',
+        label: 'Fixture project',
+        path: '/fixture/project',
+        createdAt: '2026-08-20T12:00:00.000Z',
+      }],
+      discoveries: [{
+        id: 'fixture-slow-discovery',
+        rootId: 'fixture-project-root',
+        relativePath: '.agents/skills/slow-runner',
+        kind: 'skill',
+        sourceHash: 'fixture-slow-source',
+        size: 256,
+        recognizedBy: ['codex'],
+        providerFormats: ['skill-directory'],
+        scopeSummary: 'First project skill',
+        state: 'new',
+        changedSincePromotion: false,
+        skillRisks: ['Executable file: scripts/run.sh'],
+      }, {
+        id: 'fixture-current-discovery',
+        rootId: 'fixture-project-root',
+        relativePath: '.agents/skills/current-runner',
+        kind: 'skill',
+        sourceHash: 'fixture-current-source',
+        size: 128,
+        recognizedBy: ['claude'],
+        providerFormats: ['skill-directory'],
+        scopeSummary: 'Current project skill',
+        state: 'new',
+        changedSincePromotion: false,
+        skillRisks: [],
+      }],
+    };
+    let resolvePreview: ((result: ManagerCommandResult) => void) | undefined;
+    const pendingPreview = new Promise<ManagerCommandResult>((resolve) => {
+      resolvePreview = resolve;
+    });
+    class DeferredProjectPromotionClient extends FixtureManagerClient {
+      previewRequests = 0;
+
+      override async command<Operation extends ManagerProtocolOperation>(
+        operation: Operation,
+        input?: ManagerRpcInputs[Operation],
+        options?: ManagerCommandOptions,
+      ): Promise<ManagerCommandResult> {
+        if (operation === 'project.promotion-preview') {
+          this.previewRequests += 1;
+          return pendingPreview;
+        }
+        return super.command(operation, input, options);
+      }
+    }
+    const client = new DeferredProjectPromotionClient(snapshot);
+    render(<ManagerApp client={client} initialDestination="projects" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview promotion' }));
+    expect(client.previewRequests).toBe(1);
+    fireEvent.click(screen.getByRole('button', { name: /\.agents\/skills\/current-runner/u }));
+    expect(await screen.findByRole('heading', { name: '.agents/skills/current-runner' })).toBeInTheDocument();
+
+    if (resolvePreview === undefined) throw new Error('Deferred project preview was not requested.');
+    await act(async () => {
+      resolvePreview?.({
+        revision: snapshot.revision,
+        changed: false,
+        data: {
+          kind: 'skill',
+          sourceHash: 'fixture-slow-source',
+          inspection: {
+            revision: 'fixture-stale-executable-revision',
+            requiresExecutableConfirmation: true,
+            promotionBlocked: false,
+          },
+          candidates: [],
+        },
+      });
+      await pendingPreview;
+    });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Preview promotion' })).toBeEnabled());
+    expect(screen.queryByText('fixture-stale-executable-revision')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Proposed canonical artifact' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Promote reviewed' })).toBeDisabled();
   });
 
   test('starts with the global library and reveals provider-specific artifacts on demand', async () => {
