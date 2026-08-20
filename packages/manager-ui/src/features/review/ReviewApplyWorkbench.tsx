@@ -55,6 +55,10 @@ interface ReviewApplyWorkbenchProps {
 type ReviewFilter = 'all' | 'write' | 'remove' | 'blocked';
 type ReviewPhase = 'loading' | 'ready' | 'revalidating' | 'applying';
 
+const PROVIDER_REVIEW_TIMEOUT_MS = 20_000;
+const PROVIDER_APPLY_TIMEOUT_MS = 30_000;
+const SLOW_APPLY_NOTICE_MS = 8_000;
+
 interface ProjectionApplyUnitOutcome {
   key: string;
   provider: ManagerProviderId;
@@ -97,6 +101,7 @@ export function ReviewApplyWorkbench({
   const [staleMessage, setStaleMessage] = useState<string | null>(null);
   const [confirmDrift, setConfirmDrift] = useState(false);
   const [result, setResult] = useState<ProjectionApplyResult | null>(null);
+  const [slowApply, setSlowApply] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
 
   const loadReview = useCallback(async () => {
@@ -108,7 +113,7 @@ export function ReviewApplyWorkbench({
     try {
       const response = await client.command('provider.review', {
         units: request.units.map(({ provider, content }) => ({ provider, content })),
-      });
+      }, { timeoutMs: PROVIDER_REVIEW_TIMEOUT_MS });
       if (!isManagerProjectionReviewV3(response.data)) {
         throw new Error('Reglet returned an invalid provider review. No files were changed.');
       }
@@ -139,12 +144,21 @@ export function ReviewApplyWorkbench({
     return () => onBusyChange(false);
   }, [busy, onBusyChange]);
 
+  useEffect(() => {
+    if (phase !== 'applying') {
+      setSlowApply(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setSlowApply(true), SLOW_APPLY_NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [phase]);
+
   const selectedUnits = useMemo(
     () => review?.units.filter((unit) => selectedKeys.has(unit.key) && isActionable(unit)) ?? [],
     [review, selectedKeys],
   );
   const requiresDriftConfirmation = selectedUnits.some((unit) => unit.requiresDriftConfirmation);
-  const canApply = phase === 'ready' && result === null && selectedUnits.length > 0 &&
+  const canApply = phase === 'ready' && result === null && !resultUnconfirmed && selectedUnits.length > 0 &&
     (!requiresDriftConfirmation || confirmDrift);
 
   const applyReviewedUnits = useCallback(async () => {
@@ -158,7 +172,7 @@ export function ReviewApplyWorkbench({
     try {
       const response = await client.command('provider.review', {
         units: visibleUnits.map(({ provider, content }) => ({ provider, content })),
-      });
+      }, { timeoutMs: PROVIDER_REVIEW_TIMEOUT_MS });
       if (!isManagerProjectionReviewV3(response.data)) {
         throw new Error('Reglet returned an invalid provider review. No files were changed.');
       }
@@ -183,13 +197,17 @@ export function ReviewApplyWorkbench({
         : applyInputBase;
       setPhase('applying');
       applyRequested = true;
-      const applyResponse = await client.command('provider.apply', applyInput);
+      const applyResponse = await client.command('provider.apply', applyInput, {
+        timeoutMs: PROVIDER_APPLY_TIMEOUT_MS,
+      });
       const nextResult = readProjectionApplyResult(applyResponse.data);
       if (nextResult === null) {
         throw new Error('Reglet could not verify the apply result. Check Activity before trying again.');
       }
       setResult(nextResult);
-      await onRefresh();
+      void onRefresh().catch((refreshError: unknown) => {
+        setError(`Provider files were updated, but the overview could not refresh. ${messageFrom(refreshError)}`);
+      });
     } catch (applyError) {
       const detail = messageFrom(applyError);
       if (applyRequested && !detail.toLocaleLowerCase().includes('stale')) {
@@ -410,6 +428,16 @@ export function ReviewApplyWorkbench({
                   </ul>
                 )}
               </section>
+              {phase === 'revalidating' || phase === 'applying' ? (
+                <section className={`rg-review-progress${slowApply ? ' rg-review-progress--slow' : ''}`} role="status" aria-live="polite">
+                  <h3><LoaderCircle className="rg-spin" size={15} aria-hidden="true" />{phase === 'revalidating' ? 'Checking the reviewed ledger' : 'Writing provider files'}</h3>
+                  <p>{phase === 'revalidating'
+                    ? 'Reglet is confirming that every selected operation still matches this review.'
+                    : slowApply
+                      ? 'This is taking longer than expected. Reglet will stop waiting at 30 seconds and preserve recovery information.'
+                      : 'Reglet is snapshotting each current target before writing the reviewed replacement.'}</p>
+                </section>
+              ) : null}
               {requiresDriftConfirmation ? (
                 <section className="rg-review-drift-confirmation">
                   <h3><AlertTriangle size={15} aria-hidden="true" /> External changes detected</h3>
@@ -445,7 +473,7 @@ export function ReviewApplyWorkbench({
               icon={busy ? <LoaderCircle className="rg-spin" size={15} /> : <Check size={15} />}
               onClick={() => void applyReviewedUnits()}
             >
-              {phase === 'revalidating' ? 'Checking for changes…' : phase === 'applying' ? 'Applying…' : selectedUnits.length === 0 ? 'Select a ready unit' : `Apply ${selectedUnits.length} ready unit${selectedUnits.length === 1 ? '' : 's'}`}
+              {phase === 'revalidating' ? 'Checking for changes…' : phase === 'applying' ? 'Applying…' : resultUnconfirmed ? 'Refresh before retrying' : selectedUnits.length === 0 ? 'Select a ready unit' : `Apply ${selectedUnits.length} ready unit${selectedUnits.length === 1 ? '' : 's'}`}
             </Button>
           ) : null}
         </div>

@@ -5,7 +5,11 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { LocalState } from '@reglet/core';
 import { createManagerRuntime } from '@reglet/manager-runtime';
 import { managerFixtureSnapshot } from '../src/testing/fixtureSnapshot.js';
-import { HttpManagerClient, TauriManagerClient } from '../src/client/HttpManagerClient.js';
+import {
+  HttpManagerClient,
+  ManagerTransportError,
+  TauriManagerClient,
+} from '../src/client/HttpManagerClient.js';
 
 let home: string | undefined;
 
@@ -84,6 +88,26 @@ for (const [name, Client] of [
       await client.command('remote.disable', {});
 
       expect(requests[2]?.headers.get('X-Reglet-Revision')).toBe('5');
+    });
+
+    test('bounds a command that never returns', async () => {
+      const fetcher: typeof globalThis.fetch = (_input, init) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+      });
+      const client = new Client({
+        baseUrl: 'http://localhost',
+        fetch: fetcher,
+        requestTimeoutMs: 15,
+        token: 'local-test-token',
+      });
+
+      try {
+        await client.command('sync.snapshot', {});
+        throw new Error('Expected the command to time out.');
+      } catch (error) {
+        expect(error).toBeInstanceOf(ManagerTransportError);
+        expect(error).toMatchObject({ code: 'REQUEST_TIMEOUT', recoverable: true });
+      }
     });
   });
 }

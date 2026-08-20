@@ -1,7 +1,13 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { access, mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { LocalState, regletHome, systemSecretStore, type RemoteSessionRecord } from '@reglet/core';
+import {
+  LocalState,
+  recoverPendingOperations,
+  regletHome,
+  systemSecretStore,
+  type RemoteSessionRecord,
+} from '@reglet/core';
 import {
   ApplicationPermissionError,
   RegletApplication,
@@ -350,6 +356,10 @@ export async function serveManagerRuntime(options: ManagerRuntimeServeOptions = 
   const hostname = options.hostname ?? '127.0.0.1';
   validateManagerRuntimeBinding(hostname, options);
   await mkdir(home, { recursive: true });
+  const recovery = await recoverPendingOperations(home);
+  if (recovery.recovered.length > 0) {
+    recordRuntimeLog(home, 'operation-recovery', { count: recovery.recovered.length });
+  }
   const runtime = createManagerRuntime({ ...options, home, watchProjects: options.watchProjects ?? true });
   await runtime.sourceWatcher?.start();
   const tls = options.tlsCertificate !== undefined && options.tlsPrivateKey !== undefined

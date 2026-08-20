@@ -22,7 +22,10 @@ export interface HttpManagerClientOptions {
   token?: string;
   fetch?: typeof globalThis.fetch;
   webSocketFactory?: (url: string) => WebSocket;
+  requestTimeoutMs?: number;
 }
+
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 export class ManagerTransportError extends Error {
   readonly status: number;
@@ -42,6 +45,7 @@ export class HttpManagerClient implements ManagerClient {
   private readonly baseUrl: string;
   private readonly fetcher: typeof globalThis.fetch;
   private readonly webSocketFactory: (url: string) => WebSocket;
+  private readonly requestTimeoutMs: number;
   private token?: string;
   private revision?: number;
 
@@ -50,6 +54,7 @@ export class HttpManagerClient implements ManagerClient {
     this.token = options.token;
     this.fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.webSocketFactory = options.webSocketFactory ?? ((url) => new WebSocket(url));
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   }
 
   async pair(code: string): Promise<{ id: string; scope: 'read' | 'write' | 'admin' }> {
@@ -88,17 +93,23 @@ export class HttpManagerClient implements ManagerClient {
       throw new ManagerTransportError(0, 'INVALID_INPUT', 'Manager command input failed local validation.', false);
     }
     const expectedRevision = options.expectedRevision ?? (isManagerMutatingOperation(operation) ? this.revision : undefined);
-    const response = await this.fetcher(`${this.baseUrl}/v2/commands`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token === undefined ? {} : { Authorization: `Bearer ${this.token}` }),
-        ...(expectedRevision === undefined ? {} : { 'X-Reglet-Revision': String(expectedRevision) }),
+    const { response, envelope } = await withRequestTimeout(
+      options.timeoutMs ?? this.requestTimeoutMs,
+      async (signal) => {
+        const response = await this.fetcher(`${this.baseUrl}/v2/commands`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(this.token === undefined ? {} : { Authorization: `Bearer ${this.token}` }),
+            ...(expectedRevision === undefined ? {} : { 'X-Reglet-Revision': String(expectedRevision) }),
+          },
+          body: JSON.stringify(request),
+          signal,
+        });
+        return { response, envelope: await readJson(response) };
       },
-      body: JSON.stringify(request),
-    });
-    const envelope = await readJson(response);
+    );
     if (!managerRpcResponseValidator.validate(envelope)) {
       throw new ManagerTransportError(response.status, 'INVALID_INPUT', 'Runtime returned an invalid protocol response.', false);
     }
@@ -214,6 +225,36 @@ function parseInvalidation(value: unknown): ManagerInvalidation | undefined {
 
 async function readJson(response: Response): Promise<unknown> {
   try { return await response.json() as unknown; } catch { return undefined; }
+}
+
+async function withRequestTimeout<Result>(
+  timeoutMs: number,
+  request: (signal: AbortSignal) => Promise<Result>,
+): Promise<Result> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new ManagerTransportError(0, 'INVALID_INPUT', 'Manager request timeout must be a positive number.', false);
+  }
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      const seconds = Math.max(1, Math.round(timeoutMs / 1_000));
+      const error = new ManagerTransportError(
+        0,
+        'REQUEST_TIMEOUT',
+        `Manager runtime did not answer within ${seconds} seconds.`,
+        true,
+      );
+      reject(error);
+      controller.abort(error);
+    }, timeoutMs);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([request(controller.signal), timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 function transportError(status: number, value: unknown): ManagerTransportError {

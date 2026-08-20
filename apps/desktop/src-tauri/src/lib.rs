@@ -10,7 +10,7 @@ use std::{
 use tauri::{
     ipc::Channel,
     menu::{MenuBuilder, SubmenuBuilder},
-    AppHandle, Manager, State, WindowEvent,
+    AppHandle, Manager, RunEvent, State, WindowEvent,
 };
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
@@ -176,6 +176,10 @@ async fn manager_runtime_stop(
 
 async fn stop_manager_runtime(state: &ManagerRuntimeState) -> Result<(), ManagerRpcError> {
     let _lifecycle = state.lifecycle.lock().await;
+    stop_manager_runtime_immediately(state)
+}
+
+fn stop_manager_runtime_immediately(state: &ManagerRuntimeState) -> Result<(), ManagerRpcError> {
     state.generation.fetch_add(1, Ordering::SeqCst);
     if let Some(child) = state
         .child
@@ -395,7 +399,7 @@ fn user_home() -> Option<PathBuf> {
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(ManagerRuntimeState::default())
         .manage(PendingUpdateState::default())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -441,11 +445,8 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if matches!(event, WindowEvent::Destroyed) && window.label() == "main" {
-                let app = window.app_handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    let state = app.state::<ManagerRuntimeState>();
-                    let _ = stop_manager_runtime(&state).await;
-                });
+                let state = window.state::<ManagerRuntimeState>();
+                let _ = stop_manager_runtime_immediately(&state);
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -455,8 +456,14 @@ pub fn run() {
             install_update,
             open_file_location
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Reglet desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building Reglet desktop");
+    app.run(|app, event| {
+        if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
+            let state = app.state::<ManagerRuntimeState>();
+            let _ = stop_manager_runtime_immediately(&state);
+        }
+    });
 }
 
 fn update_error(code: &str, message: &str) -> ManagerRpcError {
@@ -522,6 +529,29 @@ mod tests {
             .expect("valid startup JSON")
             .expect("complete startup JSON");
         assert_eq!(startup.url, "http://127.0.0.1:43210");
+    }
+
+    #[test]
+    fn immediate_runtime_stop_invalidates_startup_state() {
+        let state = ManagerRuntimeState::default();
+        *state.startup.lock().expect("runtime startup lock") = Some(ManagerRuntimeStartup {
+            version: 1,
+            listening: true,
+            url: "http://127.0.0.1:43210".to_string(),
+            manager_url: "http://127.0.0.1:43210/manager/#pair=ABC123".to_string(),
+            pairing_expires_at: "2026-08-20T18:00:00.000Z".to_string(),
+            remote: false,
+            protocol_version: 2,
+        });
+
+        stop_manager_runtime_immediately(&state).expect("immediate runtime stop");
+
+        assert!(state
+            .startup
+            .lock()
+            .expect("runtime startup lock")
+            .is_none());
+        assert_eq!(state.generation.load(Ordering::SeqCst), 1);
     }
 
     #[test]

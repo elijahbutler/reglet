@@ -8,6 +8,7 @@ import type {
 
 export interface ManagerCommandOptions {
   expectedRevision?: number;
+  timeoutMs?: number;
 }
 
 export interface ManagerCommandResult<Result extends JsonValue = JsonValue> {

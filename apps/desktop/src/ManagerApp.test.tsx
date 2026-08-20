@@ -1,7 +1,16 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, test, vi } from 'vitest';
-import { ManagerApp } from '@reglet/manager-ui';
-import type { ManagerHostActions } from '@reglet/manager-ui';
+import {
+  ManagerApp,
+  ManagerTransportError,
+  type ManagerCommandOptions,
+  type ManagerCommandResult,
+  type ManagerHostActions,
+} from '@reglet/manager-ui';
+import type {
+  ManagerProtocolOperation,
+  ManagerRpcInputs,
+} from '@reglet/manager-protocol';
 import { FixtureManagerClient, managerFixtureSnapshot } from '@reglet/manager-ui/testing';
 
 describe('shared Manager workbench', () => {
@@ -127,6 +136,39 @@ describe('shared Manager workbench', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     const restoredTrigger = (await screen.findAllByRole('button', { name: 'Review changes' }))[0];
     await waitFor(() => expect(restoredTrigger).toHaveFocus());
+  });
+
+  test('ends an unconfirmed Apply state and requires a fresh review before retrying', async () => {
+    class TimedOutApplyClient extends FixtureManagerClient {
+      override async command<Operation extends ManagerProtocolOperation>(
+        operation: Operation,
+        input?: ManagerRpcInputs[Operation],
+        options?: ManagerCommandOptions,
+      ): Promise<ManagerCommandResult> {
+        if (operation === 'provider.apply') {
+          throw new ManagerTransportError(
+            0,
+            'REQUEST_TIMEOUT',
+            'Manager runtime did not answer within 30 seconds.',
+            true,
+          );
+        }
+        return super.command(operation, input, options);
+      }
+    }
+    render(<ManagerApp client={new TimedOutApplyClient()} initialDestination="library" />);
+
+    const trigger = (await screen.findAllByRole('button', { name: 'Review changes' }))[0];
+    if (trigger === undefined) throw new Error('Review trigger is missing.');
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole('checkbox', { name: /I understand that Apply will replace/u }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 3 ready units' }));
+
+    expect(await screen.findByText(/could not confirm whether the batch completed/u)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh before retrying' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh review' }));
+    expect(await screen.findByRole('button', { name: 'Apply 3 ready units' })).toBeDisabled();
   });
 
   test('adopts one exact unmanaged provider source without rewriting it', async () => {
