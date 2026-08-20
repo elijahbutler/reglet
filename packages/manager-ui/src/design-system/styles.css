@@ -2440,6 +2440,36 @@
   margin-bottom: 14px;
 }
 
+.rg-promotion-executable-confirmation {
+  margin-top: 14px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--rg-warning) 38%, var(--rg-line));
+  border-radius: var(--rg-radius-control);
+  color: var(--rg-warning);
+  background: var(--rg-warning-soft);
+}
+
+.rg-promotion-executable-confirmation label {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.rg-promotion-executable-confirmation input {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  margin: 1px 0 0;
+  accent-color: var(--rg-coral);
+}
+
+.rg-promotion-executable-confirmation code {
+  font: 10px/1.4 var(--rg-font-mono);
+}
+
 .rg-key-values {
   display: grid;
   margin: 0;

@@ -38,6 +38,88 @@ describe('shared Manager workbench', () => {
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
   }, 30_000);
 
+  test('requires explicit acknowledgement before promoting an executable project skill', async () => {
+    const snapshot = structuredClone(managerFixtureSnapshot);
+    snapshot.projectInbox = {
+      roots: [{
+        id: 'fixture-project-root',
+        label: 'Fixture project',
+        path: '/fixture/project',
+        createdAt: '2026-08-20T12:00:00.000Z',
+      }],
+      discoveries: [{
+        id: 'fixture-executable-discovery',
+        rootId: 'fixture-project-root',
+        relativePath: '.agents/skills/reviewed-runner',
+        kind: 'skill',
+        sourceHash: 'fixture-project-skill-source',
+        size: 256,
+        recognizedBy: ['codex'],
+        providerFormats: ['skill-directory'],
+        scopeSummary: 'Project-scoped executable skill',
+        state: 'new',
+        changedSincePromotion: false,
+        skillRisks: ['Executable file: scripts/run.sh'],
+      }],
+    };
+    class ProjectPromotionClient extends FixtureManagerClient {
+      promotedInput: ManagerRpcInputs['project.promote'] | undefined;
+
+      override async command<Operation extends ManagerProtocolOperation>(
+        operation: Operation,
+        input?: ManagerRpcInputs[Operation],
+        options?: ManagerCommandOptions,
+      ): Promise<ManagerCommandResult> {
+        if (operation === 'project.promotion-preview') {
+          return {
+            revision: snapshot.revision,
+            changed: false,
+            data: {
+              kind: 'skill',
+              sourceHash: 'fixture-project-skill-source',
+              inspection: {
+                revision: 'fixture-project-skill-revision',
+                requiresExecutableConfirmation: true,
+                promotionBlocked: false,
+              },
+              candidates: [],
+            },
+          };
+        }
+        if (operation === 'project.promote') {
+          this.promotedInput = input as ManagerRpcInputs['project.promote'];
+        }
+        return super.command(operation, input, options);
+      }
+    }
+    const client = new ProjectPromotionClient(snapshot);
+    render(<ManagerApp client={client} initialDestination="projects" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview promotion' }));
+    const promote = await screen.findByRole('button', { name: 'Promote reviewed' });
+    const firstConfirmation = await screen.findByRole('checkbox', {
+      name: /I reviewed the executable files in revision fixture-project-skill-revision/u,
+    });
+    expect(firstConfirmation).not.toBeChecked();
+    expect(promote).toBeDisabled();
+
+    fireEvent.click(firstConfirmation);
+    expect(promote).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview promotion' }));
+    const resetConfirmation = await screen.findByRole('checkbox', {
+      name: /I reviewed the executable files in revision fixture-project-skill-revision/u,
+    });
+    expect(resetConfirmation).not.toBeChecked();
+    expect(promote).toBeDisabled();
+
+    fireEvent.click(resetConfirmation);
+    fireEvent.click(promote);
+    await waitFor(() => expect(client.promotedInput).toMatchObject({
+      discoveryId: 'fixture-executable-discovery',
+      confirmedExecutableRevision: 'fixture-project-skill-revision',
+    }));
+  });
+
   test('starts with the global library and reveals provider-specific artifacts on demand', async () => {
     const snapshot = structuredClone(managerFixtureSnapshot);
     const source = snapshot.library.artifacts[0];
