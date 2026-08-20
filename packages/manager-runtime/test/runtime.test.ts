@@ -104,16 +104,22 @@ describe('manager runtime', () => {
 
     expect(response.status).toBe(500);
     const logPath = path.join(home ?? '', '.state', 'logs', 'runtime.log');
-    let log = '';
-    for (let attempt = 0; attempt < 20; attempt += 1) {
+    const deadline = Date.now() + 2_000;
+    let matchingLine: string | undefined;
+    while (Date.now() < deadline) {
       if (await Bun.file(logPath).exists()) {
-        log = await readFile(logPath, 'utf8');
-        if (log.includes('Unknown artifact')) break;
+        matchingLine = (await readFile(logPath, 'utf8'))
+          .trim()
+          .split('\n')
+          .find((line) => line.includes('Unknown artifact'));
+        if (matchingLine !== undefined) break;
       }
-      await Bun.sleep(10);
+      await Bun.sleep(25);
     }
 
-    const entry = JSON.parse(log.trim().split('\n').at(-1) ?? '{}') as {
+    expect(matchingLine).toBeDefined();
+    if (matchingLine === undefined) throw new Error('Expected runtime error was not written before the deadline.');
+    const entry = JSON.parse(matchingLine) as {
       errorName?: string;
       errorMessage?: string;
     };
