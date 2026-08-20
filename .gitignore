@@ -10,3 +10,4 @@ dist/
 *.sqlite-wal
 .env
 .archive/
+.impeccable/hook.cache.json

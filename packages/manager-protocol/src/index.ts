@@ -5,6 +5,9 @@ export const managerProtocolVersions = [legacyManagerProtocolVersion, managerPro
 export * from './snapshot-v2.js';
 export * from './snapshot-v3.js';
 export * from './sync.js';
+export * from './projection-review.js';
+export * from './recovery.js';
+export * from './provider-lifecycle.js';
 import {
   isManagerSnapshotV2,
   type ManagerContentId,
@@ -83,8 +86,16 @@ export const managerProtocolOperations = [
   'provider.list',
   'provider.effective',
   'provider.preview',
+  'provider.review',
   'provider.apply',
+  'provider.source.preview',
+  'provider.source.adopt',
+  'provider.source.stop-managing.preview',
+  'provider.source.stop-managing',
+  'provider.source.start-managing',
+  'provider.restore.preview',
   'provider.restore',
+  'provider.purge-backups.preview',
   'provider.purge-backups',
   'project.root.add',
   'project.root.remove',
@@ -102,11 +113,15 @@ export const managerProtocolOperations = [
   'history.list',
   'history.undo',
   'activity.list',
+  'recovery.list',
+  'recovery.preview',
+  'recovery.restore',
   'search',
   'sync.configure',
   'sync.disable',
   'sync.status',
   'sync.now',
+  'sync.conflict.preview',
   'sync.resolve',
   'remote.enable',
   'remote.disable',
@@ -148,6 +163,66 @@ export type ManagerProtocolOperation = (typeof managerProtocolOperations)[number
 export type ManagerProtocolErrorCode = (typeof managerProtocolErrorCodes)[number];
 export type ManagerScopeKind = 'shared' | 'provider';
 export type ManagerMergeRunnerId = 'codex' | 'claude' | 'gemini';
+
+/**
+ * Commands that advance the shared Manager revision.
+ *
+ * The runtime, every transport client, and test clients must use this registry
+ * so read commands never carry stale optimistic-concurrency headers.
+ */
+export const managerMutatingOperations = [
+  'library.create',
+  'library.duplicate',
+  'library.save',
+  'library.rename',
+  'library.archive',
+  'library.restore',
+  'library.delete',
+  'library.targets',
+  'provider.apply',
+  'provider.source.adopt',
+  'provider.source.stop-managing',
+  'provider.source.start-managing',
+  'provider.restore',
+  'provider.purge-backups',
+  'project.root.add',
+  'project.root.remove',
+  'project.scan',
+  'project.ignore',
+  'project.promote',
+  'skill.trust',
+  'secret.set',
+  'secret.delete',
+  'history.undo',
+  'recovery.restore',
+  'sync.configure',
+  'sync.disable',
+  'sync.now',
+  'sync.resolve',
+  'remote.enable',
+  'remote.disable',
+  'session.pair',
+  'session.revoke',
+  'migration.apply',
+  'sync.preview.set',
+  'sync.bootstrap.start',
+  'sync.invitation.create',
+  'sync.pair.request',
+  'sync.pair.approve',
+  'sync.pair.complete',
+  'sync.pair.cancel',
+  'sync.run',
+  'sync.device.rename',
+  'sync.device.revoke',
+  'sync.disconnect',
+  'setup.complete',
+] as const satisfies readonly ManagerProtocolOperation[];
+
+const managerMutatingOperationSet = new Set<ManagerProtocolOperation>(managerMutatingOperations);
+
+export function isManagerMutatingOperation(operation: ManagerProtocolOperation): boolean {
+  return managerMutatingOperationSet.has(operation);
+}
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -195,6 +270,34 @@ export type RulesMergeDraftInput = JsonObject & {
 export type ProviderInput = JsonObject & {
   provider: ManagerProviderId;
 };
+
+export type ProviderReviewInput = JsonObject & {
+  units: Array<{
+    provider: ManagerProviderId;
+    content: ManagerContentId;
+  }>;
+};
+
+export type ProviderSourceDestination = 'shared' | 'provider';
+
+export type ProviderSourcePreviewInput = JsonObject & {
+  provider: ManagerProviderId;
+  content: ManagerContentId;
+  name?: string;
+  destination: ProviderSourceDestination;
+  targets?: ManagerProviderId[];
+};
+
+export type ProviderSourceAdoptInput = ProviderSourcePreviewInput & {
+  previewDigest: string;
+  confirmedExecutableRevision?: string;
+};
+
+export type ProviderSourceManagementInput = JsonObject & {
+  provider: ManagerProviderId;
+  content: ManagerContentId;
+};
+export type ProviderSourceStopManagingInput = ProviderSourceManagementInput & { digest: string; confirmed: true };
 
 export type ScopedInput = JsonObject & {
   scope?: ManagerScopeKind;
@@ -299,15 +402,20 @@ export type LibraryRenameInput = ArtifactReferenceInput & { slug: string };
 export type ConfirmedArtifactInput = ArtifactReferenceInput & { confirmed: boolean };
 export type LibraryTargetsInput = ArtifactReferenceInput & { targets: ManagerProviderId[] };
 export type ProviderArtifactInput = ArtifactReferenceInput & { provider: ManagerProviderId };
+export type ProviderApplyUnitInput = JsonObject & {
+  provider: ManagerProviderId;
+  content: ManagerContentId;
+  digest: string;
+};
 export type ProviderApplyInput = JsonObject & {
   batchDigest: string;
-  unitDigests?: Record<string, string>;
-  providers?: ManagerProviderId[];
-  artifacts?: string[];
+  units: ProviderApplyUnitInput[];
   confirmDrift?: boolean;
 };
-export type ProviderRestoreInput = JsonObject & { provider?: ManagerProviderId; confirmed: boolean };
-export type ProviderPurgeBackupsInput = JsonObject & { provider: ManagerProviderId; confirmed: boolean };
+export type ProviderRestorePreviewInput = JsonObject & { provider: ManagerProviderId };
+export type ProviderRestoreInput = ProviderRestorePreviewInput & { digest: string; confirmed: true };
+export type ProviderPurgeBackupsPreviewInput = JsonObject & { provider: ManagerProviderId };
+export type ProviderPurgeBackupsInput = ProviderPurgeBackupsPreviewInput & { digest: string; confirmed: true };
 export type ProjectRootAddInput = JsonObject & { path: string; label?: string };
 export type ProjectRootRemoveInput = JsonObject & { rootId: string; confirmed: boolean };
 export type ProjectScanInput = JsonObject & { rootId?: string; reappearChangedIgnored?: boolean };
@@ -321,19 +429,23 @@ export type PromotionPreviewInput = DiscoveryInput & {
 };
 export type PromoteInput = PromotionPreviewInput & {
   targets?: ManagerProviderId[];
-  confirmExecutables?: boolean;
+  confirmedExecutableRevision?: string;
   destinationArtifact?: string;
   selectedHunks?: string[];
   selectedFiles?: string[];
   serverName?: string;
 };
-export type SkillTrustInput = ArtifactReferenceInput & { confirmed: boolean };
+export type SkillTrustInput = ArtifactReferenceInput & { revision: string; confirmed: boolean };
 export type SecretSetInput = JsonObject & { id: string; value: string };
 export type SecretIdInput = JsonObject & { id: string };
 export type HistoryUndoInput = ArtifactReferenceInput & { revision?: string; confirmed: boolean };
 export type ActivityListInput = JsonObject & { limit?: number };
+export type RecoveryListInput = JsonObject & { limit?: number };
+export type RecoveryReceiptInput = JsonObject & { receiptId: string };
+export type RecoveryRestoreInput = RecoveryReceiptInput & { digest: string; confirmed: true };
 export type SearchInput = JsonObject & { query: string; limit?: number };
 export type SyncConfigureInput = JsonObject & { serverUrl: string };
+export type SyncConflictPreviewInput = JsonObject & { path: string };
 export type SyncResolveInput = JsonObject & { path: string; choice: 'ours' | 'theirs' };
 export type RemoteEnableInput = JsonObject & { endpoint: string };
 export type SessionPairInput = JsonObject & { scope: ManagerSessionScope };
@@ -416,8 +528,16 @@ export interface ManagerRpcInputs {
   'provider.list': JsonObject;
   'provider.effective': ProviderInput;
   'provider.preview': ProviderArtifactInput;
+  'provider.review': ProviderReviewInput;
   'provider.apply': ProviderApplyInput;
+  'provider.source.preview': ProviderSourcePreviewInput;
+  'provider.source.adopt': ProviderSourceAdoptInput;
+  'provider.source.stop-managing.preview': ProviderSourceManagementInput;
+  'provider.source.stop-managing': ProviderSourceStopManagingInput;
+  'provider.source.start-managing': ProviderSourceManagementInput;
+  'provider.restore.preview': ProviderRestorePreviewInput;
   'provider.restore': ProviderRestoreInput;
+  'provider.purge-backups.preview': ProviderPurgeBackupsPreviewInput;
   'provider.purge-backups': ProviderPurgeBackupsInput;
   'project.root.add': ProjectRootAddInput;
   'project.root.remove': ProjectRootRemoveInput;
@@ -435,11 +555,15 @@ export interface ManagerRpcInputs {
   'history.list': ArtifactReferenceInput;
   'history.undo': HistoryUndoInput;
   'activity.list': ActivityListInput;
+  'recovery.list': RecoveryListInput;
+  'recovery.preview': RecoveryReceiptInput;
+  'recovery.restore': RecoveryRestoreInput;
   search: SearchInput;
   'sync.configure': SyncConfigureInput;
   'sync.disable': JsonObject;
   'sync.status': JsonObject;
   'sync.now': JsonObject;
+  'sync.conflict.preview': SyncConflictPreviewInput;
   'sync.resolve': SyncResolveInput;
   'remote.enable': RemoteEnableInput;
   'remote.disable': JsonObject;
@@ -631,15 +755,72 @@ export const operationInputSchemas: Record<ManagerProtocolOperation, JsonObject>
   'provider.list': objectSchema({}),
   'provider.effective': objectSchema({ provider: { enum: providerIds } }, ['provider']),
   'provider.preview': objectSchema({ artifact: { type: 'string' }, provider: { enum: providerIds } }, ['artifact', 'provider']),
+  'provider.review': objectSchema({
+    units: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 18,
+      uniqueItems: true,
+      items: objectSchema({ provider: { enum: providerIds }, content: { enum: contentIds } }, ['provider', 'content']),
+    },
+  }, ['units']),
   'provider.apply': objectSchema({
     batchDigest: { type: 'string' },
-    unitDigests: { type: 'object', additionalProperties: { type: 'string' } },
-    providers: { type: 'array', items: { enum: providerIds } },
-    artifacts: { type: 'array', items: { type: 'string' } },
+    units: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 18,
+      uniqueItems: true,
+      items: objectSchema({
+        provider: { enum: providerIds },
+        content: { enum: contentIds },
+        digest: { type: 'string' },
+      }, ['provider', 'content', 'digest']),
+    },
     confirmDrift: { type: 'boolean' },
-  }, ['batchDigest']),
-  'provider.restore': objectSchema({ provider: { enum: providerIds }, confirmed: { type: 'boolean' } }, ['confirmed']),
-  'provider.purge-backups': objectSchema({ provider: { enum: providerIds }, confirmed: { type: 'boolean' } }, ['provider', 'confirmed']),
+  }, ['batchDigest', 'units']),
+  'provider.source.preview': objectSchema({
+    provider: { enum: providerIds },
+    content: { enum: contentIds },
+    name: { type: 'string' },
+    destination: { enum: ['shared', 'provider'] },
+    targets: { type: 'array', items: { enum: providerIds }, uniqueItems: true },
+  }, ['provider', 'content', 'destination']),
+  'provider.source.adopt': objectSchema({
+    provider: { enum: providerIds },
+    content: { enum: contentIds },
+    name: { type: 'string' },
+    destination: { enum: ['shared', 'provider'] },
+    targets: { type: 'array', items: { enum: providerIds }, uniqueItems: true },
+    previewDigest: { type: 'string' },
+    confirmedExecutableRevision: { type: 'string' },
+  }, ['provider', 'content', 'destination', 'previewDigest']),
+  'provider.source.stop-managing.preview': objectSchema({
+    provider: { enum: providerIds },
+    content: { enum: contentIds },
+  }, ['provider', 'content']),
+  'provider.source.stop-managing': objectSchema({
+    provider: { enum: providerIds },
+    content: { enum: contentIds },
+    digest: { type: 'string' },
+    confirmed: { const: true },
+  }, ['provider', 'content', 'digest', 'confirmed']),
+  'provider.source.start-managing': objectSchema({
+    provider: { enum: providerIds },
+    content: { enum: contentIds },
+  }, ['provider', 'content']),
+  'provider.restore.preview': objectSchema({ provider: { enum: providerIds } }, ['provider']),
+  'provider.restore': objectSchema({
+    provider: { enum: providerIds },
+    digest: { type: 'string' },
+    confirmed: { const: true },
+  }, ['provider', 'digest', 'confirmed']),
+  'provider.purge-backups.preview': objectSchema({ provider: { enum: providerIds } }, ['provider']),
+  'provider.purge-backups': objectSchema({
+    provider: { enum: providerIds },
+    digest: { type: 'string' },
+    confirmed: { const: true },
+  }, ['provider', 'digest', 'confirmed']),
   'project.root.add': objectSchema({ path: { type: 'string' }, label: { type: 'string' } }, ['path']),
   'project.root.remove': objectSchema({ rootId: { type: 'string' }, confirmed: { type: 'boolean' } }, ['rootId', 'confirmed']),
   'project.root.list': objectSchema({}),
@@ -651,25 +832,37 @@ export const operationInputSchemas: Record<ManagerProtocolOperation, JsonObject>
     discoveryId: { type: 'string' },
     mode: { enum: ['global-instruction', 'convert-to-skill', 'disabled-draft'] },
     targets: { type: 'array', items: { enum: providerIds } },
-    confirmExecutables: { type: 'boolean' },
+    confirmedExecutableRevision: { type: 'string' },
     destinationArtifact: { type: 'string' },
     selectedHunks: { type: 'array', items: { type: 'string' } },
     selectedFiles: { type: 'array', items: { type: 'string' } },
     serverName: { type: 'string' },
   }, ['discoveryId']),
   'skill.inspect': objectSchema({ artifact: { type: 'string' } }, ['artifact']),
-  'skill.trust': objectSchema({ artifact: { type: 'string' }, confirmed: { type: 'boolean' } }, ['artifact', 'confirmed']),
+  'skill.trust': objectSchema({
+    artifact: { type: 'string' },
+    revision: { type: 'string' },
+    confirmed: { type: 'boolean' },
+  }, ['artifact', 'revision', 'confirmed']),
   'secret.set': objectSchema({ id: { type: 'string' }, value: { type: 'string' } }, ['id', 'value']),
   'secret.delete': objectSchema({ id: { type: 'string' } }, ['id']),
   'secret.status': objectSchema({ id: { type: 'string' } }, ['id']),
   'history.list': objectSchema({ artifact: { type: 'string' } }, ['artifact']),
   'history.undo': objectSchema({ artifact: { type: 'string' }, revision: { type: 'string' }, confirmed: { type: 'boolean' } }, ['artifact', 'confirmed']),
   'activity.list': objectSchema({ limit: { type: 'integer', minimum: 1, maximum: 1_000 } }),
+  'recovery.list': objectSchema({ limit: { type: 'integer', minimum: 1, maximum: 1_000 } }),
+  'recovery.preview': objectSchema({ receiptId: { type: 'string' } }, ['receiptId']),
+  'recovery.restore': objectSchema({
+    receiptId: { type: 'string' },
+    digest: { type: 'string' },
+    confirmed: { const: true },
+  }, ['receiptId', 'digest', 'confirmed']),
   search: objectSchema({ query: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 1_000 } }, ['query']),
   'sync.configure': objectSchema({ serverUrl: { type: 'string' } }, ['serverUrl']),
   'sync.disable': objectSchema({}),
   'sync.status': objectSchema({}),
   'sync.now': objectSchema({}),
+  'sync.conflict.preview': objectSchema({ path: { type: 'string' } }, ['path']),
   'sync.resolve': objectSchema({ path: { type: 'string' }, choice: { enum: ['ours', 'theirs'] } }, ['path', 'choice']),
   'remote.enable': objectSchema({ endpoint: { type: 'string' } }, ['endpoint']),
   'remote.disable': objectSchema({}),
@@ -1001,22 +1194,41 @@ function isOperationInput(operation: ManagerProtocolOperation, input: JsonObject
     case 'library.rename':
       return exact(input, ['artifact', 'slug']) && typeof input.artifact === 'string' && typeof input.slug === 'string';
     case 'library.delete':
-    case 'skill.trust':
       return exact(input, ['artifact', 'confirmed']) && typeof input.artifact === 'string' && typeof input.confirmed === 'boolean';
+    case 'skill.trust':
+      return exact(input, ['artifact', 'revision', 'confirmed']) && typeof input.artifact === 'string' &&
+        typeof input.revision === 'string' && typeof input.confirmed === 'boolean';
     case 'library.targets':
       return exact(input, ['artifact', 'targets']) && typeof input.artifact === 'string' && isProviderArray(input.targets);
     case 'provider.effective':
       return exact(input, ['provider']) && isProvider(input.provider);
     case 'provider.preview':
       return exact(input, ['artifact', 'provider']) && typeof input.artifact === 'string' && isProvider(input.provider);
+    case 'provider.review':
+      return exact(input, ['units']) && isProviderReviewUnits(input.units);
     case 'provider.apply':
-      return exact(input, ['batchDigest', 'unitDigests', 'providers', 'artifacts', 'confirmDrift']) &&
-        typeof input.batchDigest === 'string' && optionalStringRecord(input.unitDigests) &&
-        optionalProviderArray(input.providers) && optionalStringArray(input.artifacts) && optionalBoolean(input.confirmDrift);
+      return exact(input, ['batchDigest', 'units', 'confirmDrift']) &&
+        typeof input.batchDigest === 'string' && isProviderApplyUnits(input.units) && optionalBoolean(input.confirmDrift);
+    case 'provider.source.preview':
+      return isProviderSourceInput(input, false);
+    case 'provider.source.adopt':
+      return isProviderSourceInput(input, true);
+    case 'provider.source.stop-managing.preview':
+    case 'provider.source.start-managing':
+      return exact(input, ['provider', 'content']) && isProvider(input.provider) && isContent(input.content);
+    case 'provider.source.stop-managing':
+      return exact(input, ['provider', 'content', 'digest', 'confirmed']) && isProvider(input.provider) && isContent(input.content) &&
+        typeof input.digest === 'string' && input.confirmed === true;
+    case 'provider.restore.preview':
+      return exact(input, ['provider']) && isProvider(input.provider);
     case 'provider.restore':
-      return exact(input, ['provider', 'confirmed']) && optionalProvider(input.provider) && typeof input.confirmed === 'boolean';
+      return exact(input, ['provider', 'digest', 'confirmed']) && isProvider(input.provider) &&
+        typeof input.digest === 'string' && input.confirmed === true;
+    case 'provider.purge-backups.preview':
+      return exact(input, ['provider']) && isProvider(input.provider);
     case 'provider.purge-backups':
-      return exact(input, ['provider', 'confirmed']) && isProvider(input.provider) && typeof input.confirmed === 'boolean';
+      return exact(input, ['provider', 'digest', 'confirmed']) && isProvider(input.provider) &&
+        typeof input.digest === 'string' && input.confirmed === true;
     case 'project.root.add':
       return exact(input, ['path', 'label']) && typeof input.path === 'string' && optionalString(input.label);
     case 'project.root.remove':
@@ -1034,13 +1246,13 @@ function isOperationInput(operation: ManagerProtocolOperation, input: JsonObject
         'discoveryId',
         'mode',
         'targets',
-        'confirmExecutables',
+        'confirmedExecutableRevision',
         'destinationArtifact',
         'selectedHunks',
         'selectedFiles',
         'serverName',
       ]) && typeof input.discoveryId === 'string' && optionalPromotionMode(input.mode) &&
-        optionalProviderArray(input.targets) && optionalBoolean(input.confirmExecutables) &&
+        optionalProviderArray(input.targets) && optionalString(input.confirmedExecutableRevision) &&
         optionalString(input.destinationArtifact) && optionalStringArray(input.selectedHunks) &&
         optionalStringArray(input.selectedFiles) && optionalString(input.serverName);
     case 'secret.set':
@@ -1053,10 +1265,19 @@ function isOperationInput(operation: ManagerProtocolOperation, input: JsonObject
         optionalString(input.revision) && typeof input.confirmed === 'boolean';
     case 'activity.list':
       return exact(input, ['limit']) && optionalBoundedLimit(input.limit);
+    case 'recovery.list':
+      return exact(input, ['limit']) && optionalBoundedLimit(input.limit);
+    case 'recovery.preview':
+      return exact(input, ['receiptId']) && typeof input.receiptId === 'string';
+    case 'recovery.restore':
+      return exact(input, ['receiptId', 'digest', 'confirmed']) && typeof input.receiptId === 'string' &&
+        typeof input.digest === 'string' && input.confirmed === true;
     case 'search':
       return exact(input, ['query', 'limit']) && typeof input.query === 'string' && optionalBoundedLimit(input.limit);
     case 'sync.configure':
       return exact(input, ['serverUrl']) && typeof input.serverUrl === 'string';
+    case 'sync.conflict.preview':
+      return exact(input, ['path']) && typeof input.path === 'string';
     case 'sync.resolve':
       return exact(input, ['path', 'choice']) && typeof input.path === 'string' &&
         (input.choice === 'ours' || input.choice === 'theirs');
@@ -1112,6 +1333,43 @@ function isProviderArray(value: unknown): value is ManagerProviderId[] {
   return Array.isArray(value) && value.every(isProvider);
 }
 
+function isProviderApplyUnits(value: unknown): value is ProviderApplyUnitInput[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 18) return false;
+  const keys = new Set<string>();
+  for (const unit of value) {
+    if (!isRecord(unit) || !hasOnlyKeys(unit, ['provider', 'content', 'digest']) ||
+      !isProvider(unit.provider) || !isContent(unit.content) || typeof unit.digest !== 'string') return false;
+    const key = `${unit.provider}:${unit.content}`;
+    if (keys.has(key)) return false;
+    keys.add(key);
+  }
+  return true;
+}
+
+function isProviderReviewUnits(value: unknown): value is ProviderReviewInput['units'] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 18) return false;
+  const keys = new Set<string>();
+  for (const unit of value) {
+    if (!isRecord(unit) || !hasOnlyKeys(unit, ['provider', 'content']) || !isProvider(unit.provider) || !isContent(unit.content)) return false;
+    const key = `${unit.provider}:${unit.content}`;
+    if (keys.has(key)) return false;
+    keys.add(key);
+  }
+  return true;
+}
+
+function isProviderSourceInput(input: JsonObject, adopting: boolean): boolean {
+  const keys = adopting
+    ? ['provider', 'content', 'name', 'destination', 'targets', 'previewDigest', 'confirmedExecutableRevision']
+    : ['provider', 'content', 'name', 'destination', 'targets'];
+  if (!exact(input, keys) || !isProvider(input.provider) || !isContent(input.content)) return false;
+  if (input.destination !== 'shared' && input.destination !== 'provider') return false;
+  if (!optionalString(input.name) || !optionalProviderArray(input.targets)) return false;
+  if (input.content !== 'rules' && (typeof input.name !== 'string' || input.name.length === 0)) return false;
+  if (input.destination === 'provider' && input.targets !== undefined) return false;
+  return !adopting || (typeof input.previewDigest === 'string' && optionalString(input.confirmedExecutableRevision));
+}
+
 function isArtifactReference(input: JsonObject): boolean {
   return exact(input, ['artifact']) && typeof input.artifact === 'string';
 }
@@ -1145,10 +1403,6 @@ function optionalPromotionMode(value: unknown): boolean {
 
 function optionalStringArray(value: unknown): boolean {
   return value === undefined || (Array.isArray(value) && value.every((item) => typeof item === 'string'));
-}
-
-function optionalStringRecord(value: unknown): boolean {
-  return value === undefined || (isRecord(value) && Object.values(value).every((item) => typeof item === 'string'));
 }
 
 function optionalBoundedLimit(value: unknown): boolean {

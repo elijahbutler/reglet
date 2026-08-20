@@ -5,6 +5,9 @@ Baseline: `origin/main` at or after `7bf1c0f`
 Supersedes: PR #61 and commit `f62de4d`  
 Archive: `archive/pr-61-manager-runtime-foundation`
 
+Current execution status and acceptance criteria are tracked in the
+[Reglet overhaul audit and delivery plan](./reglet-overhaul-plan.md).
+
 ## Decision
 
 Reglet has one canonical manager application layer, one versioned protocol, one

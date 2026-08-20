@@ -1,4 +1,5 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   addLibraryArtifact,
@@ -16,15 +17,20 @@ import {
   createSkill,
   defaultLibraryManifest,
   deriveProjectionStatus,
+  detectDrift,
+  detachReviewedManagedContent,
   disconnectSyncV2,
   duplicateLibraryArtifact,
   getAdapter,
   hasValidSkillFrontmatter,
   inspectSkill,
+  inspectSyncV2Conflict,
   isTrustDecisionCurrent,
   libraryMigrationStatus,
+  listOperationReceipts,
   loadDraft,
   loadLibraryManifest,
+  loadManifest as loadProjectionManifest,
   loadMasterDir,
   loadSyncV2State,
   loadConfig,
@@ -35,15 +41,22 @@ import {
   mergeSkillFilesSafely,
   parseProjectMcpServers,
   previewLibraryMigration,
+  previewDetachManagedContent,
+  previewOperationReceiptRestore,
+  previewPurgeProviderBackups,
+  previewProviderRestore,
   previewProjectionBatch,
-  purgeProviderBackups,
+  purgeReviewedProviderBackups,
   providerMcpScope,
   readArtifactText,
+  redactMcpCredentialArguments,
+  readProviderMcpServers,
   recommendInstructionPromotion,
   regletHome,
   renameLibraryArtifact,
   restoreArtifactRevision,
-  restore,
+  restoreReviewedProvider,
+  restoreReviewedOperationReceipt,
   resolveSyncV2Conflict,
   rollbackLibraryMigration,
   requestSyncV2Pairing,
@@ -59,6 +72,7 @@ import {
   sharedMcpScope,
   systemSecretStore,
   startSyncV2BootstrapConnection,
+  stripGeneratedHeader,
   syncOnceV2,
   updateMcpSyncProviders,
   updateSkillSyncProviders,
@@ -71,22 +85,47 @@ import {
   type ArtifactDraft,
   type ArtifactKind,
   type LibraryArtifactMetadata,
+  type LibraryMigrationPreview,
+  type LibraryMigrationStatus,
+  type ManifestOutput,
   type McpServerDef,
+  type DetachManagedContentPreview,
+  type OperationReceipt,
+  type OperationRestorePreview,
+  type ProjectionBatchApplyResult,
   type ProjectionBatchPreview,
   type ProjectionUnitPreview,
+  type ProviderRestorePreview,
   type ProviderId,
+  type ProviderInventory,
   type SecretRef,
   type SecretStore,
+  type SkillInspection,
 } from '@reglet/core';
 import {
+  isManagerMutatingOperation,
   type ManagerArtifactV3,
   type ManagerArtifactProjectionV3,
   type ManagerMigrationStateV3,
   type ManagerProjectInboxV3,
+  type ManagerProviderBackupPurgeResultV3,
+  type ManagerProviderBackupPurgeReviewV3,
+  type ManagerProviderDetachResultV3,
+  type ManagerProviderDetachReviewV3,
+  type ManagerProviderRestoreResultV3,
+  type ManagerProviderRestoreReviewV3,
+  type ManagerProjectionReviewV3,
+  type ManagerProjectionIssueV3,
+  type ManagerProviderSourceV3,
+  type ManagerRecoveryReceiptV3,
+  type ManagerRecoveryReviewV3,
+  type ManagerRecoveryRestoreResultV3,
   type ManagerProtocolOperation,
   type ManagerRpcInputs,
   type ManagerSessionScope,
   type ManagerSnapshotV3,
+  type SyncPendingConnection,
+  type SyncSnapshot,
 } from '@reglet/manager-protocol';
 
 export type ApplicationCommand = {
@@ -175,7 +214,7 @@ export class RegletApplication {
     scope: ManagerSessionScope,
   ): Promise<ApplicationCommandResult> {
     const state = await LocalState.open(this.home);
-    const mutating = mutatingOperations.has(command.operation);
+    const mutating = isManagerMutatingOperation(command.operation);
     try {
       const observedRevision = state.commandRevision();
       if (options.expectedRevision !== undefined && options.expectedRevision !== observedRevision) {
@@ -189,7 +228,11 @@ export class RegletApplication {
         ? state.advanceCommandRevision(observedRevision)
         : observedRevision;
       if (mutating) {
-        state.recordActivity({ action: command.operation, outcome: activityOutcome(data) });
+        state.recordActivity({
+          action: command.operation,
+          outcome: activityOutcome(data),
+          ...activityContext(command, data),
+        });
       }
       return { revision, changed: mutating, data };
     } finally {
@@ -273,46 +316,127 @@ async function executeCommand(
     }
     case 'provider.preview': {
       const artifact = await resolveArtifact(command.input.artifact, home);
-      const trustIssues = await skillTrustUnitIssues(home, state, [command.input.provider]);
+      const content = contentForKind(artifact.kind);
+      const unitIssues = await projectionUnitIssues(home, state, [command.input.provider]);
       const batch = await previewProjectionBatch({
-        providers: [command.input.provider],
-        contents: [contentForKind(artifact.kind)],
+        unitSelections: [{ provider: command.input.provider, content }],
         home,
-        unitIssues: trustIssues,
+        unitIssues,
       });
+      const unit = batch.units[0];
+      if (unit === undefined) throw new Error('Projection preview did not produce the requested unit.');
+      const manifest = await loadLibraryManifest(home);
+      const review = managerProjectionReview(batch, manifest.artifacts);
+      const reviewUnit = review.units[0];
+      if (reviewUnit === undefined) throw new Error('Projection review did not produce the requested unit.');
       return {
-        artifact,
+        version: 1,
+        artifactId: artifact.id,
         provider: command.input.provider,
-        batchDigest: batch.digest,
-        unitDigests: Object.fromEntries(batch.units.map((unit) => [unit.key, unit.digest])),
-        batch,
-        entry: entryForArtifact(batch.units[0], artifact),
+        content,
+        batchDigest: review.digest,
+        unitDigest: unit.digest,
+        review,
+        affectedArtifacts: reviewUnit.artifacts,
       };
     }
+    case 'provider.review': {
+      const providers = [...new Set(command.input.units.map((unit) => unit.provider))];
+      const unitIssues = await projectionUnitIssues(home, state, providers);
+      const batch = await previewProjectionBatch({
+        unitSelections: command.input.units,
+        home,
+        unitIssues,
+      });
+      const manifest = await loadLibraryManifest(home);
+      return managerProjectionReview(batch, manifest.artifacts);
+    }
     case 'provider.apply': {
-      const artifacts = await Promise.all((command.input.artifacts ?? []).map((reference) => resolveArtifact(reference, home)));
-      const contents = artifacts.length === 0
-        ? undefined
-        : [...new Set(artifacts.map((artifact) => contentForKind(artifact.kind)))];
-      const trustIssues = await skillTrustUnitIssues(home, state, command.input.providers);
+      const unitSelections = command.input.units.map(({ provider, content }) => ({ provider, content }));
+      const providers = [...new Set(unitSelections.map((unit) => unit.provider))];
+      const unitIssues = await projectionUnitIssues(home, state, providers);
       const result = await applyProjectionBatch({
         home,
-        providers: command.input.providers,
-        contents,
+        unitSelections,
         batchDigest: command.input.batchDigest,
-        unitDigests: command.input.unitDigests,
+        unitDigests: Object.fromEntries(command.input.units.map((unit) => [
+          `${unit.provider}:${unit.content}`,
+          unit.digest,
+        ])),
         confirmDrift: command.input.confirmDrift,
-        unitIssues: trustIssues,
+        unitIssues,
       });
       await recordAppliedProjections(result.preview, result.units, home, state);
-      return result;
+      return managerProjectionApplyResult(result);
     }
-    case 'provider.restore':
+    case 'provider.source.preview':
+      return previewProviderSource(command.input, home);
+    case 'provider.source.adopt':
+      return adoptProviderSource(command.input, home, state);
+    case 'provider.source.stop-managing.preview':
+      return managerProviderDetachReview(
+        await previewDetachManagedContent(command.input.provider, command.input.content, home),
+      );
+    case 'provider.source.stop-managing': {
+      if (!command.input.confirmed) throw new Error('Stopping provider management requires explicit confirmation.');
+      const config = await loadConfig(home);
+      const previous = config.providers[command.input.provider][command.input.content];
+      config.providers[command.input.provider][command.input.content] = false;
+      await saveConfig(config, home);
+      try {
+        const detached = await detachReviewedManagedContent(
+          command.input.provider,
+          command.input.content,
+          command.input.digest,
+          home,
+        );
+        return {
+          version: 1,
+          provider: command.input.provider,
+          content: command.input.content,
+          detached: detached.detached.map(({ outputPath, headerRemoved }) => ({ path: outputPath, headerRemoved })),
+          receiptId: detached.receipt.id,
+        } satisfies ManagerProviderDetachResultV3;
+      } catch (error) {
+        config.providers[command.input.provider][command.input.content] = previous;
+        await saveConfig(config, home);
+        throw error;
+      }
+    }
+    case 'provider.source.start-managing': {
+      const config = await loadConfig(home);
+      const alreadyManaging = config.providers[command.input.provider].enabled &&
+        config.providers[command.input.provider][command.input.content];
+      config.providers[command.input.provider].enabled = true;
+      config.providers[command.input.provider][command.input.content] = true;
+      await saveConfig(config, home);
+      return {
+        provider: command.input.provider,
+        content: command.input.content,
+        managing: true,
+        alreadyManaging,
+        nextAction: 'review-and-apply',
+      };
+    }
+    case 'provider.restore.preview':
+      return managerProviderRestoreReview(await previewProviderRestore(command.input.provider, home));
+    case 'provider.restore': {
       if (!command.input.confirmed) throw new Error('Provider restore requires explicit confirmation.');
-      return restore(command.input.provider, home);
-    case 'provider.purge-backups':
+      const result = await restoreReviewedProvider(command.input.provider, command.input.digest, home);
+      return {
+        version: 1,
+        provider: command.input.provider,
+        receiptId: result.receipt.id,
+        results: result.results.map(({ outputPath, action }) => ({ path: outputPath, action })),
+      } satisfies ManagerProviderRestoreResultV3;
+    }
+    case 'provider.purge-backups.preview':
+      return await previewPurgeProviderBackups(command.input.provider, home) satisfies ManagerProviderBackupPurgeReviewV3;
+    case 'provider.purge-backups': {
       if (!command.input.confirmed) throw new Error('Backup purge requires explicit confirmation.');
-      return purgeProviderBackups(command.input.provider, home);
+      const result = await purgeReviewedProviderBackups(command.input.provider, command.input.digest, home);
+      return { version: 1, ...result } satisfies ManagerProviderBackupPurgeResultV3;
+    }
     case 'project.root.add':
       return state.addProjectRoot(command.input.path, command.input.label);
     case 'project.root.remove':
@@ -337,12 +461,15 @@ async function executeCommand(
     case 'project.promote':
       return promoteDiscovery(command.input, home, state);
     case 'skill.inspect':
-      return inspectCanonicalSkill(command.input.artifact, home);
+      return managerSkillInspection(command.input.artifact, home, state);
     case 'skill.trust': {
       if (!command.input.confirmed) throw new Error('Skill trust requires explicit confirmation.');
       const artifact = await resolveArtifact(command.input.artifact, home);
       const inspection = await inspectCanonicalSkill(artifact.id, home);
       if (inspection.promotionBlocked) throw new Error('Blocked skill cannot be trusted.');
+      if (inspection.revision !== command.input.revision) {
+        throw new Error('This skill changed after it was reviewed. Reload the executable files and approve the new revision.');
+      }
       const executableFiles = inspection.files.filter((file) => file.executable).map((file) => file.relPath);
       state.saveTrustDecision({ artifactId: artifact.id, revision: inspection.revision, trustedAt: new Date().toISOString(), executableFiles });
       return { trusted: true, revision: inspection.revision, executableFiles };
@@ -364,6 +491,22 @@ async function executeCommand(
     }
     case 'activity.list':
       return state.listActivity(command.input.limit);
+    case 'recovery.list':
+      return (await listOperationReceipts(home))
+        .slice(0, command.input.limit ?? 50)
+        .map(managerRecoveryReceipt);
+    case 'recovery.preview':
+      return managerRecoveryReview(await previewOperationReceiptRestore(command.input.receiptId, home));
+    case 'recovery.restore': {
+      if (!command.input.confirmed) throw new Error('Recovery restore requires explicit confirmation.');
+      const result = await restoreReviewedOperationReceipt(command.input.receiptId, command.input.digest, home);
+      return {
+        version: 1,
+        receiptId: command.input.receiptId,
+        undoReceiptId: result.receipt.id,
+        actions: result.actions,
+      } satisfies ManagerRecoveryRestoreResultV3;
+    }
     case 'search':
       return state.search(command.input.query, command.input.limit, scope === 'admin' ? undefined : 'canonical');
     case 'remote.enable':
@@ -428,25 +571,35 @@ async function executeCommand(
       return encryptedSyncStatus(home);
     case 'sync.configure':
       assertHttpsUrl(command.input.serverUrl, 'Sync');
-      state.setSetting('sync.enabled', 'true');
-      state.setSetting('sync.serverUrl', command.input.serverUrl);
-      return encryptedSyncStatus(home);
+      throw new Error(
+        'A server URL alone cannot establish encrypted sync. Start a new encrypted vault or connect this device with an invitation.',
+      );
     case 'sync.now':
       return syncOnceV2({ home });
+    case 'sync.conflict.preview':
+      return inspectSyncV2Conflict(command.input.path, home);
     case 'sync.resolve':
       return resolveSyncV2Conflict(command.input.path, command.input.choice, home);
     case 'diagnostics':
-      return diagnostics(home, state);
+      return diagnostics(home, state, secretStore);
     case 'external.open':
     case 'external.reveal':
       return { delegated: true, target: command.input.target };
     case 'migration.preview':
-      return previewLibraryMigration(home);
+      return publicMigrationPreview(await previewLibraryMigration(home));
     case 'migration.apply': {
       const receipt = await applyLibraryMigration({ ...command.input, home });
       try {
         await indexCanonicalLibrary(home, state);
-        return receipt;
+        return {
+          version: receipt.version,
+          id: receipt.id,
+          migration: receipt.migration,
+          digest: receipt.digest,
+          appliedAt: receipt.appliedAt,
+          artifactCount: receipt.artifactCount,
+          reversible: receipt.reversible,
+        };
       } catch (error) {
         await rollbackLibraryMigration(receipt, home);
         await indexCanonicalLibrary(home, state);
@@ -454,7 +607,7 @@ async function executeCommand(
       }
     }
     case 'migration.status':
-      return libraryMigrationStatus(home);
+      return publicMigrationStatus(await libraryMigrationStatus(home));
     case 'setup.complete':
       return completeSetup(command.input, home, state);
     default:
@@ -468,11 +621,13 @@ async function managerSnapshot(
   scope: ManagerSessionScope,
   secretStore: SecretStore,
 ): Promise<ManagerSnapshotV3> {
-  const [manifest, migration, providers, batch, bindings] = await Promise.all([
+  const unitIssues = await projectionUnitIssues(home, state);
+  const [manifest, projectionManifest, migration, providers, batch, bindings] = await Promise.all([
     loadLibraryManifest(home),
+    loadProjectionManifest(home),
     migrationSnapshot(home),
     providerList(),
-    previewProjectionBatch({ home }),
+    previewProjectionBatch({ home, unitIssues }),
     secretBindings(home, secretStore),
   ]);
   const records = new Map(state.listProjectionRecords().map((record) => [`${record.artifactId}:${record.provider}`, record]));
@@ -483,6 +638,7 @@ async function managerSnapshot(
       adapter.id,
       batch,
       records.get(`${artifact.id}:${adapter.id}`),
+      projectionManifest.outputs,
     ));
     return {
       metadata: artifact,
@@ -501,7 +657,7 @@ async function managerSnapshot(
     ...(record.artifactId === undefined ? {} : { artifactId: record.artifactId }),
     ...(isProviderId(record.provider) ? { provider: record.provider } : {}),
   }));
-  const diagnosticState = await diagnostics(home, state);
+  const diagnosticState = await diagnostics(home, state, secretStore, providers);
   return {
     version: 3,
     contract: 'manager-snapshot',
@@ -519,8 +675,9 @@ async function managerSnapshot(
         drafts: artifacts.filter((artifact) => artifact.draft !== undefined).length,
       },
     },
-    providers: providers.map((provider) => ({
+    providers: providers.map(({ inventory, sourceContext, ...provider }) => ({
       ...provider,
+      sources: providerSources(provider.id, inventory, projectionManifest.outputs, sourceContext),
       projections: artifacts.flatMap((artifact) => artifact.projections.filter((projection) => projection.provider === provider.id)),
     })),
     ...(projectInbox === undefined ? {} : { projectInbox }),
@@ -607,6 +764,299 @@ const defaultGlobalInstruction = `# Global agent defaults
 - Preserve user work and explain consequential changes.
 - Prefer clear, verifiable results over hidden automation.
 `;
+
+interface ProviderSourceAdoptionPreview {
+  version: 1;
+  digest: string;
+  provider: ProviderId;
+  content: ApplyContent;
+  source: {
+    path: string;
+    name?: string;
+    revision: string;
+    ownership: 'unmanaged' | 'managed' | 'unknown';
+  };
+  artifact: {
+    kind: ArtifactKind;
+    slug: string;
+    title: string;
+    scope: LibraryArtifactMetadata['scope'];
+    targets: ProviderId[];
+    locator: LibraryArtifactMetadata['locator'];
+  };
+  contentText?: string;
+  skillInspection?: SkillInspection;
+  issues: ManagerProjectionIssueV3[];
+  blocked: boolean;
+}
+
+async function previewProviderSource(
+  input: ManagerRpcInputs['provider.source.preview'],
+  home: string,
+): Promise<ProviderSourceAdoptionPreview> {
+  await assertLibraryReady(home);
+  const adapter = getAdapter(input.provider);
+  const inventory = await adapter.inventory();
+  const projectionManifest = await loadProjectionManifest(home);
+  const source = providerSources(input.provider, inventory, projectionManifest.outputs, await providerSpecificSourceContext(adapter))
+    .find((candidate) => candidate.content === input.content);
+  if (source === undefined || source.path === null || !source.exists) {
+    throw new Error(`${adapter.displayName} has no ${input.content} source to adopt.`);
+  }
+  if (input.content === 'rules' && input.name === undefined && source.items.length > 1) {
+    throw new Error(`${adapter.displayName} has multiple instruction sources. Select the exact file to adopt.`);
+  }
+  const item = input.name === undefined
+    ? source.items[0]
+    : source.items.find((candidate) => candidate.label === input.name);
+  if (item === undefined) {
+    throw new Error(`${adapter.displayName} ${input.content} source is unavailable: ${input.name ?? 'instructions'}`);
+  }
+
+  const sourcePath = input.content === 'skills'
+    ? path.join(source.path, item.label)
+    : input.content === 'rules' && item.label !== path.basename(source.path)
+      ? path.join(path.dirname(source.path), item.label)
+      : source.path;
+  const scope: LibraryArtifactMetadata['scope'] = input.destination === 'provider'
+    ? { kind: 'provider-overlay', provider: input.provider }
+    : { kind: 'global' };
+  const targets = scope.kind === 'provider-overlay'
+    ? [input.provider]
+    : [...new Set(input.targets ?? [input.provider])];
+  const kind = kindForContent(input.content);
+  const initialSlug = input.content === 'rules'
+    ? `${input.provider}-instructions`
+    : normalizeSlug(item.label);
+  const slug = await availableAdoptionSlug(initialSlug, kind, scope, home);
+  const artifact = {
+    kind,
+    slug,
+    title: input.content === 'rules' ? `${adapter.displayName} instructions` : titleFromSlug(slug),
+    scope,
+    targets,
+    locator: artifactLocator(kind, slug, scope),
+  };
+  const issues: ManagerProjectionIssueV3[] = [];
+  if (item.ownership !== 'unmanaged') {
+    issues.push({
+      code: item.ownership === 'managed' ? 'provider-source-already-managed' : 'provider-source-ownership-unknown',
+      severity: 'error',
+      message: item.ownership === 'managed'
+        ? 'This provider source is already managed by Reglet.'
+        : 'Reglet cannot prove whether this provider source is managed. Detach or repair its ownership record before adopting it.',
+    });
+  }
+
+  let contentText: string | undefined;
+  let skillInspection: SkillInspection | undefined;
+  let sourceRevision: string;
+  if (input.content === 'rules') {
+    contentText = stripGeneratedHeader(await readFile(sourcePath, 'utf8'), input.provider);
+    sourceRevision = textDigest(contentText);
+    issues.push(...validationIssuesForAdoption(artifact, contentText));
+  } else if (input.content === 'skills') {
+    skillInspection = await inspectSkill(sourcePath);
+    sourceRevision = skillInspection.revision;
+    issues.push(...skillInspection.risks.map((risk) => ({
+      code: `skill-${risk.code}`,
+      severity: risk.severity,
+      message: `${risk.relPath}: ${risk.message}`,
+    })));
+    try {
+      contentText = await readFile(path.join(sourcePath, 'SKILL.md'), 'utf8');
+      issues.push(...validationIssuesForAdoption(artifact, contentText));
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+      issues.push({ code: 'skill-manifest-missing', severity: 'error', message: 'The provider skill has no SKILL.md file.' });
+    }
+  } else {
+    const providerDefinition = (await readProviderMcpServers(input.provider, sourcePath))[item.label];
+    if (providerDefinition === undefined) throw new Error(`Provider MCP server is unavailable: ${item.label}`);
+    const sanitized = sanitizeProviderMcpDefinition(providerDefinition);
+    contentText = `${JSON.stringify(sanitized.definition, null, 2)}\n`;
+    sourceRevision = textDigest(JSON.stringify(providerDefinition));
+    issues.push(...sanitized.issues);
+    issues.push(...validationIssuesForAdoption(artifact, contentText));
+  }
+
+  const digest = objectDigest({
+    provider: input.provider,
+    content: input.content,
+    sourcePath,
+    sourceName: input.name,
+    sourceRevision,
+    artifact,
+  });
+  return {
+    version: 1,
+    digest,
+    provider: input.provider,
+    content: input.content,
+    source: {
+      path: sourcePath,
+      ...(input.content === 'rules' ? {} : { name: item.label }),
+      revision: sourceRevision,
+      ownership: item.ownership,
+    },
+    artifact,
+    ...(contentText === undefined ? {} : { contentText }),
+    ...(skillInspection === undefined ? {} : { skillInspection }),
+    issues,
+    blocked: issues.some((issue) => issue.severity === 'error'),
+  };
+}
+
+async function adoptProviderSource(
+  input: ManagerRpcInputs['provider.source.adopt'],
+  home: string,
+  state: LocalState,
+): Promise<{ artifact: LibraryArtifactMetadata; previewDigest: string; sourcePath: string }> {
+  const preview = await previewProviderSource(input, home);
+  if (preview.digest !== input.previewDigest) {
+    throw new Error('Provider source changed after preview. Review it again before adopting.');
+  }
+  if (preview.blocked) {
+    throw new Error(preview.issues.filter((issue) => issue.severity === 'error').map((issue) => issue.message).join('; '));
+  }
+  if (
+    preview.skillInspection?.requiresExecutableConfirmation === true &&
+    input.confirmedExecutableRevision !== preview.skillInspection.revision
+  ) {
+    throw new Error('Executable skill files require confirmation for the exact inspected revision.');
+  }
+
+  let artifact: LibraryArtifactMetadata;
+  if (preview.content === 'skills') {
+    const destinationPath = path.join(home, ...preview.artifact.locator.path.split('/'));
+    if (await pathExists(destinationPath)) throw new Error('Adoption destination now exists. Preview the provider source again.');
+    artifact = createArtifactMetadata(preview.artifact);
+    try {
+      await copySkillSafely(preview.source.path, destinationPath);
+      await addLibraryArtifact(artifact, home);
+    } catch (error) {
+      await rm(destinationPath, { recursive: true, force: true });
+      throw error;
+    }
+    if (artifact.scope.kind === 'global') await updateSkillSyncProviders(artifact.slug, artifact.targets, home);
+    if (preview.skillInspection?.requiresExecutableConfirmation === true) {
+      saveTrustDecision(state, artifact.id, preview.skillInspection);
+    }
+  } else {
+    if (preview.contentText === undefined) throw new Error('Provider source preview has no adoptable content.');
+    if (await locatorOccupied(preview.artifact.locator, home)) {
+      throw new Error('Adoption destination now exists. Preview the provider source again.');
+    }
+    artifact = await createCanonicalArtifact({
+      kind: preview.artifact.kind,
+      slug: preview.artifact.slug,
+      title: preview.artifact.title,
+      content: preview.contentText,
+      targets: preview.artifact.targets,
+      scope: preview.artifact.scope,
+    }, home);
+  }
+  return { artifact, previewDigest: preview.digest, sourcePath: preview.source.path };
+}
+
+function validationIssuesForAdoption(
+  artifact: ProviderSourceAdoptionPreview['artifact'],
+  content: string,
+): ManagerProjectionIssueV3[] {
+  const metadata = createArtifactMetadata(artifact);
+  return validateArtifactContent(metadata, content).map((issue) => ({
+    code: issue.code,
+    severity: 'error',
+    message: issue.message,
+  }));
+}
+
+function sanitizeProviderMcpDefinition(value: unknown): {
+  definition: Record<string, unknown>;
+  issues: ManagerProjectionIssueV3[];
+} {
+  if (!isRecord(value)) return { definition: {}, issues: [] };
+  const definition: Record<string, unknown> = {};
+  for (const key of ['command', 'url'] as const) {
+    if (value[key] !== undefined) definition[key] = value[key];
+  }
+  const issues: ManagerProjectionIssueV3[] = [];
+  if (Array.isArray(value.args) && value.args.every((argument) => typeof argument === 'string')) {
+    const args = redactMcpCredentialArguments(value.args);
+    definition.args = args.args;
+    if (args.redacted) {
+      issues.push({
+        code: 'mcp-credential-argument-redacted',
+        severity: 'error',
+        message: 'Credential-like command arguments were not imported. Move the value to a process environment or keychain reference, then review this source again.',
+      });
+    }
+  } else if (value.args !== undefined) {
+    definition.args = value.args;
+  }
+  if (isRecord(value.env)) {
+    const env: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value.env)) {
+      if (typeof entry === 'string') {
+        env[key] = { source: 'process-env', name: key, required: true };
+        issues.push({
+          code: 'mcp-environment-value-redacted',
+          severity: 'warning',
+          message: `${key} was converted to a required process environment reference. Its provider value was not imported.`,
+        });
+      } else {
+        env[key] = entry;
+      }
+    }
+    definition.env = env;
+  }
+  return { definition, issues };
+}
+
+async function availableAdoptionSlug(
+  initial: string,
+  kind: ArtifactKind,
+  scope: LibraryArtifactMetadata['scope'],
+  home: string,
+): Promise<string> {
+  const manifest = await loadLibraryManifest(home);
+  let suffix = 1;
+  while (true) {
+    const candidate = suffix === 1 ? initial : `${initial}-${suffix}`;
+    const used = manifest.artifacts.some((artifact) =>
+      artifact.kind === kind && artifact.slug === candidate && sameArtifactScope(artifact.scope, scope));
+    if (!used && !(await locatorOccupied(artifactLocator(kind, candidate, scope), home))) return candidate;
+    suffix += 1;
+  }
+}
+
+async function locatorOccupied(locator: LibraryArtifactMetadata['locator'], home: string): Promise<boolean> {
+  const filePath = path.join(home, ...locator.path.split('/'));
+  if (locator.type !== 'mcp-server') return pathExists(filePath);
+  try {
+    const parsed = JSON.parse(await readFile(filePath, 'utf8')) as unknown;
+    return isRecord(parsed) && isRecord(parsed.mcpServers) && locator.serverName in parsed.mcpServers;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+function sameArtifactScope(
+  left: LibraryArtifactMetadata['scope'],
+  right: LibraryArtifactMetadata['scope'],
+): boolean {
+  return left.kind === right.kind &&
+    (left.kind === 'global' || (right.kind === 'provider-overlay' && left.provider === right.provider));
+}
+
+function textDigest(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function objectDigest(value: unknown): string {
+  return textDigest(JSON.stringify(value));
+}
 
 async function createCanonicalArtifact(
   input: ManagerRpcInputs['library.create'],
@@ -715,24 +1165,224 @@ async function resolveArtifactIdIncludingDeleted(reference: string, home: string
     reference;
 }
 
+interface ProviderSourceContext {
+  commonIssues: ManagerProjectionIssueV3[];
+  contentIssues: Partial<Record<ApplyContent, ManagerProjectionIssueV3[]>>;
+  extraItems: Partial<Record<ApplyContent, ManagerProviderSourceV3['items']>>;
+}
+
+function emptyProviderSourceContext(): ProviderSourceContext {
+  return { commonIssues: [], contentIssues: {}, extraItems: {} };
+}
+
+async function providerSpecificSourceContext(
+  adapter: ReturnType<typeof getAdapter>,
+  context = emptyProviderSourceContext(),
+): Promise<ProviderSourceContext> {
+  if (adapter.id !== 'codex') return context;
+  const rulesPath = adapter.rulesPath();
+  const overridePath = rulesPath === null ? null : path.join(path.dirname(rulesPath), 'AGENTS.override.md');
+  if (overridePath === null || !(await fileExists(overridePath))) return context;
+  context.contentIssues.rules = [{
+    code: 'codex-global-override-active',
+    severity: 'error',
+    message: 'AGENTS.override.md shadows the managed Codex AGENTS.md file. Reglet will not apply Codex instructions until you adopt, move, or remove the override.',
+  }];
+  context.extraItems.rules = [{
+    id: providerSourceItemId('codex', 'rules', 'AGENTS.override.md'),
+    label: 'AGENTS.override.md',
+    ownership: 'unmanaged',
+  }];
+  return context;
+}
+
 async function providerList() {
-  return Promise.all(allAdapters().map(async (adapter) => ({
-    id: adapter.id,
-    displayName: adapter.displayName,
-    detected: await adapter.detect(),
-    documentationUrl: adapter.documentationUrl,
-    lastVerifiedAt: adapter.lastVerifiedAt,
-    schemaVersion: adapter.schemaVersion,
-    capabilities: {
-      instructions: capability(adapter.rulesPath() !== null, adapter, 'instruction'),
-      skills: capability(adapter.skillsDir() !== null, adapter, 'skill'),
-      mcp: capability(adapter.mcpPath() !== null, adapter, 'mcp'),
-    },
-  })));
+  return Promise.all(allAdapters().map(async (adapter) => {
+    let detected = false;
+    const sourceContext = emptyProviderSourceContext();
+    try {
+      detected = await adapter.detect();
+    } catch {
+      sourceContext.commonIssues.push({
+        code: 'provider-detection-failed',
+        severity: 'warning',
+        message: `Reglet could not determine whether ${adapter.displayName} is installed.`,
+      });
+    }
+    let inventory: ProviderInventory;
+    try {
+      inventory = await adapter.inventory();
+    } catch {
+      inventory = await fallbackProviderInventory(adapter);
+      sourceContext.commonIssues.push({
+        code: 'provider-inventory-failed',
+        severity: 'error',
+        message: `Reglet could not read part of the ${adapter.displayName} configuration.`,
+      });
+    }
+    await providerSpecificSourceContext(adapter, sourceContext);
+    return {
+      id: adapter.id,
+      displayName: adapter.displayName,
+      detected,
+      documentationUrl: adapter.documentationUrl,
+      lastVerifiedAt: adapter.lastVerifiedAt,
+      schemaVersion: adapter.schemaVersion,
+      capabilities: {
+        instructions: capability(adapter.rulesPath() !== null, adapter, 'instruction'),
+        skills: capability(adapter.skillsDir() !== null, adapter, 'skill'),
+        mcp: capability(adapter.mcpPath() !== null, adapter, 'mcp'),
+      },
+      inventory,
+      sourceContext,
+    };
+  }));
+}
+
+async function fallbackProviderInventory(adapter: ReturnType<typeof getAdapter>): Promise<ProviderInventory> {
+  const rulesPath = adapter.rulesPath();
+  const skillsDir = adapter.skillsDir();
+  return {
+    rulesPath,
+    rulesExists: rulesPath === null ? false : await fileExists(rulesPath),
+    skillsDir,
+    skills: skillsDir === null ? [] : await childDirectories(skillsDir),
+    mcpPath: adapter.mcpPath(),
+    mcpServers: [],
+  };
+}
+
+function providerSources(
+  provider: ProviderId,
+  inventory: ProviderInventory,
+  outputs: Readonly<Record<string, ManifestOutput>>,
+  context: ProviderSourceContext,
+): ManagerProviderSourceV3[] {
+  const rulesItems: ManagerProviderSourceV3['items'] = [
+    ...(inventory.rulesExists && inventory.rulesPath !== null
+      ? [{
+          id: providerSourceItemId(provider, 'rules', 'instructions'),
+          label: path.basename(inventory.rulesPath),
+          ownership: isManagedProviderOutput(outputs[inventory.rulesPath], provider, 'rules') ? 'managed' as const : 'unmanaged' as const,
+        }]
+      : []),
+    ...(context.extraItems.rules ?? []),
+  ];
+  const skillItems: ManagerProviderSourceV3['items'] = [...inventory.skills.map((name) => {
+    const outputPath = inventory.skillsDir === null ? undefined : path.join(inventory.skillsDir, name);
+    return {
+      id: providerSourceItemId(provider, 'skills', name),
+      label: name,
+      ownership: outputPath !== undefined && isManagedProviderOutput(outputs[outputPath], provider, 'skills')
+        ? 'managed' as const
+        : 'unmanaged' as const,
+    };
+  }), ...(context.extraItems.skills ?? [])];
+  const mcpOutput = inventory.mcpPath === null ? undefined : outputs[inventory.mcpPath];
+  const mcpManaged = isManagedProviderOutput(mcpOutput, provider, 'mcp');
+  const managedMcpKeys = mcpManaged && mcpOutput?.managedKeys !== undefined
+    ? new Set(mcpOutput.managedKeys)
+    : undefined;
+  const mcpItems: ManagerProviderSourceV3['items'] = [...inventory.mcpServers.map((name) => ({
+    id: providerSourceItemId(provider, 'mcp', name),
+    label: name,
+    ownership: !mcpManaged
+      ? 'unmanaged' as const
+      : managedMcpKeys === undefined
+        ? 'unknown' as const
+        : managedMcpKeys.has(name)
+          ? 'managed' as const
+          : 'unmanaged' as const,
+  })), ...(context.extraItems.mcp ?? [])];
+  return [
+    providerSource(provider, 'rules', inventory.rulesPath, rulesItems.length > 0, rulesItems, sourceIssues(context, 'rules')),
+    providerSource(provider, 'skills', inventory.skillsDir, skillItems.length > 0, skillItems, sourceIssues(context, 'skills')),
+    providerSource(provider, 'mcp', inventory.mcpPath, mcpItems.length > 0, mcpItems, sourceIssues(context, 'mcp')),
+  ];
+}
+
+function sourceIssues(context: ProviderSourceContext, content: ApplyContent): ManagerProjectionIssueV3[] {
+  return [...context.commonIssues, ...(context.contentIssues[content] ?? [])];
+}
+
+function providerSource(
+  provider: ProviderId,
+  content: ApplyContent,
+  sourcePath: string | null,
+  exists: boolean,
+  items: ManagerProviderSourceV3['items'],
+  inventoryIssues: readonly ManagerProjectionIssueV3[],
+): ManagerProviderSourceV3 {
+  const issues = sourcePath === null
+    ? [{
+        code: 'provider-content-unsupported',
+        severity: 'info' as const,
+        message: `${provider} does not expose a ${content} source.`,
+      }]
+    : [...inventoryIssues];
+  return {
+    provider,
+    content,
+    path: sourcePath,
+    exists,
+    readable: sourcePath !== null && !issues.some((issue) => issue.severity === 'error'),
+    ownership: sourceOwnership(items),
+    items,
+    issues,
+  };
+}
+
+function sourceOwnership(items: ManagerProviderSourceV3['items']): ManagerProviderSourceV3['ownership'] {
+  if (items.length === 0) return 'empty';
+  const states = new Set(items.map((item) => item.ownership));
+  return states.size === 1 ? items[0]?.ownership ?? 'empty' : 'mixed';
+}
+
+function isManagedProviderOutput(
+  output: ManifestOutput | undefined,
+  provider: ProviderId,
+  content: ApplyContent,
+): boolean {
+  return output?.provider === provider && output.content === content;
+}
+
+function providerSourceItemId(provider: ProviderId, content: ApplyContent, label: string): string {
+  return `${provider}:${content}:${encodeURIComponent(label)}`;
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    return (await stat(filePath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await stat(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function childDirectories(directoryPath: string): Promise<string[]> {
+  try {
+    return (await readdir(directoryPath, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort((left, right) => left.localeCompare(right));
+  } catch {
+    return [];
+  }
 }
 
 function capability(supported: boolean, adapter: ReturnType<typeof getAdapter>, kind: ArtifactKind) {
-  const issue = adapter.discoveries.find((declaration) => declaration.kind === kind && !declaration.supported)?.issue;
+  const issue = supported
+    ? undefined
+    : adapter.discoveries.find((declaration) =>
+        declaration.scope === 'global' && declaration.kind === kind && !declaration.supported)?.issue;
   return { supported, ...(issue === undefined ? {} : { issue }) };
 }
 
@@ -741,17 +1391,32 @@ function projectionForArtifact(
   provider: ProviderId,
   batch: ProjectionBatchPreview,
   record: ReturnType<LocalState['listProjectionRecords']>[number] | undefined,
+  outputs: Readonly<Record<string, ManifestOutput>>,
 ): ManagerArtifactProjectionV3 {
   const unit = batch.units.find((candidate) => candidate.provider === provider && candidate.content === contentForKind(artifact.kind));
   const entry = entryForArtifact(unit, artifact);
   const desiredHash = entry?.resultingTargetHash ?? undefined;
   const observedHash = entry?.expectedTargetHash ?? undefined;
   const destinationPath = entry?.path.length ? entry.path : destinationForArtifact(artifact, provider);
+  const output = destinationPath === undefined ? undefined : outputs[destinationPath];
+  const managedOutput = output?.provider === provider && output.content === contentForKind(artifact.kind)
+    ? output
+    : undefined;
+  const appliedHash = record?.appliedHash ?? managedOutput?.hash;
+  const appliedRevision = record?.appliedRevision ?? managedOutput?.masterRevision ?? managedOutput?.compositionRevision;
+  const appliedAt = record?.appliedAt ?? managedOutput?.appliedAt;
   const supported = destinationPath !== undefined;
   const targeted = artifact.lifecycle === 'active' && artifact.targets.includes(provider);
   const issues = [
     ...(unit?.validationIssues ?? []).map((message) => ({ code: 'blocked-projection', severity: 'error' as const, message })),
     ...(supported ? [] : [{ code: 'unsupported', severity: 'warning' as const, message: `${provider} does not support this artifact kind.` }]),
+    ...(targeted && managedOutput === undefined && entry?.driftStatus === 'unmanaged'
+      ? [{
+          code: 'unmanaged-provider-output',
+          severity: 'info' as const,
+          message: `Existing ${provider} ${contentForKind(artifact.kind)} content has not been applied by Reglet.`,
+        }]
+      : []),
   ];
   return {
     artifactId: artifact.id,
@@ -761,16 +1426,16 @@ function projectionForArtifact(
       supported,
       outputExists: observedHash !== undefined,
       desiredHash,
-      appliedHash: record?.appliedHash,
+      appliedHash,
       observedHash,
       blocked: issues.some((issue) => issue.severity === 'error'),
     }),
     destinationPath: destinationPath ?? null,
     ...(desiredHash === undefined ? {} : { desiredHash }),
-    ...(record?.appliedHash === undefined ? {} : { appliedHash: record.appliedHash }),
+    ...(appliedHash === undefined ? {} : { appliedHash }),
     ...(observedHash === undefined ? {} : { observedHash }),
-    ...(record?.appliedRevision === undefined ? {} : { appliedRevision: record.appliedRevision }),
-    ...(record?.appliedAt === undefined ? {} : { appliedAt: record.appliedAt }),
+    ...(appliedRevision === undefined ? {} : { appliedRevision }),
+    ...(appliedAt === undefined ? {} : { appliedAt }),
     issues,
   };
 }
@@ -780,6 +1445,151 @@ function entryForArtifact(unit: ProjectionUnitPreview | undefined, artifact: Lib
   const nonSkipped = unit.entries.filter((entry) => entry.operation !== 'skip');
   if (artifact.kind !== 'skill') return nonSkipped[0];
   return nonSkipped.find((entry) => path.basename(entry.path) === artifact.slug);
+}
+
+function managerProjectionReview(
+  batch: ProjectionBatchPreview,
+  artifacts: readonly LibraryArtifactMetadata[],
+): ManagerProjectionReviewV3 {
+  return {
+    version: 1,
+    digest: batch.digest,
+    units: batch.units.map((unit) => ({
+      key: unit.key,
+      provider: unit.provider,
+      content: unit.content,
+      digest: unit.digest,
+      masterRevision: unit.masterRevision,
+      status: unit.status,
+      validationIssues: unit.validationIssues,
+      entries: unit.entries.map((entry) => ({
+        operation: entry.operation,
+        path: entry.path,
+        diff: entry.diff,
+        driftStatus: entry.driftStatus,
+        expectedTargetHash: entry.expectedTargetHash,
+        resultingTargetHash: entry.resultingTargetHash,
+        snapshotBehavior: entry.snapshot.behavior,
+        backupBehavior: entry.backup.behavior,
+        ...(entry.operation === 'skip' && typeof entry.after === 'string' ? { note: entry.after } : {}),
+      })),
+      artifacts: artifacts
+        .filter((artifact) => artifact.lifecycle === 'active' &&
+          contentForKind(artifact.kind) === unit.content && artifact.targets.includes(unit.provider))
+        .map((artifact) => ({ id: artifact.id, title: artifact.title, kind: artifact.kind })),
+      requiresDriftConfirmation: unit.entries.some((entry) =>
+        entry.driftStatus === 'modified' || entry.driftStatus === 'missing'),
+    })),
+  };
+}
+
+function managerProjectionApplyResult(result: ProjectionBatchApplyResult) {
+  return {
+    version: result.version,
+    units: result.units.map((unit) => ({
+      key: unit.key,
+      provider: unit.provider,
+      content: unit.content,
+      status: unit.status,
+      issues: unit.issues,
+      ...(unit.receipt === undefined ? {} : {
+        receiptId: unit.receipt.id,
+        completedAt: unit.receipt.completedAt,
+      }),
+    })),
+    summary: result.summary,
+  };
+}
+
+function managerProviderRestoreReview(
+  preview: ProviderRestorePreview,
+): ManagerProviderRestoreReviewV3 {
+  return {
+    version: preview.version,
+    provider: preview.provider,
+    digest: preview.digest,
+    status: preview.status,
+    issues: preview.issues,
+    targets: preview.targets,
+  };
+}
+
+function managerProviderDetachReview(
+  preview: DetachManagedContentPreview,
+): ManagerProviderDetachReviewV3 {
+  return {
+    version: preview.version,
+    provider: preview.provider,
+    content: preview.content,
+    digest: preview.digest,
+    status: preview.status,
+    issues: preview.issues,
+    targets: preview.targets,
+  };
+}
+
+function managerRecoveryReceipt(receipt: OperationReceipt): ManagerRecoveryReceiptV3 {
+  return managerRecoveryReceiptSummary({
+    id: receipt.id,
+    lifecycle: receipt.lifecycle,
+    startedAt: receipt.startedAt,
+    completedAt: receipt.completedAt,
+    providers: receipt.scope.providers ?? [],
+    contents: receipt.scope.contents ?? [],
+    targetCount: receipt.targets.length,
+    restoreAllowed: receipt.restorePolicy?.allowed,
+    reason: receipt.restorePolicy?.reason,
+  });
+}
+
+function managerRecoveryReview(preview: OperationRestorePreview): ManagerRecoveryReviewV3 {
+  return {
+    version: 1,
+    receipt: managerRecoveryReceiptSummary({
+      id: preview.receiptId,
+      lifecycle: preview.lifecycle,
+      startedAt: preview.startedAt,
+      completedAt: preview.completedAt,
+      providers: preview.scope.providers ?? [],
+      contents: preview.scope.contents ?? [],
+      targetCount: preview.targets.length,
+      reason: preview.reason,
+    }),
+    digest: preview.digest,
+    targets: preview.targets,
+  };
+}
+
+function managerRecoveryReceiptSummary(input: {
+  id: string;
+  lifecycle: OperationReceipt['lifecycle'];
+  startedAt: string;
+  completedAt: string | null;
+  providers: ProviderId[];
+  contents: ApplyContent[];
+  targetCount: number;
+  restoreAllowed?: boolean;
+  reason?: string;
+}): ManagerRecoveryReceiptV3 {
+  const restorable = input.lifecycle === 'completed' && input.targetCount > 0 && input.restoreAllowed !== false;
+  const reason = restorable
+    ? undefined
+    : input.reason ?? (input.restoreAllowed === false
+      ? 'This operation has a dedicated inverse action and cannot be replayed from its receipt.'
+      : input.targetCount === 0
+      ? 'This receipt did not change any filesystem targets.'
+      : `A ${input.lifecycle} receipt cannot be restored.`);
+  return {
+    id: input.id,
+    lifecycle: input.lifecycle,
+    startedAt: input.startedAt,
+    completedAt: input.completedAt,
+    providers: [...new Set(input.providers)],
+    contents: [...new Set(input.contents)],
+    targetCount: input.targetCount,
+    restorable,
+    ...(reason === undefined ? {} : { reason }),
+  };
 }
 
 function destinationForArtifact(artifact: LibraryArtifactMetadata, provider: ProviderId): string | undefined {
@@ -943,8 +1753,8 @@ async function promoteDiscovery(
     const selected = input.selectedFiles ?? files;
     assertSelection(selected, files, 'file');
     const executableFiles = inspection.files.filter((file) => file.executable && selected.includes(file.relPath));
-    if (executableFiles.length > 0 && input.confirmExecutables !== true) {
-      throw new Error('Executable skill files require explicit confirmation.');
+    if (executableFiles.length > 0 && input.confirmedExecutableRevision !== inspection.revision) {
+      throw new Error('Executable skill files require confirmation for the exact inspected revision.');
     }
     if (destination !== undefined) {
       if (destination.kind !== 'skill' || destination.locator.type !== 'directory') throw new Error('Skill merge requires a skill destination.');
@@ -1098,6 +1908,62 @@ async function inspectCanonicalSkill(reference: string, home: string) {
   return inspectSkill(path.join(home, ...artifact.locator.path.split('/')));
 }
 
+async function managerSkillInspection(reference: string, home: string, state: LocalState) {
+  const artifact = await resolveArtifact(reference, home);
+  if (artifact.kind !== 'skill' || artifact.locator.type !== 'directory') throw new Error('Skill inspection requires a canonical skill.');
+  const inspection = await inspectSkill(path.join(home, ...artifact.locator.path.split('/')));
+  const decision = state.trustDecision(artifact.id);
+  const trustState = inspection.promotionBlocked
+    ? 'blocked'
+    : !inspection.requiresExecutableConfirmation
+      ? 'not-required'
+      : decision === undefined
+        ? 'untrusted'
+        : isTrustDecisionCurrent(decision, inspection)
+          ? 'trusted'
+          : 'changed';
+  return {
+    artifact: {
+      id: artifact.id,
+      title: artifact.title,
+      slug: artifact.slug,
+      targets: artifact.targets,
+    },
+    revision: inspection.revision,
+    totalBytes: inspection.totalBytes,
+    files: inspection.files,
+    risks: inspection.risks,
+    promotionBlocked: inspection.promotionBlocked,
+    requiresExecutableConfirmation: inspection.requiresExecutableConfirmation,
+    trust: {
+      state: trustState,
+      ...(decision === undefined ? {} : {
+        revision: decision.revision,
+        trustedAt: decision.trustedAt,
+        executableFiles: decision.executableFiles,
+      }),
+    },
+  };
+}
+
+async function projectionUnitIssues(
+  home: string,
+  state: LocalState,
+  providers?: ProviderId[],
+): Promise<Record<string, string[]>> {
+  const issues = await skillTrustUnitIssues(home, state, providers);
+  if (providers === undefined || providers.includes('codex')) {
+    const rulesPath = getAdapter('codex').rulesPath();
+    const overridePath = rulesPath === null ? null : path.join(path.dirname(rulesPath), 'AGENTS.override.md');
+    if (overridePath !== null && await fileExists(overridePath)) {
+      const current = issues['codex:rules'] ?? [];
+      current.push('AGENTS.override.md shadows the managed Codex AGENTS.md file. Adopt, move, or remove the override before applying Codex instructions.');
+      issues['codex:rules'] = current;
+    }
+  }
+  return issues;
+}
+
 async function skillTrustUnitIssues(
   home: string,
   state: LocalState,
@@ -1112,10 +1978,13 @@ async function skillTrustUnitIssues(
     if (!inspection.requiresExecutableConfirmation) continue;
     const decision = state.trustDecision(artifact.id);
     if (decision !== undefined && isTrustDecisionCurrent(decision, inspection)) continue;
+    const message = decision === undefined
+      ? `Executable skill ${artifact.slug} has not been approved for provider sync at revision ${inspection.revision.slice(0, 12)}.`
+      : `Executable skill ${artifact.slug} changed after approval. Review revision ${inspection.revision.slice(0, 12)} before provider sync.`;
     for (const provider of selectedProviders.filter((candidate) => artifact.targets.includes(candidate))) {
       const key = `${provider}:skills`;
       const current = issues[key] ?? [];
-      current.push(`Executable skill ${artifact.slug} changed or has not been trusted at revision ${inspection.revision.slice(0, 12)}.`);
+      current.push(message);
       issues[key] = current;
     }
   }
@@ -1161,6 +2030,37 @@ async function migrationSnapshot(home: string): Promise<ManagerMigrationStateV3>
   return { status: status.state, legacyArtifacts: status.artifactCount };
 }
 
+function publicMigrationPreview(preview: LibraryMigrationPreview) {
+  return {
+    version: preview.version,
+    migration: preview.migration,
+    required: preview.required,
+    digest: preview.digest,
+    artifacts: preview.artifacts.map(({ artifact, sourceExists }) => ({
+      artifact,
+      sourceExists,
+    })),
+  };
+}
+
+function publicMigrationStatus(status: LibraryMigrationStatus) {
+  return {
+    state: status.state,
+    artifactCount: status.artifactCount,
+    ...(status.receipt === undefined ? {} : {
+      receipt: {
+        version: status.receipt.version,
+        id: status.receipt.id,
+        migration: status.receipt.migration,
+        digest: status.receipt.digest,
+        appliedAt: status.receipt.appliedAt,
+        artifactCount: status.receipt.artifactCount,
+        reversible: status.receipt.reversible,
+      },
+    }),
+  };
+}
+
 function projectInboxSnapshot(state: LocalState): ManagerProjectInboxV3 {
   return {
     roots: state.listProjectRoots(),
@@ -1193,12 +2093,104 @@ function draftForSnapshot(draft: ArtifactDraft) {
   };
 }
 
-async function diagnostics(home: string, _state: LocalState) {
+async function diagnostics(
+  home: string,
+  _state: LocalState,
+  secretStore: SecretStore,
+  providerState?: Awaited<ReturnType<typeof providerList>>,
+) {
   const migration = await libraryMigrationStatus(home);
-  const issues = migration.state === 'available'
-    ? [{ code: 'migration-required', severity: 'warning' as const, message: `${migration.artifactCount} legacy artifacts are ready for reviewed migration.` }]
-    : [];
-  return { healthy: true, issues };
+  const issues: ManagerProjectionIssueV3[] = [];
+  if (migration.state === 'available') {
+    issues.push({
+      code: 'migration-required',
+      severity: 'warning',
+      message: `${migration.artifactCount} legacy artifacts are ready for reviewed migration.`,
+    });
+  }
+  for (const provider of providerState ?? await providerList()) {
+    const providerIssues = [
+      ...provider.sourceContext.commonIssues,
+      ...Object.values(provider.sourceContext.contentIssues).flatMap((contentIssues) => contentIssues ?? []),
+    ];
+    for (const issue of providerIssues) {
+      if (!issues.some((candidate) => candidate.code === issue.code && candidate.message === issue.message)) issues.push(issue);
+    }
+  }
+  try {
+    const drift = await detectDrift(home);
+    const counts = new Map<string, { provider: string; content: string; status: 'modified' | 'missing'; count: number }>();
+    for (const record of drift) {
+      if (record.status === 'clean') continue;
+      const key = `${record.provider}:${record.content}:${record.status}`;
+      const current = counts.get(key);
+      counts.set(key, {
+        provider: record.provider,
+        content: record.content,
+        status: record.status,
+        count: (current?.count ?? 0) + 1,
+      });
+    }
+    for (const record of counts.values()) {
+      const subject = record.count === 1 ? 'output' : `${record.count} outputs`;
+      issues.push({
+        code: `provider-output-${record.status}`,
+        severity: 'warning',
+        message: record.status === 'modified'
+          ? `${record.provider} ${record.content} ${subject} changed outside Reglet.`
+          : record.count === 1
+            ? `${record.provider} ${record.content} output managed by Reglet is missing.`
+            : `${record.count} ${record.provider} ${record.content} outputs managed by Reglet are missing.`,
+      });
+    }
+  } catch {
+    issues.push({
+      code: 'provider-drift-check-failed',
+      severity: 'error',
+      message: 'Reglet could not verify one or more managed provider outputs.',
+    });
+  }
+  try {
+    const sync = await encryptedSyncStatus(home);
+    if (sync.state === 'expired') {
+      issues.push({
+        code: 'sync-connection-expired',
+        severity: 'warning',
+        message: 'The pending encrypted sync connection expired and must be cleared before retrying.',
+      });
+    } else if (sync.state === 'conflict') {
+      issues.push({
+        code: 'sync-conflicts',
+        severity: 'warning',
+        message: `${sync.conflictCount} encrypted sync conflict${sync.conflictCount === 1 ? '' : 's'} require review.`,
+      });
+    } else if (sync.state === 'error') {
+      issues.push({
+        code: 'sync-last-run-failed',
+        severity: 'error',
+        message: sync.lastError?.message ?? 'The last encrypted sync attempt failed.',
+      });
+    }
+  } catch {
+    issues.push({
+      code: 'sync-state-invalid',
+      severity: 'error',
+      message: 'Reglet could not read the local encrypted sync state.',
+    });
+  }
+  try {
+    await secretStore.status('reglet-diagnostics-probe');
+  } catch {
+    issues.push({
+      code: 'credential-store-unavailable',
+      severity: 'warning',
+      message: 'The operating-system credential store is unavailable. Secret-backed MCP servers and encrypted sync may be blocked.',
+    });
+  }
+  return {
+    healthy: !issues.some((issue) => issue.severity === 'warning' || issue.severity === 'error'),
+    issues,
+  };
 }
 
 function enableRemote(endpoint: string, state: LocalState) {
@@ -1220,38 +2212,152 @@ function remoteStatus(state: LocalState) {
 
 async function encryptedSyncStatus(home: string): Promise<ManagerSnapshotV3['settings']['sync']> {
   const state = await loadSyncV2State(home);
-  if (state?.phase !== 'active') return { enabled: false, state: 'disabled', conflictCount: 0 };
-  const conflictCount = Object.values(state.files).filter((file) => file.conflicted === true).length;
+  if (state === null) return { enabled: false, phase: 'disabled', state: 'disabled', conflictCount: 0, conflicts: [] };
+  if (state.phase === 'pending') {
+    const expiresAt = state.method === 'pair' ? state.request.expiresAt : state.expiresAt;
+    const deviceName = state.method === 'pair' ? state.request.deviceName : state.deviceName;
+    return {
+      enabled: false,
+      phase: 'pending',
+      state: isExpired(expiresAt) ? 'expired' : 'pending',
+      conflictCount: 0,
+      conflicts: [],
+      pending: { method: state.method, deviceName, expiresAt },
+    };
+  }
+  const conflicts = Object.entries(state.files)
+    .filter(([, file]) => file.conflicted === true)
+    .map(([filePath]) => filePath)
+    .sort((left, right) => left.localeCompare(right));
   return {
     enabled: true,
-    state: conflictCount > 0 ? 'conflict' : 'idle',
-    conflictCount,
+    phase: 'active',
+    state: conflicts.length > 0 ? 'conflict' : state.lastError === undefined ? 'idle' : 'error',
+    conflictCount: conflicts.length,
+    conflicts,
     ...(state.lastSync === undefined ? {} : { lastCompletedAt: state.lastSync.completedAt }),
+    ...(state.lastError === undefined ? {} : { lastError: state.lastError }),
   };
 }
 
-async function encryptedSyncCompatibilitySnapshot(home: string): Promise<unknown> {
+function isExpired(value: string, now = Date.now()): boolean {
+  const expiresAt = Date.parse(value);
+  return Number.isFinite(expiresAt) && expiresAt <= now;
+}
+
+async function encryptedSyncCompatibilitySnapshot(home: string): Promise<SyncSnapshot> {
+  const config = await loadConfig(home);
   const state = await loadSyncV2State(home);
-  if (state === null) return { version: 1, phase: 'disconnected', serverUrl: null, devices: [], lastSync: null };
-  if (state.phase === 'pending') {
+  const previewAcknowledged = config.encryptedSyncPreview.acknowledged;
+  if (state === null) {
     return {
       version: 1,
+      previewAcknowledged,
+      phase: 'disconnected',
+      serverUrl: null,
+      serverHost: null,
+      compatibility: 'unknown',
+      currentDeviceId: null,
+      currentDeviceName: null,
+      pending: null,
+      devices: [],
+      conflicts: [],
+      lastSync: null,
+      lastError: null,
+      keyRotationRequired: false,
+    };
+  }
+  const serverHost = new URL(state.serverUrl).host;
+  if (state.phase === 'pending') {
+    const localPending = localPendingSyncConnection(state);
+    let pending = localPending;
+    let compatibility: SyncSnapshot['compatibility'] = 'unknown';
+    if (localPending.status !== 'expired') {
+      try {
+        const remotePending = await pendingSyncV2ConnectionStatus({ home });
+        pending = {
+          ...remotePending,
+          code: remotePending.method === 'pair' ? remotePending.code : null,
+        };
+        compatibility = 'compatible';
+      } catch {
+        compatibility = 'unreachable';
+      }
+    }
+    return {
+      version: 1,
+      previewAcknowledged,
       phase: 'pending',
       serverUrl: state.serverUrl,
-      pending: await pendingSyncV2ConnectionStatus({ home }),
+      serverHost,
+      compatibility,
+      currentDeviceId: null,
+      currentDeviceName: null,
+      pending,
       devices: [],
+      conflicts: [],
       lastSync: null,
+      lastError: null,
+      keyRotationRequired: false,
     };
+  }
+  let devices: SyncSnapshot['devices'] = [];
+  let compatibility: SyncSnapshot['compatibility'] = 'compatible';
+  try {
+    const response = await listManagedSyncV2Devices({ home });
+    devices = response.devices.map((device) => ({
+      id: device.deviceId,
+      name: device.deviceName,
+      current: device.deviceId === response.currentDeviceId,
+      status: device.revokedAt === null ? 'active' : 'revoked',
+      createdAt: device.createdAt,
+      lastSeenAt: device.lastSeenAt,
+      revokedAt: device.revokedAt,
+    }));
+  } catch {
+    compatibility = 'unreachable';
   }
   return {
     version: 1,
-    phase: 'active',
+    previewAcknowledged,
+    phase: 'connected',
     serverUrl: state.serverUrl,
+    serverHost,
+    compatibility,
     currentDeviceId: state.deviceId,
     currentDeviceName: state.deviceName,
-    devices: await listManagedSyncV2Devices({ home }),
+    pending: null,
+    devices,
+    conflicts: Object.entries(state.files)
+      .filter(([, file]) => file.conflicted === true)
+      .map(([filePath]) => filePath)
+      .sort((left, right) => left.localeCompare(right)),
     lastSync: state.lastSync ?? null,
+    lastError: state.lastError ?? null,
     keyRotationRequired: state.keyRotationRequired === true,
+  };
+}
+
+function localPendingSyncConnection(
+  state: Extract<Awaited<ReturnType<typeof loadSyncV2State>>, { phase: 'pending' }>,
+): SyncPendingConnection {
+  if (state.method === 'pair') {
+    return {
+      method: 'pair',
+      status: isExpired(state.request.expiresAt) ? 'expired' : 'pending',
+      deviceName: state.request.deviceName,
+      code: state.request.code,
+      fingerprint: null,
+      expiresAt: state.request.expiresAt,
+    };
+  }
+  return {
+    method: 'bootstrap',
+    status: isExpired(state.expiresAt) ? 'expired' : 'pending',
+    deviceName: state.deviceName,
+    code: null,
+    fingerprint: state.fingerprint,
+    expiresAt: state.expiresAt,
   };
 }
 
@@ -1306,29 +2412,88 @@ function activityOutcome(data: unknown): 'success' | 'warning' | 'error' {
   return 'success';
 }
 
+function activityContext(
+  command: ApplicationCommand,
+  data: unknown,
+): {
+  artifactId?: string;
+  provider?: string;
+  metadata?: Record<string, string | number | boolean | null>;
+} {
+  const input = command.input;
+  const artifactId = activityArtifactId(command, data);
+  const provider = isProviderId(input.provider)
+    ? input.provider
+    : singleProviderFromApplyInput(input);
+  const summary = isRecord(data) && isRecord(data.summary) ? data.summary : undefined;
+  const receiptIds = receiptIdsFromActivityData(data);
+  const summaryMetadata = summary === undefined
+    ? {}
+    : Object.fromEntries(Object.entries(summary).filter((entry): entry is [string, number] =>
+        typeof entry[1] === 'number' && Number.isSafeInteger(entry[1]) && entry[1] >= 0));
+  const metadata: Record<string, string | number | boolean | null> = {
+    ...summaryMetadata,
+    ...(receiptIds.length === 1 ? { receiptId: receiptIds[0] } : {}),
+    ...(receiptIds.length > 1 ? { receiptCount: receiptIds.length } : {}),
+    ...(isRecord(data) && typeof data.undoReceiptId === 'string' ? { undoReceiptId: data.undoReceiptId } : {}),
+  };
+  return {
+    ...(artifactId === undefined ? {} : { artifactId }),
+    ...(provider === undefined ? {} : { provider }),
+    ...(Object.keys(metadata).length === 0 ? {} : { metadata }),
+  };
+}
+
+function receiptIdsFromActivityData(data: unknown): string[] {
+  if (!isRecord(data)) return [];
+  const ids = new Set<string>();
+  if (typeof data.receiptId === 'string') ids.add(data.receiptId);
+  if (isRecord(data.receipt) && typeof data.receipt.id === 'string') ids.add(data.receipt.id);
+  if (Array.isArray(data.units)) {
+    for (const unit of data.units) {
+      if (isRecord(unit) && typeof unit.receiptId === 'string') ids.add(unit.receiptId);
+    }
+  }
+  return [...ids];
+}
+
+function activityArtifactId(command: ApplicationCommand, data: unknown): string | undefined {
+  if (typeof command.input.artifact === 'string') return command.input.artifact;
+  if (!isRecord(data)) return undefined;
+  if (
+    (command.operation === 'library.create' || command.operation === 'library.duplicate') &&
+    typeof data.id === 'string'
+  ) return data.id;
+  if (
+    (command.operation === 'provider.source.adopt' || command.operation === 'project.promote') &&
+    isRecord(data.artifact) && typeof data.artifact.id === 'string'
+  ) return data.artifact.id;
+  return undefined;
+}
+
+function singleProviderFromApplyInput(input: Record<string, unknown>): ProviderId | undefined {
+  if (!Array.isArray(input.units)) return undefined;
+  const providers = [...new Set(input.units.flatMap((unit) =>
+    isRecord(unit) && isProviderId(unit.provider) ? [unit.provider] : []))];
+  return providers.length === 1 ? providers[0] : undefined;
+}
+
 const writeOperations = new Set<ManagerProtocolOperation>([
   'library.create', 'library.duplicate', 'library.save', 'library.rename', 'library.archive', 'library.restore', 'library.delete', 'library.targets',
-  'provider.apply', 'provider.restore', 'history.undo', 'external.open', 'external.reveal',
+  'provider.apply', 'provider.source.adopt', 'provider.source.stop-managing', 'provider.source.start-managing', 'provider.restore',
+  'history.undo', 'external.open', 'external.reveal',
 ]);
 const adminOperations = new Set<ManagerProtocolOperation>([
-  'provider.purge-backups', 'project.root.add', 'project.root.remove', 'project.root.list', 'project.scan', 'project.discoveries', 'project.ignore',
-  'project.promotion-preview', 'project.promote', 'skill.trust', 'secret.set', 'secret.delete', 'secret.status',
-  'sync.configure', 'sync.disable', 'sync.status', 'sync.now', 'sync.resolve', 'remote.enable', 'remote.disable', 'remote.status',
+  'provider.purge-backups.preview', 'provider.purge-backups', 'project.root.add', 'project.root.remove', 'project.root.list',
+  'project.scan', 'project.discoveries', 'project.ignore',
+  'project.promotion-preview', 'project.promote', 'skill.inspect', 'skill.trust', 'secret.set', 'secret.delete', 'secret.status',
+  'recovery.list', 'recovery.preview', 'recovery.restore',
+  'sync.configure', 'sync.disable', 'sync.status', 'sync.now', 'sync.conflict.preview', 'sync.resolve', 'remote.enable', 'remote.disable', 'remote.status',
   'session.pair', 'session.list', 'session.revoke', 'migration.preview', 'migration.apply', 'migration.status',
   'sync.preview.set', 'sync.snapshot', 'sync.bootstrap.start', 'sync.invitation.create', 'sync.pair.request', 'sync.pair.approve',
   'sync.pair.status', 'sync.pair.complete', 'sync.pair.cancel', 'sync.run', 'sync.device.rename', 'sync.device.revoke', 'sync.disconnect',
   'setup.complete',
 ]);
-const mutatingOperations = new Set<ManagerProtocolOperation>([
-  'library.create', 'library.duplicate', 'library.save', 'library.rename', 'library.archive', 'library.restore', 'library.delete', 'library.targets',
-  'provider.apply', 'provider.restore', 'provider.purge-backups', 'project.root.add', 'project.root.remove', 'project.scan', 'project.ignore', 'project.promote',
-  'skill.trust', 'secret.set', 'secret.delete', 'history.undo', 'sync.configure', 'sync.disable', 'sync.now', 'sync.resolve',
-  'remote.enable', 'remote.disable', 'session.pair', 'session.revoke', 'migration.apply',
-  'sync.preview.set', 'sync.bootstrap.start', 'sync.invitation.create', 'sync.pair.request', 'sync.pair.approve', 'sync.pair.complete',
-  'sync.pair.cancel', 'sync.run', 'sync.device.rename', 'sync.device.revoke', 'sync.disconnect',
-  'setup.complete',
-]);
-
 function requiredScopeFor(operation: ManagerProtocolOperation): ManagerSessionScope {
   if (adminOperations.has(operation)) return 'admin';
   if (writeOperations.has(operation)) return 'write';
@@ -1342,7 +2507,7 @@ function scopeAllows(actual: ManagerSessionScope, required: ManagerSessionScope)
 
 function indexesCanonicalContent(operation: ManagerProtocolOperation): boolean {
   return operation.startsWith('library.') || operation === 'history.undo' || operation === 'migration.apply' ||
-    operation === 'project.promote' || operation === 'setup.complete';
+    operation === 'project.promote' || operation === 'provider.source.adopt' || operation === 'setup.complete';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

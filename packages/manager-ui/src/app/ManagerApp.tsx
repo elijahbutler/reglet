@@ -3,31 +3,31 @@ import {
   AlertTriangle,
   Archive,
   Box,
-  ChevronDown,
   Copy,
   FileDiff,
   FileText,
   FolderSearch,
   Inbox,
   Library,
-  MoreHorizontal,
+  LayoutDashboard,
   Plus,
   RotateCcw,
   RefreshCw,
   Search,
   Settings,
-  SlidersHorizontal,
   Trash2,
   Download,
   Cloud,
 } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import type {
   JsonValue,
   ManagerArtifactProjectionV3,
   ManagerArtifactV3,
+  ManagerContentId,
+  ManagerProviderId,
   ManagerRpcInputs,
   ManagerSnapshotV3,
 } from '@reglet/manager-protocol';
@@ -39,14 +39,18 @@ import { Pane, PaneHeader } from '../design-system/Pane.js';
 import { Row } from '../design-system/Row.js';
 import { Shortcut } from '../design-system/Shortcut.js';
 import { StatusBadge } from '../design-system/StatusBadge.js';
+import { useDialogFocus } from '../design-system/useDialogFocus.js';
 import { ActivityWorkbench } from '../features/activity/ActivityWorkbench.js';
 import { CommandPalette } from '../features/command-palette/CommandPalette.js';
 import { ProjectInboxWorkbench } from '../features/projects/ProjectInboxWorkbench.js';
 import { ProvidersWorkbench } from '../features/providers/ProvidersWorkbench.js';
-import { SettingsWorkbench } from '../features/settings/SettingsWorkbench.js';
+import { ReviewApplyWorkbench, type ReviewRequest } from '../features/review/ReviewApplyWorkbench.js';
+import { SettingsWorkbench, type SettingsSection } from '../features/settings/SettingsWorkbench.js';
 import { SetupOnboarding } from '../features/onboarding/SetupOnboarding.js';
+import { OverviewWorkbench } from '../features/overview/OverviewWorkbench.js';
 
 const destinations = [
+  { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'library', label: 'Library', icon: Library },
   { id: 'projects', label: 'Project Inbox', icon: Inbox },
   { id: 'providers', label: 'Providers', icon: Box },
@@ -82,12 +86,13 @@ export interface ManagerHostActions {
   installUpdate?: (onProgress: (event: ManagerUpdateDownloadEvent) => void) => Promise<void>;
 }
 
-export function ManagerApp({ client, hostActions, initialDestination = 'library' }: ManagerAppProps) {
+export function ManagerApp({ client, hostActions, initialDestination = 'overview' }: ManagerAppProps) {
   const [destination, setDestination] = useState<Destination>(initialDestination);
   const [snapshot, setSnapshot] = useState<ManagerSnapshotV3 | null>(null);
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
   const [artifactContent, setArtifactContent] = useState('');
   const [loadedContent, setLoadedContent] = useState('');
+  const [artifactLoading, setArtifactLoading] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>('canonical');
   const [filter, setFilter] = useState<LifecycleFilter>('active');
   const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('global');
@@ -99,18 +104,30 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
   const [sheet, setSheet] = useState<ArtifactSheet>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<ManagerUpdateStatus | null>(null);
-  const [preparedPreview, setPreparedPreview] = useState<{ batchDigest: string; artifactId: string; provider: ManagerArtifactProjectionV3['provider']; unitDigests: Record<string, string> } | null>(null);
+  const [reviewRequest, setReviewRequest] = useState<ReviewRequest | null>(null);
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>('general');
+  const latestRefresh = useRef(0);
+  const latestSnapshotRevision = useRef(-1);
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const artifactSearchInput = useRef<HTMLInputElement>(null);
+  const reviewReturnTarget = useRef<'top' | 'inspector' | 'overview' | 'providers'>('top');
+  const commandModifier = primaryModifierLabel();
 
   const refresh = useCallback(async () => {
+    const request = latestRefresh.current + 1;
+    latestRefresh.current = request;
     setError(null);
     try {
       const next = await client.snapshot();
+      if (next.revision < latestSnapshotRevision.current) return;
+      latestSnapshotRevision.current = next.revision;
       setSnapshot(next);
       setSelectedArtifactId((current) => current ?? next.library.artifacts[0]?.metadata.id ?? null);
     } catch (refreshError) {
-      setError(messageFrom(refreshError));
+      if (request === latestRefresh.current) setError(messageFrom(refreshError));
     } finally {
-      setLoading(false);
+      if (request === latestRefresh.current) setLoading(false);
     }
   }, [client]);
 
@@ -164,12 +181,18 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
   }, [artifacts, destination, selectedArtifactId]);
 
   useEffect(() => {
-    setPreparedPreview(null);
     if (selectedArtifactId === null) {
       setArtifactContent('');
+      setLoadedContent('');
+      setArtifactLoading(false);
+      setSaveState('canonical');
       return;
     }
     let disposed = false;
+    setArtifactContent('');
+    setLoadedContent('');
+    setArtifactLoading(true);
+    setSaveState('canonical');
     void client.command('library.show', { artifact: selectedArtifactId }).then((result) => {
       if (!disposed) {
         const content = readArtifactContent(result.data);
@@ -179,97 +202,127 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
       }
     }).catch((contentError: unknown) => {
       if (!disposed) setError(messageFrom(contentError));
+    }).finally(() => {
+      if (!disposed) setArtifactLoading(false);
     });
     return () => { disposed = true; };
   }, [client, selectedArtifactId]);
 
   useEffect(() => {
-    if (selectedArtifact === null || artifactContent === loadedContent) return;
+    if (selectedArtifact === null || artifactLoading || artifactContent === loadedContent) return;
+    let current = true;
     setSaveState('saving');
+    const artifactId = selectedArtifact.metadata.id;
+    const content = artifactContent;
     const timer = window.setTimeout(() => {
-      void client.command('library.save', {
-        artifact: selectedArtifact.metadata.id,
-        content: artifactContent,
-      }).then((result) => {
-        setLoadedContent(artifactContent);
+      const queued = saveQueue.current.then(async () => {
+        const result = await client.command('library.save', { artifact: artifactId, content });
+        if (!current) return;
+        setLoadedContent(content);
         setSaveState(readBoolean(result.data, 'saved') === false ? 'draft' : 'canonical');
-      }).catch((saveError: unknown) => {
+      });
+      saveQueue.current = queued.then(() => undefined, () => undefined);
+      void queued.catch((saveError: unknown) => {
+        if (!current) return;
         setSaveState('draft');
         setError(messageFrom(saveError));
       });
     }, 450);
-    return () => window.clearTimeout(timer);
-  }, [artifactContent, client, loadedContent, selectedArtifact]);
+    return () => {
+      current = false;
+      window.clearTimeout(timer);
+    };
+  }, [artifactContent, artifactLoading, client, loadedContent, selectedArtifact]);
+
+  const openReview = (providerOverride?: ManagerProviderId) => {
+    if (selectedArtifact === null) return;
+    if (saveState !== 'canonical' || artifactContent !== loadedContent) {
+      setError('Wait for the canonical edit to finish saving before reviewing provider changes.');
+      return;
+    }
+    const providers = providerOverride === undefined
+      ? [...new Set(selectedArtifact.metadata.targets)]
+      : [providerOverride];
+    if (providers.length === 0) {
+      setError('Choose at least one provider target before reviewing this artifact.');
+      return;
+    }
+    setError(null);
+    setPaletteOpen(false);
+    reviewReturnTarget.current = providerOverride === undefined ? 'top' : 'inspector';
+    setReviewRequest({
+      sourceTitle: selectedArtifact.metadata.title,
+      units: providers.map((provider) => ({
+        provider,
+        content: contentForArtifactKind(selectedArtifact.metadata.kind),
+      })),
+    });
+  };
+
+  const openOverviewReview = (units: ReviewRequest['units']) => {
+    if (units.length === 0) return;
+    setError(null);
+    setPaletteOpen(false);
+    reviewReturnTarget.current = 'overview';
+    setReviewRequest({ sourceTitle: 'the canonical library', units });
+  };
+
+  const openProviderReview = (provider: ManagerProviderId, content: ManagerContentId) => {
+    setError(null);
+    setPaletteOpen(false);
+    reviewReturnTarget.current = 'providers';
+    setReviewRequest({ sourceTitle: `${providerLabel(provider)} ${contentLabel(content)}`, units: [{ provider, content }] });
+  };
+
+  const closeReview = () => {
+    if (reviewBusy) return;
+    const target = reviewReturnTarget.current;
+    setReviewRequest(null);
+    window.setTimeout(() => {
+      const element = document.querySelector<HTMLElement>(`[data-review-trigger="${target}"]`);
+      element?.focus({ preventScroll: true });
+    });
+  };
+
+  const leaveReviewFor = (nextDestination: Destination) => {
+    setReviewRequest(null);
+    setReviewBusy(false);
+    setDestination(nextDestination);
+  };
+
+  const leaveReviewForSettings = (section: SettingsSection) => {
+    setSettingsSection(section);
+    leaveReviewFor('settings');
+  };
+
+  const blockingOnboardingOpen = snapshot?.library.migration.status === 'available' ||
+    (snapshot !== null && !snapshot.settings.setup.completed);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === 'k') {
+      if ((!event.metaKey && !event.ctrlKey) || event.altKey) return;
+      if (blockingOnboardingOpen || sheet !== null || paletteOpen || reviewRequest !== null) return;
+      const key = event.key.toLocaleLowerCase();
+      if (key === 'k') {
         event.preventDefault();
         setPaletteOpen(true);
+        return;
       }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === 'n') {
-        if (destination !== 'library') return;
+      if (isEditableTarget(event.target)) return;
+      if (destination === 'library' && key === 'f') {
+        event.preventDefault();
+        artifactSearchInput.current?.focus({ preventScroll: true });
+        artifactSearchInput.current?.select();
+        return;
+      }
+      if (destination === 'library' && key === 'n') {
         event.preventDefault();
         setSheet('create');
-      }
-      if (event.key === 'Escape') {
-        setPaletteOpen(false);
-        setSheet(null);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [destination]);
-
-  const preparePreview = async () => {
-    if (selectedArtifact === null) return;
-    const provider = selectedArtifact.metadata.targets[0];
-    if (provider === undefined) {
-      setError('Choose at least one provider target before previewing this artifact.');
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const result = await client.command('provider.preview', {
-        artifact: selectedArtifact.metadata.id,
-        provider,
-      });
-      setPreparedPreview({
-        batchDigest: readString(result.data, 'batchDigest'),
-        artifactId: selectedArtifact.metadata.id,
-        provider,
-        unitDigests: readStringRecord(result.data, 'unitDigests'),
-      });
-    } catch (previewError) {
-      setError(messageFrom(previewError));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const apply = async () => {
-    if (preparedPreview === null) {
-      setError('Preview the current changes before applying them.');
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      await client.command('provider.apply', {
-        batchDigest: preparedPreview.batchDigest,
-        unitDigests: preparedPreview.unitDigests,
-        providers: [preparedPreview.provider],
-        artifacts: [preparedPreview.artifactId],
-      });
-      setPreparedPreview(null);
-      await refresh();
-    } catch (applyError) {
-      setError(messageFrom(applyError));
-    } finally {
-      setBusy(false);
-    }
-  };
+  }, [blockingOnboardingOpen, destination, paletteOpen, reviewRequest, sheet]);
 
   const mutateArtifact = async (operation: 'library.duplicate' | 'library.archive' | 'library.restore', artifact: string) => {
     setBusy(true);
@@ -300,33 +353,35 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
   };
 
   return (
-    <div className={`rg-manager${initialSyncRequired ? ' rg-manager--notice' : ''}`} data-testid="manager-workbench">
+    <div className={`rg-manager${initialSyncRequired ? ' rg-manager--notice' : ''}${reviewRequest === null ? '' : ' rg-manager--review'}`} data-testid="manager-workbench">
       <header className="rg-command-bar">
         <div className="rg-brand" aria-label="Reglet">
           <span className="rg-brand__mark" aria-hidden="true">R</span>
           <strong>Reglet</strong>
         </div>
         <div className="rg-breadcrumb" aria-label="Current location">
-          <span>{labelForDestination(destination)}</span>
-          {destination !== 'library' || selectedArtifact === null ? null : <><span aria-hidden="true">›</span><strong>{selectedArtifact.metadata.title}</strong></>}
+          <span>{reviewRequest === null ? labelForDestination(destination) : 'Library'}</span>
+          {reviewRequest === null
+            ? destination !== 'library' || selectedArtifact === null ? null : <><span aria-hidden="true">›</span><strong>{selectedArtifact.metadata.title}</strong></>
+            : <><span aria-hidden="true">›</span><strong>Review and apply</strong></>}
         </div>
-        <button type="button" className="rg-command-search" aria-label="Search or run a command" onClick={() => setPaletteOpen(true)}>
-          <Shortcut keys={['⌘', 'K']} />
+        {reviewRequest === null ? <button type="button" className="rg-command-search" aria-label="Search or run a command" onClick={() => setPaletteOpen(true)}>
+          <Shortcut keys={[commandModifier, 'K']} />
           <span>Search or run command</span>
-        </button>
+        </button> : null}
         <div className="rg-command-actions">
-          {updateStatus?.status === 'available' ? <Button className="rg-update-command" tone="secondary" icon={<Download size={15} />} onClick={() => setDestination('settings')}>
+          {reviewRequest !== null ? <Button tone="quiet" disabled={reviewBusy} onClick={closeReview}>Close review</Button> : null}
+          {reviewRequest === null && updateStatus?.status === 'available' ? <Button className="rg-update-command" tone="secondary" icon={<Download size={15} />} onClick={() => { setSettingsSection('general'); setDestination('settings'); }}>
             Update {updateStatus.latestVersion}
           </Button> : null}
-          {initialSyncRequired ? <Button tone="secondary" icon={<Cloud size={15} />} disabled={busy} onClick={() => void runInitialSync()}>Initial sync</Button> : null}
-          {destination === 'library' ? <><Button tone="secondary" icon={<Plus size={15} />} onClick={() => setSheet('create')}>New</Button><Button tone="secondary" icon={<FileDiff size={15} />} onClick={() => void preparePreview()} disabled={busy || selectedArtifact === null}>Preview diff</Button><Button tone="secondary" onClick={() => void apply()} disabled={busy || preparedPreview === null}>Apply changes</Button></> : null}
-          <button type="button" className="rg-icon-button" aria-label="More actions"><MoreHorizontal size={17} /></button>
+          {reviewRequest === null && initialSyncRequired ? <Button tone="secondary" icon={<Cloud size={15} />} disabled={busy} onClick={() => void runInitialSync()}>Initial sync</Button> : null}
+          {reviewRequest === null && destination === 'library' ? <><Button tone="secondary" icon={<Plus size={15} />} onClick={() => setSheet('create')}>New</Button><Button data-review-trigger="top" tone="secondary" icon={<FileDiff size={15} />} onClick={() => openReview()} disabled={busy || artifactLoading || selectedArtifact === null || saveState !== 'canonical' || artifactContent !== loadedContent}>Review changes</Button></> : null}
         </div>
       </header>
 
       {initialSyncRequired ? <div className="rg-sync-notice" role="status"><Cloud size={15} aria-hidden="true" /><span><strong>Initial sync required</strong> Your encrypted server is connected, but this library has not been exchanged yet.</span><button type="button" disabled={busy} onClick={() => void runInitialSync()}>{busy ? 'Syncing…' : 'Sync now'}</button></div> : null}
 
-      <main className="rg-workbench">
+      {reviewRequest === null ? <main className="rg-workbench">
         <Pane label="Primary navigation" className="rg-navigation" tone="raised">
           <nav aria-label="Manager destinations">
             {destinations.map(({ id, icon: Icon, label }) => (
@@ -335,14 +390,19 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
               </Row>
             ))}
           </nav>
-          <button type="button" className="rg-workspace-switcher">
+          <div className="rg-workspace-switcher">
             <span className="rg-workspace-avatar" aria-hidden="true">R</span>
             <span><strong>Reglet Workspace</strong><small>Local library</small></span>
-            <ChevronDown size={14} aria-hidden="true" />
-          </button>
+          </div>
         </Pane>
 
-        {destination === 'library' ? (
+        {destination === 'overview' ? <OverviewWorkbench
+          snapshot={snapshot}
+          onOpenActivity={() => setDestination('activity')}
+          onOpenLibrary={() => setDestination('library')}
+          onOpenProviders={() => setDestination('providers')}
+          onReview={openOverviewReview}
+        /> : destination === 'library' ? (
           <LibraryWorkbench
             artifacts={artifacts}
             content={artifactContent}
@@ -351,6 +411,7 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
             scopeFilter={scopeFilter}
             kindFilter={kindFilter}
             loading={loading}
+            artifactLoading={artifactLoading}
             query={query}
             selected={selectedArtifact}
             snapshot={snapshot}
@@ -366,22 +427,35 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
             onRename={() => setSheet('rename')}
             onDelete={() => setSheet('delete')}
             onHistory={() => setSheet('history')}
+            onReview={openReview}
             saveState={saveState}
+            searchInputRef={artifactSearchInput}
+            commandModifier={commandModifier}
           />
         ) : destination === 'projects' ? <ProjectInboxWorkbench client={client} snapshot={snapshot} onRefresh={refresh} onError={setError} />
-          : destination === 'providers' ? <ProvidersWorkbench client={client} snapshot={snapshot} onError={setError} />
-            : destination === 'activity' ? <ActivityWorkbench snapshot={snapshot} />
-              : <SettingsWorkbench client={client} hostActions={hostActions} updateStatus={updateStatus} onUpdateStatus={setUpdateStatus} snapshot={snapshot} onRefresh={refresh} onError={setError} />}
-      </main>
+          : destination === 'providers' ? <ProvidersWorkbench client={client} snapshot={snapshot} onError={setError} onRefresh={refresh} onReview={openProviderReview} />
+            : destination === 'activity' ? <ActivityWorkbench client={client} snapshot={snapshot} onError={setError} onRefresh={refresh} />
+              : <SettingsWorkbench client={client} hostActions={hostActions} updateStatus={updateStatus} onUpdateStatus={setUpdateStatus} section={settingsSection} onSection={setSettingsSection} snapshot={snapshot} onRefresh={refresh} onError={setError} />}
+      </main> : <main className="rg-review-host"><ReviewApplyWorkbench
+        key={reviewRequest.units.map((unit) => `${unit.provider}:${unit.content}`).join('|')}
+        client={client}
+        commandModifier={commandModifier}
+        request={reviewRequest}
+        onBusyChange={setReviewBusy}
+        onClose={closeReview}
+        onOpenActivity={() => leaveReviewFor('activity')}
+        onOpenExecutableSkills={() => leaveReviewForSettings('executable-skills')}
+        onOpenSettings={() => leaveReviewForSettings('general')}
+        onRefresh={refresh}
+      /></main>}
 
       <CommandPalette
-        open={paletteOpen}
+        open={paletteOpen && reviewRequest === null}
         onClose={() => setPaletteOpen(false)}
         onNew={() => setSheet('create')}
-        onPreview={() => void preparePreview()}
         onRefresh={() => void refresh()}
-        onArchive={() => selectedArtifact === null ? undefined : void mutateArtifact('library.archive', selectedArtifact.metadata.id)}
-        onSettings={() => setDestination('settings')}
+        onArchive={selectedArtifact?.metadata.lifecycle === 'active' ? () => void mutateArtifact('library.archive', selectedArtifact.metadata.id) : undefined}
+        onSettings={() => { setSettingsSection('general'); setDestination('settings'); }}
       />
 
       {snapshot?.library.migration.status === 'available' ? <MigrationOnboarding
@@ -403,7 +477,7 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
         kind={sheet}
         artifact={selectedArtifact}
         busy={busy}
-        onClose={() => setSheet(null)}
+        onClose={() => { if (!busy) setSheet(null); }}
         onCreate={async (input) => {
           setBusy(true);
           try {
@@ -442,20 +516,20 @@ export function ManagerApp({ client, hostActions, initialDestination = 'library'
         </div>
       )}
 
-      <footer className="rg-shortcut-bar">
+      {reviewRequest === null ? <footer className="rg-shortcut-bar">
         <div>
-          <Shortcut keys={['⌘', 'K']} label="Search" />
-          {destination === 'library' ? <><Shortcut keys={['⌘', 'N']} label="New artifact" /><Shortcut keys={['⌘', '⇧', 'P']} label="Preview diff" /><Shortcut keys={['⌘', '↵']} label="Apply changes" /></> : null}
-          <Shortcut keys={['?']} label="Show shortcuts" />
+          <Shortcut keys={[commandModifier, 'K']} label="Search" />
+          {destination === 'library' ? <Shortcut keys={[commandModifier, 'N']} label="New artifact" /> : null}
         </div>
-        {destination === 'library' ? <Button tone="primary" onClick={() => void apply()} disabled={busy || preparedPreview === null}>Apply changes</Button> : <span className="rg-footer-location">{labelForDestination(destination)}</span>}
-      </footer>
+        <span className="rg-footer-location">{labelForDestination(destination)}</span>
+      </footer> : null}
     </div>
   );
 }
 
 interface LibraryWorkbenchProps {
   artifacts: ManagerArtifactV3[];
+  artifactLoading: boolean;
   baseline: string;
   content: string;
   filter: LifecycleFilter;
@@ -478,10 +552,14 @@ interface LibraryWorkbenchProps {
   onRename: () => void;
   onDelete: () => void;
   onHistory: () => void;
+  onReview: (provider: ManagerArtifactProjectionV3['provider']) => void;
+  searchInputRef: RefObject<HTMLInputElement>;
+  commandModifier: string;
 }
 
 function LibraryWorkbench({
   artifacts,
+  artifactLoading,
   baseline,
   content,
   filter,
@@ -504,8 +582,12 @@ function LibraryWorkbench({
   onRename,
   onDelete,
   onHistory,
+  onReview,
+  searchInputRef,
+  commandModifier,
 }: LibraryWorkbenchProps) {
   const [editorView, setEditorView] = useState<'edit' | 'diff'>('edit');
+  const [mobilePane, setMobilePane] = useState<'collection' | 'editor' | 'details'>('collection');
   const list = useRef<HTMLDivElement>(null);
   const virtual = useVirtualizer({
     count: artifacts.length,
@@ -515,24 +597,28 @@ function LibraryWorkbench({
   });
   return (
     <>
-      <Pane label="Artifact collection" className="rg-collection">
+      <nav className="rg-library-mobile-nav" aria-label="Library panels">
+        <button type="button" aria-pressed={mobilePane === 'collection'} onClick={() => setMobilePane('collection')}>Library</button>
+        <button type="button" aria-pressed={mobilePane === 'editor'} onClick={() => setMobilePane('editor')}>Edit</button>
+        <button type="button" aria-pressed={mobilePane === 'details'} onClick={() => setMobilePane('details')}>Details</button>
+      </nav>
+      <Pane label="Artifact collection" className={`rg-collection rg-library-mobile-pane${mobilePane === 'collection' ? ' rg-library-mobile-pane--active' : ''}`}>
         <PaneHeader>
           <label className="rg-search-field">
             <Search size={15} aria-hidden="true" />
             <span className="sr-only">Search artifacts</span>
-            <input value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search artifacts…" />
-            <span aria-hidden="true">⌘ F</span>
+            <input ref={searchInputRef} value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search artifacts…" />
+            <span aria-hidden="true">{commandModifier} F</span>
           </label>
-          <button type="button" className="rg-icon-button" aria-label="Filter artifacts"><SlidersHorizontal size={16} /></button>
         </PaneHeader>
-        <div className="rg-filter-tabs" role="tablist" aria-label="Artifact lifecycle">
+        <div className="rg-filter-tabs" role="group" aria-label="Artifact lifecycle">
           <FilterTab label="Active" count={snapshot?.library.counts.active ?? 0} active={filter === 'active'} onClick={() => onFilter('active')} />
           <FilterTab label="Drafts" count={snapshot?.library.counts.drafts ?? 0} active={filter === 'drafts'} onClick={() => onFilter('drafts')} />
           <FilterTab label="Archived" count={snapshot?.library.counts.archived ?? 0} active={filter === 'archived'} onClick={() => onFilter('archived')} />
         </div>
-        <div className="rg-library-scope" role="tablist" aria-label="Artifact scope">
-          <button type="button" role="tab" aria-selected={scopeFilter === 'global'} onClick={() => onScopeFilter('global')}>Global <small>{scopeCount(snapshot, 'global')}</small></button>
-          <button type="button" role="tab" aria-selected={scopeFilter === 'provider'} onClick={() => onScopeFilter('provider')}>Provider-specific <small>{scopeCount(snapshot, 'provider')}</small></button>
+        <div className="rg-library-scope" role="group" aria-label="Artifact scope">
+          <button type="button" aria-pressed={scopeFilter === 'global'} onClick={() => onScopeFilter('global')}>Global <small>{scopeCount(snapshot, 'global')}</small></button>
+          <button type="button" aria-pressed={scopeFilter === 'provider'} onClick={() => onScopeFilter('provider')}>Provider-specific <small>{scopeCount(snapshot, 'provider')}</small></button>
         </div>
         <div className="rg-kind-filter" role="group" aria-label="Artifact kind">
           <KindButton label="All" value="all" active={kindFilter === 'all'} onClick={onKindFilter} />
@@ -554,7 +640,7 @@ function LibraryWorkbench({
                 active={selected?.metadata.id === artifact.metadata.id}
                 leading={<FileText size={15} />}
                 trailing={<small>{scopeLabel(artifact)}</small>}
-                onClick={() => onSelect(artifact.metadata.id)}
+                onClick={() => { onSelect(artifact.metadata.id); setMobilePane('editor'); }}
               >{artifact.metadata.title}</Row></div>;
             })}
           </div>
@@ -562,16 +648,17 @@ function LibraryWorkbench({
         <Button className="rg-new-artifact" tone="quiet" icon={<Plus size={15} />} onClick={onNew}>New artifact</Button>
       </Pane>
 
-      <Pane label="Artifact editor" className="rg-editor-pane">
+      <Pane label="Artifact editor" className={`rg-editor-pane rg-library-mobile-pane${mobilePane === 'editor' ? ' rg-library-mobile-pane--active' : ''}`}>
         <PaneHeader>
-          <div className="rg-editor-tabs" role="tablist" aria-label="Artifact view">
-            <button type="button" role="tab" aria-selected={editorView === 'edit'} onClick={() => setEditorView('edit')}>Edit</button>
-            <button type="button" role="tab" aria-selected={editorView === 'diff'} onClick={() => setEditorView('diff')}>Changes</button>
+          <div className="rg-editor-tabs" role="group" aria-label="Artifact view">
+            <button type="button" aria-pressed={editorView === 'edit'} onClick={() => setEditorView('edit')}>Edit</button>
+            <button type="button" aria-pressed={editorView === 'diff'} onClick={() => setEditorView('diff')}>Changes</button>
           </div>
-          <button type="button" className="rg-icon-button" aria-label="Editor actions"><MoreHorizontal size={16} /></button>
         </PaneHeader>
         {selected === null ? (
           <div className="rg-empty-canvas"><FileText size={24} /><strong>Select an artifact</strong><span>Choose a library item to inspect its canonical content and projections.</span></div>
+        ) : artifactLoading ? (
+          <div className="rg-empty-canvas" role="status"><RefreshCw size={20} /><strong>Loading canonical content</strong><span>The editor will unlock when this artifact is ready.</span></div>
         ) : (
           <>
             {editorView === 'edit' ? <ManagerCodeEditor
@@ -590,23 +677,25 @@ function LibraryWorkbench({
         )}
       </Pane>
 
-      <ProjectionInspector artifact={selected} onDuplicate={onDuplicate} onArchive={onArchive} onRename={onRename} onDelete={onDelete} onHistory={onHistory} />
+      <ProjectionInspector mobileActive={mobilePane === 'details'} artifact={selected} onDuplicate={onDuplicate} onArchive={onArchive} onRename={onRename} onDelete={onDelete} onHistory={onHistory} onReview={onReview} />
     </>
   );
 }
 
-function ProjectionInspector({ artifact, onDuplicate, onArchive, onRename, onDelete, onHistory }: {
+function ProjectionInspector({ artifact, mobileActive, onDuplicate, onArchive, onRename, onDelete, onHistory, onReview }: {
   artifact: ManagerArtifactV3 | null;
+  mobileActive: boolean;
   onDuplicate: () => void;
   onArchive: () => void;
   onRename: () => void;
   onDelete: () => void;
   onHistory: () => void;
+  onReview: (provider: ManagerArtifactProjectionV3['provider']) => void;
 }) {
   const selectedProjection = artifact?.projections.find((projection) => projection.status === 'drifted') ?? artifact?.projections[0] ?? null;
   return (
-    <Pane label="Projection inspector" className="rg-inspector" tone="raised">
-      <PaneHeader><span>Projection inspector</span><button type="button" className="rg-icon-button" aria-label="Inspector options"><MoreHorizontal size={15} /></button></PaneHeader>
+    <Pane label="Projection inspector" className={`rg-inspector rg-library-mobile-pane${mobileActive ? ' rg-library-mobile-pane--active' : ''}`} tone="raised">
+      <PaneHeader><span>Projection inspector</span></PaneHeader>
       {artifact === null ? (
         <div className="rg-inspector-empty">Projection details appear here.</div>
       ) : (
@@ -631,7 +720,7 @@ function ProjectionInspector({ artifact, onDuplicate, onArchive, onRename, onDel
               <Revision label="Desired" hash={selectedProjection.desiredHash} />
               <Revision label="Applied" hash={selectedProjection.appliedHash} />
               <Revision label="Observed" hash={selectedProjection.observedHash} />
-              <Button tone="secondary" icon={<FileDiff size={15} />}>Preview diff</Button>
+              <Button data-review-trigger="inspector" tone="secondary" icon={<FileDiff size={15} />} onClick={() => onReview(selectedProjection.provider)}>Review changes</Button>
             </section>
           )}
           <section className="rg-inspector-section">
@@ -669,7 +758,7 @@ function Revision({ label, hash }: { label: string; hash?: string }) {
 }
 
 function FilterTab({ active, count, label, onClick }: { active: boolean; count: number; label: string; onClick: () => void }) {
-  return <button type="button" role="tab" aria-selected={active} onClick={onClick}><span>{label}</span><small>{count}</small></button>;
+  return <button type="button" aria-pressed={active} onClick={onClick}><span>{label}</span><small>{count}</small></button>;
 }
 
 function KindButton({ active, label, value, onClick }: { active: boolean; label: string; value: KindFilter; onClick: (value: KindFilter) => void }) {
@@ -707,6 +796,7 @@ function ArtifactActionSheet({
   const [slug, setSlug] = useState('');
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('# New instruction\n');
+  const dialog = useDialogFocus<HTMLElement>(kind !== null, onClose);
 
   useEffect(() => {
     if (kind === 'rename') setSlug(artifact?.metadata.slug ?? '');
@@ -719,9 +809,9 @@ function ArtifactActionSheet({
   }, [artifact?.metadata.slug, kind]);
 
   if (kind === null) return null;
-  return <div className="rg-sheet-backdrop" role="presentation" onMouseDown={onClose}><aside className="rg-sheet" role="dialog" aria-modal="true" aria-label={sheetTitle(kind)} onMouseDown={(event) => event.stopPropagation()}><PaneHeader><span>{sheetTitle(kind)}</span><button type="button" className="rg-icon-button" onClick={onClose} aria-label="Close">×</button></PaneHeader><div className="rg-sheet__body">
+  return <div className="rg-sheet-backdrop" role="presentation" onMouseDown={onClose}><aside ref={dialog} tabIndex={-1} className="rg-sheet" role="dialog" aria-modal="true" aria-label={sheetTitle(kind)} onMouseDown={(event) => event.stopPropagation()}><PaneHeader><span>{sheetTitle(kind)}</span><button type="button" className="rg-icon-button" disabled={busy} onClick={onClose} aria-label="Close">×</button></PaneHeader><div className="rg-sheet__body">
     {kind === 'create' ? <>
-      <p>Create canonical content first. Provider writes still require a reviewed preview and explicit Apply.</p>
+      <p>Create canonical content first. Provider files change only through Review and Apply.</p>
       <label className="rg-field"><span>Kind</span><select value={artifactKind} onChange={(event) => {
         const next = event.target.value as 'instruction' | 'skill' | 'mcp';
         setArtifactKind(next);
@@ -746,11 +836,12 @@ function MigrationOnboarding({ client, legacyCount, onComplete, onError }: {
 }) {
   const [preview, setPreview] = useState<JsonValue>();
   const [busy, setBusy] = useState(false);
+  const dialog = useDialogFocus<HTMLElement>(true);
   useEffect(() => {
     void client.command('migration.preview', {}).then((result) => setPreview(result.data)).catch((error: unknown) => onError(messageFrom(error)));
   }, [client, onError]);
   const digest = preview === undefined ? undefined : readOptionalString(preview, 'digest');
-  return <div className="rg-onboarding-backdrop"><section className="rg-onboarding" role="dialog" aria-modal="true" aria-labelledby="migration-title"><span className="rg-brand__mark" aria-hidden="true">R</span><div><p className="rg-eyebrow">Library V2 migration</p><h1 id="migration-title">Review your canonical library</h1><p>Reglet found {legacyCount} existing artifact{legacyCount === 1 ? '' : 's'}. Migration creates stable IDs and metadata without moving, rewriting, or applying provider content.</p></div><dl className="rg-key-values"><div><dt>Canonical files</dt><dd>Remain in place</dd></div><div><dt>Provider writes</dt><dd>None</dd></div><div><dt>Recovery</dt><dd>Reversible receipt</dd></div><div><dt>Preview digest</dt><dd><code>{digest?.slice(0, 16) ?? 'Preparing…'}</code></dd></div></dl><Button tone="primary" disabled={busy || digest === undefined} onClick={() => {
+  return <div className="rg-onboarding-backdrop"><section ref={dialog} tabIndex={-1} className="rg-onboarding" role="dialog" aria-modal="true" aria-labelledby="migration-title"><span className="rg-brand__mark" aria-hidden="true">R</span><div><p className="rg-eyebrow">Library V2 migration</p><h1 id="migration-title">Review your canonical library</h1><p>Reglet found {legacyCount} existing artifact{legacyCount === 1 ? '' : 's'}. Migration creates stable IDs and metadata without moving, rewriting, or applying provider content.</p></div><dl className="rg-key-values"><div><dt>Canonical files</dt><dd>Remain in place</dd></div><div><dt>Provider writes</dt><dd>None</dd></div><div><dt>Recovery</dt><dd>Reversible receipt</dd></div><div><dt>Preview digest</dt><dd><code>{digest?.slice(0, 16) ?? 'Preparing…'}</code></dd></div></dl><Button tone="primary" disabled={busy || digest === undefined} onClick={() => {
     if (digest === undefined) return;
     setBusy(true);
     void client.command('migration.apply', { yes: true, previewDigest: digest }).then(onComplete).catch((error: unknown) => onError(messageFrom(error))).finally(() => setBusy(false));
@@ -785,6 +876,10 @@ function providerLabel(provider: string): string {
   return labels[provider] ?? provider;
 }
 
+function contentLabel(content: ManagerContentId): string {
+  return content === 'rules' ? 'instructions' : content === 'skills' ? 'skills' : 'MCP servers';
+}
+
 function labelForDestination(destination: Destination): string {
   return destinations.find((candidate) => candidate.id === destination)?.label ?? 'Library';
 }
@@ -809,30 +904,12 @@ function readBoolean(value: JsonValue, key: string): boolean | undefined {
   return isJsonRecord(value) && typeof value[key] === 'boolean' ? value[key] : undefined;
 }
 
-function readString(value: JsonValue, key: string): string {
-  if (!isJsonRecord(value) || typeof value[key] !== 'string') {
-    throw new Error(`Manager response is missing ${key}.`);
-  }
-  return value[key];
-}
-
 function readOptionalString(value: JsonValue, key: string): string | undefined {
   return isJsonRecord(value) && typeof value[key] === 'string' ? value[key] : undefined;
 }
 
-function readStringRecord(value: JsonValue, key: string): Record<string, string> {
-  if (!isJsonRecord(value)) {
-    throw new Error(`Manager response is missing ${key}.`);
-  }
-  const candidate = value[key];
-  if (candidate === undefined || !isJsonRecord(candidate)) {
-    throw new Error(`Manager response is missing ${key}.`);
-  }
-  const entries = Object.entries(candidate);
-  if (!entries.every((entry): entry is [string, string] => typeof entry[1] === 'string')) {
-    throw new Error(`Manager response contains an invalid ${key}.`);
-  }
-  return Object.fromEntries(entries);
+function contentForArtifactKind(kind: ManagerArtifactV3['metadata']['kind']): ManagerContentId {
+  return kind === 'instruction' ? 'rules' : kind === 'skill' ? 'skills' : 'mcp';
 }
 
 function isJsonRecord(value: JsonValue | undefined): value is { [key: string]: JsonValue } {
@@ -854,4 +931,14 @@ function saveLabel(state: SaveState): string {
 
 function capitalize(value: string): string {
   return value.length === 0 ? value : `${value[0]?.toUpperCase() ?? ''}${value.slice(1)}`;
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || target.matches('input, textarea, select, [role="textbox"]');
+}
+
+function primaryModifierLabel(): string {
+  if (typeof navigator === 'undefined') return 'Ctrl';
+  return /Mac|iPhone|iPad|iPod/u.test(navigator.platform) ? '⌘' : 'Ctrl';
 }

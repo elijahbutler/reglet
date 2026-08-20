@@ -1,4 +1,4 @@
-import type { ManagerProviderId } from './snapshot-v2.js';
+import type { ManagerContentId, ManagerProviderId } from './snapshot-v2.js';
 
 export type ManagerArtifactId = string;
 export type ManagerArtifactKind = 'instruction' | 'skill' | 'mcp';
@@ -105,6 +105,25 @@ export interface ManagerProviderCapabilityV3 {
   issue?: string;
 }
 
+export type ManagerProviderSourceOwnershipV3 = 'empty' | 'managed' | 'unmanaged' | 'mixed' | 'unknown';
+
+export interface ManagerProviderSourceItemV3 {
+  id: string;
+  label: string;
+  ownership: 'managed' | 'unmanaged' | 'unknown';
+}
+
+export interface ManagerProviderSourceV3 {
+  provider: ManagerProviderId;
+  content: ManagerContentId;
+  path: string | null;
+  exists: boolean;
+  readable: boolean;
+  ownership: ManagerProviderSourceOwnershipV3;
+  items: ManagerProviderSourceItemV3[];
+  issues: ManagerProjectionIssueV3[];
+}
+
 export interface ManagerProviderV3 {
   id: ManagerProviderId;
   displayName: string;
@@ -117,6 +136,7 @@ export interface ManagerProviderV3 {
     skills: ManagerProviderCapabilityV3;
     mcp: ManagerProviderCapabilityV3;
   };
+  sources: ManagerProviderSourceV3[];
   projections: ManagerArtifactProjectionV3[];
 }
 
@@ -192,9 +212,20 @@ export interface ManagerSnapshotV3 {
     };
     sync: {
       enabled: boolean;
-      state: 'disabled' | 'idle' | 'syncing' | 'conflict' | 'error';
+      phase: 'disabled' | 'pending' | 'active';
+      state: 'disabled' | 'pending' | 'expired' | 'idle' | 'syncing' | 'conflict' | 'error';
       conflictCount: number;
+      conflicts: string[];
       lastCompletedAt?: string;
+      lastError?: {
+        occurredAt: string;
+        message: string;
+      };
+      pending?: {
+        method: 'bootstrap' | 'pair';
+        deviceName: string;
+        expiresAt: string;
+      };
     };
     remote: {
       enabled: boolean;
@@ -410,6 +441,7 @@ function isProvider(value: unknown): boolean {
       'lastVerifiedAt',
       'schemaVersion',
       'capabilities',
+      'sources',
       'projections',
     ]) &&
     isProviderId(value.id) &&
@@ -419,7 +451,36 @@ function isProvider(value: unknown): boolean {
     typeof value.lastVerifiedAt === 'string' &&
     isNonNegativeInteger(value.schemaVersion) &&
     isCapabilities(value.capabilities) &&
+    isArrayOf(value.sources, isProviderSource) &&
     isArrayOf(value.projections, isProjection);
+}
+
+function isProviderSource(value: unknown): boolean {
+  return isRecord(value) && exact(value, [
+    'provider',
+    'content',
+    'path',
+    'exists',
+    'readable',
+    'ownership',
+    'items',
+    'issues',
+  ]) &&
+    isProviderId(value.provider) &&
+    (value.content === 'rules' || value.content === 'skills' || value.content === 'mcp') &&
+    (value.path === null || typeof value.path === 'string') &&
+    typeof value.exists === 'boolean' &&
+    typeof value.readable === 'boolean' &&
+    (value.ownership === 'empty' || value.ownership === 'managed' ||
+      value.ownership === 'unmanaged' || value.ownership === 'mixed' || value.ownership === 'unknown') &&
+    isArrayOf(value.items, isProviderSourceItem) &&
+    isArrayOf(value.issues, isIssue);
+}
+
+function isProviderSourceItem(value: unknown): boolean {
+  return isRecord(value) && exact(value, ['id', 'label', 'ownership']) &&
+    typeof value.id === 'string' && typeof value.label === 'string' &&
+    (value.ownership === 'managed' || value.ownership === 'unmanaged' || value.ownership === 'unknown');
 }
 
 function isCapabilities(value: unknown): boolean {
@@ -493,10 +554,28 @@ function isSetupSettings(value: unknown): boolean {
 }
 
 function isSyncSettings(value: unknown): boolean {
-  return isRecord(value) && exact(value, ['enabled', 'state', 'conflictCount', 'lastCompletedAt']) &&
-    typeof value.enabled === 'boolean' && typeof value.state === 'string' &&
-    ['disabled', 'idle', 'syncing', 'conflict', 'error'].includes(value.state) &&
-    isNonNegativeInteger(value.conflictCount) && optionalString(value.lastCompletedAt);
+  return isRecord(value) && exact(value, ['enabled', 'phase', 'state', 'conflictCount', 'conflicts', 'lastCompletedAt', 'lastError', 'pending']) &&
+    typeof value.enabled === 'boolean' &&
+    (value.phase === 'disabled' || value.phase === 'pending' || value.phase === 'active') &&
+    typeof value.state === 'string' &&
+    ['disabled', 'pending', 'expired', 'idle', 'syncing', 'conflict', 'error'].includes(value.state) &&
+    isNonNegativeInteger(value.conflictCount) && isArrayOf(value.conflicts, isString) &&
+    value.conflictCount === value.conflicts.length && optionalString(value.lastCompletedAt) &&
+    (value.lastError === undefined || isSyncError(value.lastError)) &&
+    (value.pending === undefined || isPendingSyncSettings(value.pending)) &&
+    value.enabled === (value.phase === 'active') &&
+    (value.phase === 'pending') === (value.pending !== undefined);
+}
+
+function isSyncError(value: unknown): boolean {
+  return isRecord(value) && exact(value, ['occurredAt', 'message']) &&
+    typeof value.occurredAt === 'string' && typeof value.message === 'string';
+}
+
+function isPendingSyncSettings(value: unknown): boolean {
+  return isRecord(value) && exact(value, ['method', 'deviceName', 'expiresAt']) &&
+    (value.method === 'bootstrap' || value.method === 'pair') &&
+    typeof value.deviceName === 'string' && typeof value.expiresAt === 'string';
 }
 
 function isRemoteSettings(value: unknown): boolean {

@@ -76,4 +76,18 @@ describe('projection batches', () => {
       batchDigest: preview.digest,
     })).rejects.toThrow('Projection batch is stale');
   });
+
+  test('previews an exact unit list without expanding it into a provider-content cross product', async () => {
+    const { home } = await prepare();
+
+    const preview = await previewProjectionBatch({
+      home,
+      unitSelections: [
+        { provider: 'claude', content: 'rules' },
+        { provider: 'codex', content: 'mcp' },
+      ],
+    });
+
+    expect(preview.units.map((unit) => unit.key)).toEqual(['claude:rules', 'codex:mcp']);
+  });
 });

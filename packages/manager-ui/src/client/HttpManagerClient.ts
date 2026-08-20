@@ -1,5 +1,6 @@
 import {
   isJsonValue,
+  isManagerMutatingOperation,
   isManagerSnapshotV3,
   managerProtocolVersion,
   managerRpcRequestValidator,
@@ -86,7 +87,7 @@ export class HttpManagerClient implements ManagerClient {
     if (!managerRpcRequestValidator.validate(request)) {
       throw new ManagerTransportError(0, 'INVALID_INPUT', 'Manager command input failed local validation.', false);
     }
-    const expectedRevision = options.expectedRevision ?? (isMutating(operation) ? this.revision : undefined);
+    const expectedRevision = options.expectedRevision ?? (isManagerMutatingOperation(operation) ? this.revision : undefined);
     const response = await this.fetcher(`${this.baseUrl}/v2/commands`, {
       method: 'POST',
       credentials: 'include',
@@ -107,28 +108,59 @@ export class HttpManagerClient implements ManagerClient {
     if (envelope.operation !== operation || !isCommandResult(envelope.result)) {
       throw new ManagerTransportError(response.status, 'INVALID_INPUT', 'Runtime returned a mismatched command result.', false);
     }
-    this.revision = envelope.result.revision;
+    this.advanceRevision(envelope.result.revision);
     return envelope.result;
   }
 
   subscribe(listener: (invalidation: ManagerInvalidation) => void): () => void {
     let closed = false;
+    let connecting = false;
     let socket: WebSocket | undefined;
-    void this.eventTicket().then((ticket) => {
-      if (closed) return;
-      const url = new URL('/v2/events', this.baseUrl);
-      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-      url.searchParams.set('ticket', ticket);
-      socket = this.webSocketFactory(url.toString());
-      socket.addEventListener('message', (event) => {
-        const invalidation = parseInvalidation(event.data);
-        if (invalidation === undefined) return;
-        this.revision = invalidation.revision;
-        listener(invalidation);
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let retryDelayMs = 250;
+
+    const scheduleReconnect = () => {
+      if (closed || retryTimer !== undefined) return;
+      retryTimer = setTimeout(() => {
+        retryTimer = undefined;
+        connect();
+      }, retryDelayMs);
+      retryDelayMs = Math.min(retryDelayMs * 2, 10_000);
+    };
+    const connect = () => {
+      if (closed || connecting) return;
+      connecting = true;
+      void this.eventTicket().then((ticket) => {
+        if (closed) return;
+        const url = new URL('/v2/events', this.baseUrl);
+        url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+        url.searchParams.set('ticket', ticket);
+        const nextSocket = this.webSocketFactory(url.toString());
+        socket = nextSocket;
+        nextSocket.addEventListener('open', () => { retryDelayMs = 250; }, { once: true });
+        nextSocket.addEventListener('message', (event) => {
+          const invalidation = parseInvalidation(event.data);
+          if (invalidation === undefined) return;
+          this.advanceRevision(invalidation.revision);
+          listener(invalidation);
+        });
+        nextSocket.addEventListener('close', () => {
+          if (socket === nextSocket) socket = undefined;
+          scheduleReconnect();
+        }, { once: true });
+        nextSocket.addEventListener('error', () => {
+          nextSocket.close();
+          scheduleReconnect();
+        }, { once: true });
+      }).catch(scheduleReconnect).finally(() => {
+        connecting = false;
       });
-    }).catch(() => undefined);
+    };
+
+    connect();
     return () => {
       closed = true;
+      if (retryTimer !== undefined) clearTimeout(retryTimer);
       socket?.close(1000, 'Manager subscription closed');
     };
   }
@@ -145,6 +177,10 @@ export class HttpManagerClient implements ManagerClient {
       throw new ManagerTransportError(response.status, 'INVALID_INPUT', 'Runtime returned an invalid event ticket.', false);
     }
     return value.ticket;
+  }
+
+  private advanceRevision(revision: number): void {
+    this.revision = Math.max(this.revision ?? 0, revision);
   }
 }
 
@@ -185,15 +221,6 @@ function transportError(status: number, value: unknown): ManagerTransportError {
     return new ManagerTransportError(status, value.error.code, value.error.message, value.error.recoverable);
   }
   return new ManagerTransportError(status, 'OPERATION_FAILED', 'Manager runtime request failed.', true);
-}
-
-function isMutating(operation: ManagerProtocolOperation): boolean {
-  return ![
-    'snapshot', 'library.list', 'library.show', 'provider.list', 'provider.effective', 'provider.preview',
-    'project.root.list', 'project.discoveries', 'project.promotion-preview', 'skill.inspect', 'secret.status',
-    'history.list', 'activity.list', 'search', 'sync.status', 'remote.status', 'session.list', 'diagnostics',
-    'migration.preview', 'migration.status',
-  ].includes(operation);
 }
 
 function isRecord(value: unknown): value is Record<string, JsonValue> {

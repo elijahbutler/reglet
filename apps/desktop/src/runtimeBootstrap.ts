@@ -11,6 +11,8 @@ export interface RuntimeStartup {
   protocolVersion: 2;
 }
 
+let managerClientPromise: Promise<TauriManagerClient> | undefined;
+
 export function parseRuntimeStartup(value: unknown): RuntimeStartup {
   if (!isRecord(value) || !hasOnlyKeys(value, ['version', 'listening', 'url', 'managerUrl', 'pairingExpiresAt', 'remote', 'protocolVersion']) ||
     value.version !== 1 || value.listening !== true || value.remote !== false || value.protocolVersion !== 2 ||
@@ -32,6 +34,14 @@ export function parseRuntimeStartup(value: unknown): RuntimeStartup {
 }
 
 export async function bootstrapTauriManagerClient(): Promise<TauriManagerClient> {
+  managerClientPromise ??= createTauriManagerClient().catch((error: unknown) => {
+    managerClientPromise = undefined;
+    throw error;
+  });
+  return managerClientPromise;
+}
+
+async function createTauriManagerClient(): Promise<TauriManagerClient> {
   const startup = parseRuntimeStartup(await invoke<unknown>('manager_runtime_start'));
   const code = new URLSearchParams(new URL(startup.managerUrl).hash.slice(1)).get('pair');
   if (code === null || code.length === 0) throw new Error('Manager runtime did not provide its one-use bootstrap credential.');

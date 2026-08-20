@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
     time::Duration,
 };
 use tauri::{
@@ -78,8 +81,10 @@ struct ManagerRuntimeStartup {
 
 #[derive(Default)]
 struct ManagerRuntimeState {
+    lifecycle: tokio::sync::Mutex<()>,
     child: Mutex<Option<CommandChild>>,
     startup: Mutex<Option<ManagerRuntimeStartup>>,
+    generation: AtomicU64,
 }
 
 #[derive(Default)]
@@ -90,6 +95,7 @@ async fn manager_runtime_start(
     app: AppHandle,
     state: State<'_, ManagerRuntimeState>,
 ) -> Result<ManagerRuntimeStartup, ManagerRpcError> {
+    let _lifecycle = state.lifecycle.lock().await;
     if let Some(startup) = state
         .startup
         .lock()
@@ -103,6 +109,7 @@ async fn manager_runtime_start(
         .sidecar(SIDECAR_NAME)
         .map_err(|_| runtime_start_error())?
         .args(["serve", "--hostname", "127.0.0.1", "--port", "0", "--json"]);
+    let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
     let (mut events, child) = command.spawn().map_err(|_| runtime_start_error())?;
     let startup_result = tokio::time::timeout(RUNTIME_STARTUP_TIMEOUT, async {
         let mut stdout = Vec::new();
@@ -139,16 +146,37 @@ async fn manager_runtime_start(
     };
     *state.child.lock().map_err(|_| runtime_state_error())? = Some(child);
     *state.startup.lock().map_err(|_| runtime_state_error())? = Some(startup.clone());
-    tauri::async_runtime::spawn(async move { while events.recv().await.is_some() {} });
+    let runtime_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = events.recv().await {
+            if !matches!(event, CommandEvent::Terminated(_) | CommandEvent::Error(_)) {
+                continue;
+            }
+            let runtime_state = runtime_app.state::<ManagerRuntimeState>();
+            let _lifecycle = runtime_state.lifecycle.lock().await;
+            if runtime_state.generation.load(Ordering::SeqCst) == generation {
+                let _ = runtime_state.child.lock().map(|mut child| child.take());
+                let _ = runtime_state
+                    .startup
+                    .lock()
+                    .map(|mut startup| startup.take());
+            }
+            break;
+        }
+    });
     Ok(startup)
 }
 
 #[tauri::command]
-fn manager_runtime_stop(state: State<'_, ManagerRuntimeState>) -> Result<(), ManagerRpcError> {
-    stop_manager_runtime(&state)
+async fn manager_runtime_stop(
+    state: State<'_, ManagerRuntimeState>,
+) -> Result<(), ManagerRpcError> {
+    stop_manager_runtime(&state).await
 }
 
-fn stop_manager_runtime(state: &ManagerRuntimeState) -> Result<(), ManagerRpcError> {
+async fn stop_manager_runtime(state: &ManagerRuntimeState) -> Result<(), ManagerRpcError> {
+    let _lifecycle = state.lifecycle.lock().await;
+    state.generation.fetch_add(1, Ordering::SeqCst);
     if let Some(child) = state
         .child
         .lock()
@@ -413,8 +441,11 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if matches!(event, WindowEvent::Destroyed) && window.label() == "main" {
-                let state = window.state::<ManagerRuntimeState>();
-                let _ = stop_manager_runtime(&state);
+                let app = window.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = app.state::<ManagerRuntimeState>();
+                    let _ = stop_manager_runtime(&state).await;
+                });
             }
         })
         .invoke_handler(tauri::generate_handler![

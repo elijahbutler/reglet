@@ -2,7 +2,13 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { newActiveSyncV2State, resolveSyncV2Conflict, saveSyncV2State } from '../src/index.js';
+import {
+  inspectSyncV2Conflict,
+  newActiveSyncV2State,
+  resolveSyncV2Conflict,
+  saveSyncV2State,
+  sha256String,
+} from '../src/index.js';
 
 let home: string | undefined;
 
@@ -27,12 +33,43 @@ describe('encrypted sync conflict resolution', () => {
       keyEpoch: 1,
       credentialId: 'credential',
     });
-    state.files['rules/general.md'] = { objectId: 'object', revision: 2, hash: 'remote-hash', conflicted: true };
+    state.files['rules/general.md'] = { objectId: 'object', revision: 2, hash: sha256String('remote\n'), conflicted: true };
     await saveSyncV2State(state, home);
+
+    expect(await inspectSyncV2Conflict('rules/general.md', home)).toEqual({
+      version: 1,
+      path: 'rules/general.md',
+      local: { state: 'text', content: 'local\n', size: 6, hash: sha256String('local\n') },
+      remote: { state: 'text', content: 'remote\n', size: 7, hash: sha256String('remote\n') },
+    });
 
     await resolveSyncV2Conflict('rules/general.md', 'theirs', home);
 
     expect(await Bun.file(localPath).text()).toBe('remote\n');
     expect(await Bun.file(conflictPath).exists()).toBe(false);
+  });
+
+  test('refuses a changed remote conflict copy', async () => {
+    home = await mkdtemp(path.join(tmpdir(), 'reglet-sync-resolution-tamper-'));
+    const localPath = path.join(home, 'rules', 'general.md');
+    const conflictPath = path.join(home, 'rules', 'general.conflict-Mac.md');
+    await mkdir(path.dirname(localPath), { recursive: true });
+    await writeFile(localPath, 'local\n');
+    await writeFile(conflictPath, 'remote\n');
+    const state = newActiveSyncV2State({
+      serverUrl: 'https://sync.example',
+      vaultId: 'vault',
+      deviceId: 'device',
+      deviceName: 'Mac',
+      keyEpoch: 1,
+      credentialId: 'credential',
+    });
+    state.files['rules/general.md'] = { objectId: 'object', revision: 2, hash: sha256String('remote\n'), conflicted: true };
+    await saveSyncV2State(state, home);
+    await writeFile(conflictPath, 'changed\n');
+
+    await expect(inspectSyncV2Conflict('rules/general.md', home)).rejects.toThrow('changed after sync');
+    await expect(resolveSyncV2Conflict('rules/general.md', 'theirs', home)).rejects.toThrow('changed after sync');
+    expect(await Bun.file(localPath).text()).toBe('local\n');
   });
 });

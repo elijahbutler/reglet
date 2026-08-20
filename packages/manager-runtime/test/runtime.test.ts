@@ -20,7 +20,7 @@ afterEach(async () => {
 async function runtimeFixture(scope: 'read' | 'write' | 'admin' = 'admin') {
   home = await mkdtemp(path.join(tmpdir(), 'reglet-runtime-'));
   await mkdir(home, { recursive: true });
-  const runtime = createManagerRuntime({ home, watchProjects: false });
+  const runtime = createManagerRuntime({ home, watchProjects: false, watchExternalChanges: false });
   const state = await LocalState.open(home);
   const pairing = state.createPairingCredential(scope);
   state.close();
@@ -141,7 +141,7 @@ describe('manager runtime', () => {
     await Promise.all(artifacts.map((artifact) => writeFile(path.join(home ?? '', artifact.locator.path), `# ${artifact.title}\n`)));
     await saveLibraryManifest({ schemaVersion: 2, artifacts, tombstones: [] }, home);
     const startedAt = performance.now();
-    const runtime = createManagerRuntime({ home, watchProjects: false });
+    const runtime = createManagerRuntime({ home, watchProjects: false, watchExternalChanges: false });
     const response = await runtime.app.request('/readyz');
     const elapsedMs = performance.now() - startedAt;
 

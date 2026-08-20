@@ -40,7 +40,6 @@ export function ProjectInboxWorkbench({ client, snapshot, onRefresh, onError }: 
     await client.command('project.promote', {
       discoveryId: selected.id,
       targets: selected.recognizedBy,
-      confirmExecutables: true,
       ...(firstServerName(preview) === undefined ? {} : { serverName: firstServerName(preview) }),
     });
     setPreview(undefined);
@@ -118,7 +117,7 @@ function PromotionSummary({ preview }: { preview: JsonValue }) {
       <dl className="rg-key-values">
         <div><dt>Kind</dt><dd>{readString(preview, 'kind') || 'Unknown'}</dd></div>
         <div><dt>Mode</dt><dd>{readString(preview, 'mode') || 'Normalized MCP'}</dd></div>
-        <div><dt>Server</dt><dd>{firstServerName(preview) ?? '—'}</dd></div>
+        <div><dt>Server</dt><dd>{firstServerName(preview) ?? 'None'}</dd></div>
       </dl>
     </section>
   );

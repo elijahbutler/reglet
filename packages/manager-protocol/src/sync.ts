@@ -33,7 +33,7 @@ export interface SyncDeviceSummary {
 
 export interface SyncPendingConnection {
   method: 'bootstrap' | 'pair';
-  status: 'pending' | 'approved' | 'claimed' | 'cancelled';
+  status: 'pending' | 'approved' | 'claimed' | 'cancelled' | 'expired';
   deviceName: string;
   code: string | null;
   fingerprint: string | null;
@@ -51,7 +51,9 @@ export interface SyncSnapshot {
   currentDeviceName: string | null;
   pending: SyncPendingConnection | null;
   devices: SyncDeviceSummary[];
+  conflicts: string[];
   lastSync: SyncLastRunSummary | null;
+  lastError: { occurredAt: string; message: string } | null;
   keyRotationRequired: boolean;
 }
 
@@ -61,17 +63,30 @@ export interface SyncInvitation {
   expiresAt: string;
 }
 
+export type SyncConflictContent =
+  | { state: 'text'; content: string; size: number; hash: string }
+  | { state: 'deleted'; content: null; size: 0; hash: null }
+  | { state: 'binary' | 'too-large'; content: null; size: number; hash: string };
+
+export interface SyncConflictPreview {
+  version: 1;
+  path: string;
+  local: SyncConflictContent;
+  remote: SyncConflictContent;
+}
+
 export function isSyncSnapshot(value: unknown): value is SyncSnapshot {
   if (!isRecord(value) || !hasOnlyKeys(value, [
     'version', 'previewAcknowledged', 'phase', 'serverUrl', 'serverHost', 'compatibility',
-    'currentDeviceId', 'currentDeviceName', 'pending', 'devices', 'lastSync', 'keyRotationRequired',
+    'currentDeviceId', 'currentDeviceName', 'pending', 'devices', 'conflicts', 'lastSync', 'lastError', 'keyRotationRequired',
   ])) return false;
   return value.version === 1 && typeof value.previewAcknowledged === 'boolean' &&
     isPhase(value.phase) && nullableString(value.serverUrl) && nullableString(value.serverHost) &&
     isCompatibility(value.compatibility) && nullableString(value.currentDeviceId) &&
     nullableString(value.currentDeviceName) && (value.pending === null || isPending(value.pending)) &&
     Array.isArray(value.devices) && value.devices.every(isDevice) &&
-    (value.lastSync === null || isLastRun(value.lastSync)) && typeof value.keyRotationRequired === 'boolean';
+    stringArray(value.conflicts) && (value.lastSync === null || isLastRun(value.lastSync)) &&
+    (value.lastError === null || isSyncError(value.lastError)) && typeof value.keyRotationRequired === 'boolean';
 }
 
 export function isSyncRunResult(value: unknown): value is SyncRunResult {
@@ -87,6 +102,22 @@ export function isSyncInvitation(value: unknown): value is SyncInvitation {
     typeof value.id === 'string' && typeof value.connectUrl === 'string' && typeof value.expiresAt === 'string';
 }
 
+export function isSyncConflictPreview(value: unknown): value is SyncConflictPreview {
+  return isRecord(value) && hasOnlyKeys(value, ['version', 'path', 'local', 'remote']) &&
+    value.version === 1 && typeof value.path === 'string' &&
+    isSyncConflictContent(value.local) && isSyncConflictContent(value.remote);
+}
+
+function isSyncConflictContent(value: unknown): value is SyncConflictContent {
+  if (!isRecord(value) || !hasOnlyKeys(value, ['state', 'content', 'size', 'hash']) || !nonNegative(value.size)) return false;
+  if (value.state === 'text') {
+    return typeof value.content === 'string' && typeof value.hash === 'string' &&
+      new TextEncoder().encode(value.content).byteLength === value.size;
+  }
+  if (value.state === 'deleted') return value.content === null && value.size === 0 && value.hash === null;
+  return (value.state === 'binary' || value.state === 'too-large') && value.content === null && typeof value.hash === 'string';
+}
+
 function isDevice(value: unknown): value is SyncDeviceSummary {
   return isRecord(value) && hasOnlyKeys(value, [
     'id', 'name', 'current', 'status', 'createdAt', 'lastSeenAt', 'revokedAt',
@@ -99,7 +130,8 @@ function isPending(value: unknown): value is SyncPendingConnection {
   return isRecord(value) && hasOnlyKeys(value, [
     'method', 'status', 'deviceName', 'code', 'fingerprint', 'expiresAt',
   ]) && (value.method === 'bootstrap' || value.method === 'pair') &&
-    (value.status === 'pending' || value.status === 'approved' || value.status === 'claimed' || value.status === 'cancelled') &&
+    (value.status === 'pending' || value.status === 'approved' || value.status === 'claimed' ||
+      value.status === 'cancelled' || value.status === 'expired') &&
     typeof value.deviceName === 'string' && nullableString(value.code) && nullableString(value.fingerprint) &&
     typeof value.expiresAt === 'string';
 }
@@ -110,6 +142,11 @@ function isLastRun(value: unknown): value is SyncLastRunSummary {
   ]) && typeof value.completedAt === 'string' && nonNegative(value.pulled) && nonNegative(value.pushed) &&
     nonNegative(value.merged) && nonNegative(value.conflicts) && nonNegative(value.deleted) &&
     typeof value.providerReviewRequired === 'boolean';
+}
+
+function isSyncError(value: unknown): value is { occurredAt: string; message: string } {
+  return isRecord(value) && hasOnlyKeys(value, ['occurredAt', 'message']) &&
+    typeof value.occurredAt === 'string' && typeof value.message === 'string';
 }
 
 function isPhase(value: unknown): value is SyncConnectionPhase {

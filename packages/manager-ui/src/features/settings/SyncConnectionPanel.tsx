@@ -8,7 +8,7 @@ const installGuideUrl = 'https://github.com/elijahbutler/reglet/blob/main/docs/s
 
 interface PendingConnection {
   method: 'bootstrap' | 'pair';
-  status: 'pending' | 'approved' | 'claimed' | 'cancelled';
+  status: 'pending' | 'approved' | 'claimed' | 'cancelled' | 'expired';
   code: string | null;
   fingerprint: string | null;
   expiresAt: string;
@@ -32,10 +32,10 @@ export function SyncConnectionPanel({ client, snapshot, onRefresh, onError, onCo
       const result = await client.command('sync.snapshot', {});
       const connection = pendingFromSnapshot(result.data);
       setPending(connection);
-    } catch {
-      // A disconnected manager may not have a compatibility snapshot yet.
+    } catch (error) {
+      onError(error instanceof Error ? error.message : 'Reglet could not read the encrypted sync connection.');
     }
-  }, [client]);
+  }, [client, onError]);
 
   useEffect(() => { void loadConnection(); }, [loadConnection]);
 
@@ -73,7 +73,13 @@ export function SyncConnectionPanel({ client, snapshot, onRefresh, onError, onCo
     await onRefresh();
   });
 
-  if (sync?.enabled) {
+  const cancel = () => run(async () => {
+    await client.command('sync.pair.cancel', {});
+    setPending(null);
+    await onRefresh();
+  });
+
+  if (sync?.phase === 'active') {
     return <div className="rg-sync-connection rg-sync-connection--connected">
       <div className="rg-connection-summary"><CheckCircle2 size={18} /><span><strong>Encrypted server connected</strong><small>{sync.lastCompletedAt === undefined ? 'Initial sync is still required.' : `Last synced ${new Date(sync.lastCompletedAt).toLocaleString()}`}</small></span></div>
       <Button disabled={busy} icon={<RefreshCw className={busy ? 'rg-spin' : undefined} size={14} />} onClick={() => void syncNow()}>{busy ? 'Syncing…' : sync.lastCompletedAt === undefined ? 'Run initial sync' : 'Sync now'}</Button>
@@ -82,12 +88,17 @@ export function SyncConnectionPanel({ client, snapshot, onRefresh, onError, onCo
 
   if (pending !== null) {
     const ready = (pending.status === 'approved' || pending.status === 'claimed') && pending.fingerprint !== null;
+    const expired = pending.status === 'expired';
     return <div className="rg-sync-connection rg-sync-pending" aria-live="polite">
-      <div className="rg-connection-summary"><ShieldCheck size={18} /><span><strong>{pending.method === 'bootstrap' ? 'Approve this device in the owner dashboard' : 'Approve this device from a connected Reglet device'}</strong><small>The fingerprint must match before Reglet accepts encryption keys.</small></span></div>
+      <div className="rg-connection-summary"><ShieldCheck size={18} /><span><strong>{expired ? 'This connection request expired' : pending.method === 'bootstrap' ? 'Approve this device in the owner dashboard' : 'Approve this device from a connected Reglet device'}</strong><small>{expired ? 'Clear it before starting a new encrypted connection.' : 'The fingerprint must match before Reglet accepts encryption keys.'}</small></span></div>
       {pending.code === null ? null : <ConnectionValue label="Request code" value={pending.code} />}
       {pending.fingerprint === null ? null : <ConnectionValue label="Fingerprint" value={pending.fingerprint} />}
       <small className="rg-connection-expiry">Expires {new Date(pending.expiresAt).toLocaleString()}</small>
-      <div className="rg-connection-actions"><Button tone="secondary" disabled={busy} icon={<RefreshCw size={14} />} onClick={() => void check()}>Check approval</Button><Button tone="primary" disabled={busy || !ready} onClick={() => void finish()}>Confirm fingerprint</Button></div>
+      <div className="rg-connection-actions">
+        {expired ? null : <Button tone="secondary" disabled={busy} icon={<RefreshCw size={14} />} onClick={() => void check()}>Check approval</Button>}
+        {expired ? null : <Button tone="primary" disabled={busy || !ready} onClick={() => void finish()}>Confirm fingerprint</Button>}
+        <Button tone="secondary" disabled={busy} onClick={() => void cancel()}>{expired ? 'Clear expired request' : 'Cancel connection'}</Button>
+      </div>
     </div>;
   }
 
@@ -138,7 +149,7 @@ function pendingFromStatus(value: JsonValue): PendingConnection {
   if (!isRecord(value) || (value.method !== 'bootstrap' && value.method !== 'pair')) {
     throw new Error('The sync server returned an invalid approval status.');
   }
-  const statuses = ['pending', 'approved', 'claimed', 'cancelled'] as const;
+  const statuses = ['pending', 'approved', 'claimed', 'cancelled', 'expired'] as const;
   const status = statuses.find((candidate) => candidate === value.status);
   if (status === undefined) throw new Error('The sync server returned an unknown approval state.');
   return {
