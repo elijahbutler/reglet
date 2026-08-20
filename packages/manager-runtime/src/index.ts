@@ -144,6 +144,8 @@ export function createManagerRuntime(options: ManagerRuntimeOptions = {}): Manag
       status: mapped.status,
       code: mapped.code,
       operation: context.req.path,
+      errorName: error.name,
+      errorMessage: error.message,
     });
     const response = failureResponse(
       operationFromPath(context.req.path),
@@ -281,11 +283,14 @@ export function createManagerRuntime(options: ManagerRuntimeOptions = {}): Manag
         scope: context.get('session').scope,
       });
     } catch (error) {
-      const mapped = mapRuntimeError(error instanceof Error ? error : new Error(String(error)));
+      const runtimeError = error instanceof Error ? error : new Error(String(error));
+      const mapped = mapRuntimeError(runtimeError);
       recordRuntimeLog(home, 'command-error', {
         status: mapped.status,
         code: mapped.code,
         operation: request.operation,
+        errorName: runtimeError.name,
+        errorMessage: runtimeError.message,
       });
       const response = failureResponse(
         request.operation,

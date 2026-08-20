@@ -91,6 +91,39 @@ describe('manager runtime', () => {
     await runtime.dispose();
   });
 
+  test('records the redacted underlying command error in local diagnostics', async () => {
+    const { runtime, token } = await runtimeFixture();
+    const response = await runtime.app.fetch(commandRequest(token, {
+      protocolVersion: 2,
+      operation: 'provider.preview',
+      input: {
+        artifact: 'token=diagnostic-secret',
+        provider: 'codex',
+      },
+    }));
+
+    expect(response.status).toBe(500);
+    const logPath = path.join(home ?? '', '.state', 'logs', 'runtime.log');
+    let log = '';
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (await Bun.file(logPath).exists()) {
+        log = await readFile(logPath, 'utf8');
+        if (log.includes('Unknown artifact')) break;
+      }
+      await Bun.sleep(10);
+    }
+
+    const entry = JSON.parse(log.trim().split('\n').at(-1) ?? '{}') as {
+      errorName?: string;
+      errorMessage?: string;
+    };
+    expect(entry).toMatchObject({
+      errorName: 'Error',
+      errorMessage: 'Unknown artifact: [REDACTED]',
+    });
+    await runtime.dispose();
+  });
+
   test('enforces the same session scope over HTTP commands and event tickets', async () => {
     const { runtime, token } = await runtimeFixture('read');
     const mutation = await runtime.app.fetch(commandRequest(token, {

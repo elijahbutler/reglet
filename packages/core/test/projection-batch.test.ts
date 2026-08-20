@@ -4,6 +4,8 @@ import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { defaultConfig, saveConfig, type ProviderName } from '../src/config.js';
 import { applyProjectionBatch, previewProjectionBatch } from '../src/engine/batch.js';
+import { detectDrift } from '../src/engine/drift.js';
+import { saveManifest } from '../src/manifest.js';
 import { getAdapter } from '../src/providers/registry.js';
 
 let currentHome: string | undefined;
@@ -16,6 +18,7 @@ afterEach(async () => {
   currentProviderHome = undefined;
   delete process.env.REGLET_HOME;
   delete process.env.REGLET_PROVIDER_HOME;
+  delete process.env.REGLET_BATCH_TOKEN;
 });
 
 async function prepare(): Promise<{ home: string; providers: ProviderName[] }> {
@@ -89,5 +92,75 @@ describe('projection batches', () => {
     });
 
     expect(preview.units.map((unit) => unit.key)).toEqual(['claude:rules', 'codex:mcp']);
+  });
+
+  test('previews rules when an unrelated MCP credential is unavailable', async () => {
+    const { home } = await prepare();
+    const outputPath = path.join(currentProviderHome ?? '', '.claude.json');
+    await mkdir(path.join(home, 'mcp'), { recursive: true });
+    await writeFile(
+      path.join(home, 'mcp', 'servers.json'),
+      `${JSON.stringify({
+        mcpServers: {
+          managed: {
+            command: 'node',
+          },
+          github: {
+            displayName: 'Github',
+            server: {
+              command: 'node',
+              env: {
+                TOKEN: { source: 'process-env', name: 'REGLET_BATCH_TOKEN', required: true },
+              },
+            },
+          },
+        },
+      }, null, 2)}\n`,
+    );
+    await writeFile(
+      outputPath,
+      `${JSON.stringify({ mcpServers: { managed: { command: 'node' } } }, null, 2)}\n`,
+    );
+    await saveManifest({
+      version: 1,
+      outputs: {
+        [outputPath]: {
+          provider: 'claude',
+          content: 'mcp',
+          hash: 'previous-hash',
+          appliedAt: '2026-08-20T00:00:00.000Z',
+          backedUpTo: null,
+          managedKeys: ['managed'],
+        },
+      },
+    }, home);
+    delete process.env.REGLET_BATCH_TOKEN;
+
+    const rules = await previewProjectionBatch({
+      home,
+      unitSelections: [{ provider: 'claude', content: 'rules' }],
+    });
+    const mcp = await previewProjectionBatch({
+      home,
+      unitSelections: [{ provider: 'claude', content: 'mcp' }],
+    });
+    const drift = await detectDrift(home, { providers: ['claude'], contents: ['mcp'] });
+
+    expect(rules.units).toEqual([
+      expect.objectContaining({ key: 'claude:rules', status: 'ready' }),
+    ]);
+    expect(mcp.units).toEqual([
+      expect.objectContaining({
+        key: 'claude:mcp',
+        status: 'blocked',
+        validationIssues: [expect.stringContaining('Missing process environment for MCP server Github')],
+      }),
+    ]);
+    expect(drift).toEqual([{
+      outputPath,
+      provider: 'claude',
+      content: 'mcp',
+      status: 'clean',
+    }]);
   });
 });

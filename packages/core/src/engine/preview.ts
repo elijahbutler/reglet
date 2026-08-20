@@ -118,7 +118,10 @@ async function previewApplyStructuredBody(
   const contents = options.contents ?? ['rules', 'skills', 'mcp'];
   const validationIssues = await collectValidationIssues(home, providers, contents);
   const driftByPath = new Map<string, DriftStatus>(
-    (await detectDrift(home)).map((record): [string, DriftStatus] => [record.outputPath, record.status]),
+    (await detectDrift(home, {
+      providers: providers.map((provider) => provider.id),
+      contents,
+    })).map((record): [string, DriftStatus] => [record.outputPath, record.status]),
   );
   const entries: StructuredApplyPreviewEntry[] = [];
 
