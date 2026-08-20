@@ -248,7 +248,6 @@ async function withRequestTimeout<Result>(
       reject(error);
       controller.abort(error);
     }, timeoutMs);
-    timer.unref?.();
   });
   try {
     return await Promise.race([request(controller.signal), timeout]);
