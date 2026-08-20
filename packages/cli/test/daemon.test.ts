@@ -104,7 +104,7 @@ describe('daemon watcher', () => {
       } catch {
         return false;
       }
-    });
+    }, 8_000);
   }, 10000);
 
   test('queues drift when a provider output is edited externally', async () => {

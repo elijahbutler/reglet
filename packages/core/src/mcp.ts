@@ -44,6 +44,102 @@ export interface McpMutationResult {
   scope: McpScope;
 }
 
+export interface RedactedMcpArguments {
+  args: string[];
+  redacted: boolean;
+}
+
+const redactedArgument = '<redacted:argument>';
+const credentialArgumentName = '(?:access[-_]?token|api[-_]?key|auth(?:orization)?|auth[-_]?token|bearer[-_]?token|client[-_]?secret|credential|password|passwd|secret|token)';
+const credentialArgumentFlag = new RegExp(`^--?${credentialArgumentName}$`, 'i');
+const inlineCredentialArgument = new RegExp(`^(--?${credentialArgumentName}\\s*[=:]\\s*)(.+)$`, 'i');
+const labeledCredentialValue = new RegExp(`(\\b${credentialArgumentName}\\b\\s*[=:]\\s*)(?:Bearer\\s+)?[^\\s,;&]+`, 'gi');
+const urlCredentials = /(https?:\/\/)[^/\s:@]+:[^@\s/]+@/gi;
+
+/** Hides credential-like CLI values while preserving enough structure to audit an MCP command. */
+export function redactMcpCredentialArguments(args: readonly string[]): RedactedMcpArguments {
+  let redactNext = false;
+  let redacted = false;
+  const safeArgs = args.map((argument) => {
+    if (redactNext) {
+      redactNext = false;
+      redacted = true;
+      return redactedArgument;
+    }
+    if (credentialArgumentFlag.test(argument)) {
+      redactNext = true;
+      return argument;
+    }
+    const inline = argument.replace(inlineCredentialArgument, `$1${redactedArgument}`);
+    const labeled = inline.replace(labeledCredentialValue, `$1${redactedArgument}`);
+    const safe = labeled.replace(urlCredentials, `$1${redactedArgument}@`);
+    if (safe !== argument) redacted = true;
+    return safe;
+  });
+  return { args: safeArgs, redacted };
+}
+
+/** Scrubs JSON and TOML argument arrays before provider previews cross the manager boundary. */
+export function redactMcpCredentialArgumentsInText(content: string): string {
+  const field = /(?:"args"|args)\s*[:=]\s*\[/g;
+  let cursor = 0;
+  let output = '';
+  for (let match = field.exec(content); match !== null; match = field.exec(content)) {
+    const arrayStart = field.lastIndex - 1;
+    const arrayEnd = findArgumentArrayEnd(content, arrayStart + 1);
+    if (arrayEnd === -1) break;
+    output += content.slice(cursor, arrayStart + 1);
+    output += redactArgumentArrayBody(content.slice(arrayStart + 1, arrayEnd));
+    output += ']';
+    cursor = arrayEnd + 1;
+    field.lastIndex = cursor;
+  }
+  return cursor === 0 ? content : output + content.slice(cursor);
+}
+
+function findArgumentArrayEnd(content: string, start: number): number {
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  let depth = 0;
+  for (let index = start; index < content.length; index += 1) {
+    const character = content[index];
+    if (quote !== null) {
+      if (quote === '"' && escaped) {
+        escaped = false;
+      } else if (quote === '"' && character === '\\') {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") quote = character;
+    if (character === '[') depth += 1;
+    if (character === ']') {
+      if (depth === 0) return index;
+      depth -= 1;
+    }
+  }
+  return -1;
+}
+
+function redactArgumentArrayBody(body: string): string {
+  const quotedArgument = /"((?:\\.|[^"\\])*)"|'([^']*)'/g;
+  const values: string[] = [];
+  for (let match = quotedArgument.exec(body); match !== null; match = quotedArgument.exec(body)) {
+    values.push(match[1] ?? match[2] ?? '');
+  }
+  const redacted = redactMcpCredentialArguments(values).args;
+  let index = 0;
+  return body.replace(quotedArgument, (quoted, doubleQuoted: string | undefined, singleQuoted: string | undefined) => {
+    const original = doubleQuoted ?? singleQuoted ?? '';
+    const safe = redacted[index] ?? original;
+    index += 1;
+    if (safe === original) return quoted;
+    return doubleQuoted === undefined ? `'${safe}'` : `"${safe}"`;
+  });
+}
+
 export interface EffectiveMcpServerEntry extends McpServerDefinition {
   scope: McpScope;
   overrideOf: string | null;

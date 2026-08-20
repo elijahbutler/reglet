@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { TauriManagerClient } from '@reglet/manager-ui';
 
 export interface RuntimeStartup {
@@ -10,6 +11,10 @@ export interface RuntimeStartup {
   remote: false;
   protocolVersion: 2;
 }
+
+let managerClientPromise: Promise<TauriManagerClient> | undefined;
+let runtimeTerminationListenerPromise: Promise<UnlistenFn> | undefined;
+const runtimeTerminationListeners = new Set<() => void>();
 
 export function parseRuntimeStartup(value: unknown): RuntimeStartup {
   if (!isRecord(value) || !hasOnlyKeys(value, ['version', 'listening', 'url', 'managerUrl', 'pairingExpiresAt', 'remote', 'protocolVersion']) ||
@@ -32,6 +37,35 @@ export function parseRuntimeStartup(value: unknown): RuntimeStartup {
 }
 
 export async function bootstrapTauriManagerClient(): Promise<TauriManagerClient> {
+  await ensureRuntimeTerminationListener();
+  if (managerClientPromise === undefined) {
+    const pending = createTauriManagerClient();
+    managerClientPromise = pending;
+    void pending.catch(() => {
+      if (managerClientPromise === pending) managerClientPromise = undefined;
+    });
+  }
+  return managerClientPromise;
+}
+
+export function subscribeManagerRuntimeTermination(listener: () => void): () => void {
+  runtimeTerminationListeners.add(listener);
+  void ensureRuntimeTerminationListener().catch(() => undefined);
+  return () => runtimeTerminationListeners.delete(listener);
+}
+
+async function ensureRuntimeTerminationListener(): Promise<void> {
+  runtimeTerminationListenerPromise ??= listen('manager-runtime-terminated', () => {
+    managerClientPromise = undefined;
+    for (const listener of runtimeTerminationListeners) listener();
+  }).catch((error: unknown) => {
+    runtimeTerminationListenerPromise = undefined;
+    throw error;
+  });
+  await runtimeTerminationListenerPromise;
+}
+
+async function createTauriManagerClient(): Promise<TauriManagerClient> {
   const startup = parseRuntimeStartup(await invoke<unknown>('manager_runtime_start'));
   const code = new URLSearchParams(new URL(startup.managerUrl).hash.slice(1)).get('pair');
   if (code === null || code.length === 0) throw new Error('Manager runtime did not provide its one-use bootstrap credential.');

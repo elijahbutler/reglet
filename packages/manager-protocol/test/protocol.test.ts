@@ -3,6 +3,17 @@ import { readFileSync } from 'node:fs';
 import Ajv from 'ajv';
 import {
   failureResponse,
+  isManagerProjectionReviewV3,
+  isManagerProviderBackupPurgeResultV3,
+  isManagerProviderBackupPurgeReviewV3,
+  isManagerProviderDetachResultV3,
+  isManagerProviderDetachReviewV3,
+  isManagerProviderRestoreResultV3,
+  isManagerProviderRestoreReviewV3,
+  isManagerRecoveryRestoreResultV3,
+  isManagerRecoveryReviewV3,
+  isSyncConflictPreview,
+  isManagerMutatingOperation,
   managerProtocolErrorCodes,
   managerProtocolOperations,
   managerProtocolV1Operations,
@@ -42,6 +53,9 @@ describe('manager protocol v1', () => {
     expect(managerProtocolOperations).toContain('structured-preview.apply');
     expect(managerProtocolOperations).toContain('legacy-state.clear');
     expect(managerProtocolErrorCodes).toContain('STALE_PLAN');
+    expect(isManagerMutatingOperation('library.save')).toBe(true);
+    expect(isManagerMutatingOperation('sync.snapshot')).toBe(false);
+    expect(isManagerMutatingOperation('sync.pair.status')).toBe(false);
   });
 
   test('has a valid request fixture for every operation', () => {
@@ -98,6 +112,219 @@ describe('manager protocol v2', () => {
     }
     expect(arrayProperty(protocolV2Fixtures, 'responses').every((response) => managerRpcResponseValidator.validate(response))).toBe(true);
     expect(arrayProperty(protocolV2Fixtures, 'malformed').every((request) => !managerRpcRequestValidator.validate(request))).toBe(true);
+    expect(managerRpcRequestValidator.validate({
+      protocolVersion: 2,
+      operation: 'provider.apply',
+      input: {
+        batchDigest: 'digest',
+        units: [
+          { provider: 'codex', content: 'rules', digest: 'first' },
+          { provider: 'codex', content: 'rules', digest: 'second' },
+        ],
+      },
+    })).toBe(false);
+    expect(managerRpcRequestValidator.validate({
+      protocolVersion: 2,
+      operation: 'provider.review',
+      input: {
+        units: [
+          { provider: 'codex', content: 'rules' },
+          { provider: 'codex', content: 'rules' },
+        ],
+      },
+    })).toBe(false);
+  });
+
+  test('validates the redacted projection review contract', () => {
+    const review = {
+      version: 1,
+      digest: 'batch-digest',
+      units: [{
+        key: 'codex:rules',
+        provider: 'codex',
+        content: 'rules',
+        digest: 'unit-digest',
+        masterRevision: 'master-revision',
+        status: 'ready',
+        validationIssues: [],
+        validationIssueCodes: [],
+        entries: [{
+          operation: 'write',
+          path: '/provider/AGENTS.md',
+          diff: '@@ -1 +1 @@',
+          driftStatus: 'clean',
+          expectedTargetHash: 'before-hash',
+          resultingTargetHash: 'after-hash',
+          snapshotBehavior: 'snapshot-before-write',
+          backupBehavior: 'backup-before-write',
+        }],
+        artifacts: [{ id: 'artifact-id', title: 'General rules', kind: 'instruction' }],
+        requiresDriftConfirmation: false,
+      }],
+    };
+    expect(isManagerProjectionReviewV3(review)).toBe(true);
+    expect(isManagerProjectionReviewV3({
+      ...review,
+      units: [{
+        ...review.units[0],
+        entries: [{ ...review.units[0]?.entries[0], before: 'private provider content' }],
+      }],
+    })).toBe(false);
+    expect(isManagerProjectionReviewV3({
+      ...review,
+      units: [{ ...review.units[0], requiresDriftConfirmation: true }],
+    })).toBe(false);
+  });
+
+  test('validates exact sync conflict comparisons', () => {
+    const preview = {
+      version: 1,
+      path: 'rules/AGENTS.md',
+      local: { state: 'text', content: 'local\n', size: 6, hash: 'local-hash' },
+      remote: { state: 'deleted', content: null, size: 0, hash: null },
+    };
+    expect(isSyncConflictPreview(preview)).toBe(true);
+    expect(isSyncConflictPreview({
+      ...preview,
+      local: { ...preview.local, size: 5 },
+    })).toBe(false);
+    expect(isSyncConflictPreview({
+      ...preview,
+      remote: { state: 'binary', content: 'raw', size: 3, hash: 'hash' },
+    })).toBe(false);
+  });
+
+  test('validates exact receipt-bound recovery contracts', () => {
+    const review = {
+      version: 1,
+      receipt: {
+        id: 'receipt-id',
+        lifecycle: 'completed',
+        startedAt: '2026-08-19T12:00:00.000Z',
+        completedAt: '2026-08-19T12:00:01.000Z',
+        providers: ['codex'],
+        contents: ['rules'],
+        targetCount: 1,
+        restorable: true,
+      },
+      digest: 'review-digest',
+      targets: [{
+        path: '/provider/AGENTS.md',
+        action: 'restored',
+        current: { kind: 'file', hash: 'current-hash', size: 12 },
+        restored: { kind: 'file', hash: 'restored-hash', size: 10 },
+      }],
+    };
+    expect(isManagerRecoveryReviewV3(review)).toBe(true);
+    expect(isManagerRecoveryReviewV3({
+      ...review,
+      targets: [{ ...review.targets[0], snapshot: '/private/snapshot' }],
+    })).toBe(false);
+    expect(isManagerRecoveryReviewV3({
+      ...review,
+      receipt: { ...review.receipt, targetCount: 2 },
+    })).toBe(false);
+    expect(isManagerRecoveryRestoreResultV3({
+      version: 1,
+      receiptId: 'receipt-id',
+      undoReceiptId: 'undo-receipt-id',
+      actions: [{ path: '/provider/AGENTS.md', action: 'restored' }],
+    })).toBe(true);
+    expect(managerRpcRequestValidator.validate({
+      protocolVersion: 2,
+      operation: 'recovery.restore',
+      input: { receiptId: 'receipt-id', digest: 'review-digest', confirmed: false },
+    })).toBe(false);
+  });
+
+  test('validates exact provider restore contracts', () => {
+    const review = {
+      version: 1,
+      provider: 'codex',
+      digest: 'restore-digest',
+      status: 'ready',
+      issues: [],
+      targets: [{
+        path: '/provider/AGENTS.md',
+        content: 'rules',
+        action: 'restored',
+        current: { kind: 'file', hash: 'current-hash', size: 20 },
+        restored: { kind: 'file', hash: 'original-hash', size: 12 },
+      }],
+    };
+    expect(isManagerProviderRestoreReviewV3(review)).toBe(true);
+    expect(isManagerProviderRestoreReviewV3({ ...review, backupPath: '/private/backup' })).toBe(false);
+    expect(isManagerProviderRestoreReviewV3({ ...review, status: 'blocked' })).toBe(false);
+    expect(isManagerProviderRestoreResultV3({
+      version: 1,
+      provider: 'codex',
+      receiptId: 'receipt-id',
+      results: [{ path: '/provider/AGENTS.md', action: 'restored' }],
+    })).toBe(true);
+    expect(managerRpcRequestValidator.validate({
+      protocolVersion: 2,
+      operation: 'provider.restore',
+      input: { provider: 'codex', confirmed: true },
+    })).toBe(false);
+  });
+
+  test('validates exact provider detachment contracts', () => {
+    const review = {
+      version: 1,
+      provider: 'codex',
+      content: 'rules',
+      digest: 'detach-digest',
+      status: 'ready',
+      issues: [],
+      targets: [{
+        path: '/provider/AGENTS.md',
+        content: 'rules',
+        operation: 'rewrite',
+        diff: '--- before\n+++ after\n-generated header\n',
+        current: { kind: 'file', hash: 'current-hash', size: 20 },
+        resulting: { kind: 'file', hash: 'result-hash', size: 12 },
+      }],
+    };
+    expect(isManagerProviderDetachReviewV3(review)).toBe(true);
+    expect(isManagerProviderDetachReviewV3({
+      ...review,
+      targets: [{ ...review.targets[0], before: 'private provider content' }],
+    })).toBe(false);
+    expect(isManagerProviderDetachResultV3({
+      version: 1,
+      provider: 'codex',
+      content: 'rules',
+      receiptId: 'receipt-id',
+      detached: [{ path: '/provider/AGENTS.md', headerRemoved: true }],
+    })).toBe(true);
+    expect(managerRpcRequestValidator.validate({
+      protocolVersion: 2,
+      operation: 'provider.source.stop-managing',
+      input: { provider: 'codex', content: 'rules', confirmed: true },
+    })).toBe(false);
+  });
+
+  test('validates exact provider backup purge contracts', () => {
+    const review = {
+      version: 1,
+      provider: 'codex',
+      digest: 'purge-digest',
+      backup: { kind: 'directory', hash: 'backup-hash', size: 42 },
+      detachedOutputs: ['/provider/AGENTS.md'],
+    };
+    expect(isManagerProviderBackupPurgeReviewV3(review)).toBe(true);
+    expect(isManagerProviderBackupPurgeReviewV3({ ...review, backupPath: '/private/backups' })).toBe(false);
+    expect(isManagerProviderBackupPurgeResultV3({
+      version: 1,
+      provider: 'codex',
+      removed: true,
+      detachedOutputs: ['/provider/AGENTS.md'],
+    })).toBe(true);
+    expect(managerRpcRequestValidator.validate({
+      protocolVersion: 2,
+      operation: 'provider.purge-backups',
+      input: { provider: 'codex', confirmed: true },
+    })).toBe(false);
   });
 
   test('accepts Snapshot V3, rejects unknown fields, and keeps Snapshot V2 readable', () => {

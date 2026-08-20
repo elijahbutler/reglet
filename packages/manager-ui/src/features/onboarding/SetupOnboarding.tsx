@@ -3,6 +3,7 @@ import { useState } from 'react';
 import type { ManagerProviderId, ManagerSnapshotV3 } from '@reglet/manager-protocol';
 import type { ManagerClient } from '../../client/ManagerClient.js';
 import { Button } from '../../design-system/Button.js';
+import { useDialogFocus } from '../../design-system/useDialogFocus.js';
 import { SyncConnectionPanel } from '../settings/SyncConnectionPanel.js';
 
 const steps = [
@@ -33,6 +34,7 @@ export function SetupOnboarding({ client, snapshot, onRefresh, onComplete, onErr
   const [rootPath, setRootPath] = useState('');
   const [scanProject, setScanProject] = useState(true);
   const [busy, setBusy] = useState(false);
+  const dialog = useDialogFocus<HTMLElement>(true);
   const currentIndex = steps.findIndex((candidate) => candidate.id === step);
 
   const complete = async (includeSelections: boolean) => {
@@ -53,7 +55,7 @@ export function SetupOnboarding({ client, snapshot, onRefresh, onComplete, onErr
   };
 
   return <div className="rg-setup-backdrop">
-    <section className="rg-setup" role="dialog" aria-modal="true" aria-labelledby="setup-title">
+    <section ref={dialog} tabIndex={-1} className="rg-setup" role="dialog" aria-modal="true" aria-labelledby="setup-title">
       <aside className="rg-setup-rail">
         <div className="rg-setup-brand"><span className="rg-brand__mark" aria-hidden="true">R</span><span><strong>Set up Reglet</strong><small>About 2 minutes</small></span></div>
         <nav aria-label="Setup progress">

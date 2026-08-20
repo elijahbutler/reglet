@@ -5,7 +5,7 @@ import { loadConfig } from '../config.js';
 import { renderRulesFile } from '../header.js';
 import { getOutput, loadManifest } from '../manifest.js';
 import { loadMasterDir, type McpServerDef, type ResolvedMcpServerDef } from '../master.js';
-import { effectiveMcpEnvironmentDigest, listEffectiveMcpServers, listMcpServers, providerMcpScope, resolveEffectiveMcpServersEnv } from '../mcp.js';
+import { effectiveMcpEnvironmentDigest, listEffectiveMcpServers, listMcpServers, providerMcpScope, redactMcpCredentialArgumentsInText, resolveEffectiveMcpServersEnv } from '../mcp.js';
 import { providerHome, regletHome } from '../paths.js';
 import { allAdapters, getAdapter } from '../providers/registry.js';
 import type { ProviderAdapter, ProviderId } from '../providers/types.js';
@@ -338,7 +338,7 @@ async function redactMcpSecrets(
   servers: Record<string, McpServerDef>,
 ): Promise<string | null> {
   if (content === null) return null;
-  let redacted = redactLikelyEnvironmentValues(content);
+  let redacted = redactMcpCredentialArgumentsInText(redactLikelyEnvironmentValues(content));
   const secretStore = systemSecretStore();
   for (const server of Object.values(servers)) {
     for (const [key, ref] of Object.entries(server.env ?? {})) {

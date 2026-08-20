@@ -1,14 +1,23 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { LocalState, saveLibraryManifest } from '@reglet/core';
+import {
+  beginOperation,
+  listOperationReceipts,
+  LocalState,
+  saveLibraryManifest,
+} from '@reglet/core';
 import {
   isManagerSnapshotV3,
   managerRpcResponseValidator,
   type ManagerRpcResponse,
 } from '@reglet/manager-protocol';
-import { createManagerRuntime, validateManagerRuntimeBinding } from '../src/index.js';
+import {
+  createManagerRuntime,
+  serveManagerRuntime,
+  validateManagerRuntimeBinding,
+} from '../src/index.js';
 
 let home: string | undefined;
 
@@ -20,7 +29,7 @@ afterEach(async () => {
 async function runtimeFixture(scope: 'read' | 'write' | 'admin' = 'admin') {
   home = await mkdtemp(path.join(tmpdir(), 'reglet-runtime-'));
   await mkdir(home, { recursive: true });
-  const runtime = createManagerRuntime({ home, watchProjects: false });
+  const runtime = createManagerRuntime({ home, watchProjects: false, watchExternalChanges: false });
   const state = await LocalState.open(home);
   const pairing = state.createPairingCredential(scope);
   state.close();
@@ -141,12 +150,36 @@ describe('manager runtime', () => {
     await Promise.all(artifacts.map((artifact) => writeFile(path.join(home ?? '', artifact.locator.path), `# ${artifact.title}\n`)));
     await saveLibraryManifest({ schemaVersion: 2, artifacts, tombstones: [] }, home);
     const startedAt = performance.now();
-    const runtime = createManagerRuntime({ home, watchProjects: false });
+    const runtime = createManagerRuntime({ home, watchProjects: false, watchExternalChanges: false });
     const response = await runtime.app.request('/readyz');
     const elapsedMs = performance.now() - startedAt;
 
     expect(response.status).toBe(200);
     expect(elapsedMs).toBeLessThan(2_000);
     await runtime.dispose();
+  });
+
+  test('recovers an unfinished filesystem operation before accepting requests', async () => {
+    home = await mkdtemp(path.join(tmpdir(), 'reglet-runtime-recovery-'));
+    const target = path.join(home, 'provider-target.md');
+    await writeFile(target, 'before\n');
+    const operation = await beginOperation({ home });
+    await operation.snapshotTarget(target);
+    await writeFile(target, 'interrupted\n');
+
+    const runtime = await serveManagerRuntime({
+      home,
+      port: 0,
+      watchProjects: false,
+      watchExternalChanges: false,
+    });
+
+    expect(await readFile(target, 'utf8')).toBe('before\n');
+    expect(await listOperationReceipts(home)).toContainEqual(expect.objectContaining({
+      id: operation.id,
+      lifecycle: 'rolled-back',
+      recovery: expect.objectContaining({ recovered: true }),
+    }));
+    await runtime.stop();
   });
 });

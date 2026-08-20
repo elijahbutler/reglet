@@ -1,5 +1,6 @@
 import {
   isJsonValue,
+  isManagerMutatingOperation,
   isManagerSnapshotV3,
   managerProtocolVersion,
   managerRpcRequestValidator,
@@ -21,7 +22,10 @@ export interface HttpManagerClientOptions {
   token?: string;
   fetch?: typeof globalThis.fetch;
   webSocketFactory?: (url: string) => WebSocket;
+  requestTimeoutMs?: number;
 }
+
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 export class ManagerTransportError extends Error {
   readonly status: number;
@@ -41,6 +45,7 @@ export class HttpManagerClient implements ManagerClient {
   private readonly baseUrl: string;
   private readonly fetcher: typeof globalThis.fetch;
   private readonly webSocketFactory: (url: string) => WebSocket;
+  private readonly requestTimeoutMs: number;
   private token?: string;
   private revision?: number;
 
@@ -49,6 +54,7 @@ export class HttpManagerClient implements ManagerClient {
     this.token = options.token;
     this.fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.webSocketFactory = options.webSocketFactory ?? ((url) => new WebSocket(url));
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   }
 
   async pair(code: string): Promise<{ id: string; scope: 'read' | 'write' | 'admin' }> {
@@ -86,18 +92,24 @@ export class HttpManagerClient implements ManagerClient {
     if (!managerRpcRequestValidator.validate(request)) {
       throw new ManagerTransportError(0, 'INVALID_INPUT', 'Manager command input failed local validation.', false);
     }
-    const expectedRevision = options.expectedRevision ?? (isMutating(operation) ? this.revision : undefined);
-    const response = await this.fetcher(`${this.baseUrl}/v2/commands`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token === undefined ? {} : { Authorization: `Bearer ${this.token}` }),
-        ...(expectedRevision === undefined ? {} : { 'X-Reglet-Revision': String(expectedRevision) }),
+    const expectedRevision = options.expectedRevision ?? (isManagerMutatingOperation(operation) ? this.revision : undefined);
+    const { response, envelope } = await withRequestTimeout(
+      options.timeoutMs ?? this.requestTimeoutMs,
+      async (signal) => {
+        const response = await this.fetcher(`${this.baseUrl}/v2/commands`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(this.token === undefined ? {} : { Authorization: `Bearer ${this.token}` }),
+            ...(expectedRevision === undefined ? {} : { 'X-Reglet-Revision': String(expectedRevision) }),
+          },
+          body: JSON.stringify(request),
+          signal,
+        });
+        return { response, envelope: await readJson(response) };
       },
-      body: JSON.stringify(request),
-    });
-    const envelope = await readJson(response);
+    );
     if (!managerRpcResponseValidator.validate(envelope)) {
       throw new ManagerTransportError(response.status, 'INVALID_INPUT', 'Runtime returned an invalid protocol response.', false);
     }
@@ -107,28 +119,59 @@ export class HttpManagerClient implements ManagerClient {
     if (envelope.operation !== operation || !isCommandResult(envelope.result)) {
       throw new ManagerTransportError(response.status, 'INVALID_INPUT', 'Runtime returned a mismatched command result.', false);
     }
-    this.revision = envelope.result.revision;
+    this.advanceRevision(envelope.result.revision);
     return envelope.result;
   }
 
   subscribe(listener: (invalidation: ManagerInvalidation) => void): () => void {
     let closed = false;
+    let connecting = false;
     let socket: WebSocket | undefined;
-    void this.eventTicket().then((ticket) => {
-      if (closed) return;
-      const url = new URL('/v2/events', this.baseUrl);
-      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-      url.searchParams.set('ticket', ticket);
-      socket = this.webSocketFactory(url.toString());
-      socket.addEventListener('message', (event) => {
-        const invalidation = parseInvalidation(event.data);
-        if (invalidation === undefined) return;
-        this.revision = invalidation.revision;
-        listener(invalidation);
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let retryDelayMs = 250;
+
+    const scheduleReconnect = () => {
+      if (closed || retryTimer !== undefined) return;
+      retryTimer = setTimeout(() => {
+        retryTimer = undefined;
+        connect();
+      }, retryDelayMs);
+      retryDelayMs = Math.min(retryDelayMs * 2, 10_000);
+    };
+    const connect = () => {
+      if (closed || connecting) return;
+      connecting = true;
+      void this.eventTicket().then((ticket) => {
+        if (closed) return;
+        const url = new URL('/v2/events', this.baseUrl);
+        url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+        url.searchParams.set('ticket', ticket);
+        const nextSocket = this.webSocketFactory(url.toString());
+        socket = nextSocket;
+        nextSocket.addEventListener('open', () => { retryDelayMs = 250; }, { once: true });
+        nextSocket.addEventListener('message', (event) => {
+          const invalidation = parseInvalidation(event.data);
+          if (invalidation === undefined) return;
+          this.advanceRevision(invalidation.revision);
+          listener(invalidation);
+        });
+        nextSocket.addEventListener('close', () => {
+          if (socket === nextSocket) socket = undefined;
+          scheduleReconnect();
+        }, { once: true });
+        nextSocket.addEventListener('error', () => {
+          nextSocket.close();
+          scheduleReconnect();
+        }, { once: true });
+      }).catch(scheduleReconnect).finally(() => {
+        connecting = false;
       });
-    }).catch(() => undefined);
+    };
+
+    connect();
     return () => {
       closed = true;
+      if (retryTimer !== undefined) clearTimeout(retryTimer);
       socket?.close(1000, 'Manager subscription closed');
     };
   }
@@ -145,6 +188,10 @@ export class HttpManagerClient implements ManagerClient {
       throw new ManagerTransportError(response.status, 'INVALID_INPUT', 'Runtime returned an invalid event ticket.', false);
     }
     return value.ticket;
+  }
+
+  private advanceRevision(revision: number): void {
+    this.revision = Math.max(this.revision ?? 0, revision);
   }
 }
 
@@ -180,20 +227,41 @@ async function readJson(response: Response): Promise<unknown> {
   try { return await response.json() as unknown; } catch { return undefined; }
 }
 
+async function withRequestTimeout<Result>(
+  timeoutMs: number,
+  request: (signal: AbortSignal) => Promise<Result>,
+): Promise<Result> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new ManagerTransportError(0, 'INVALID_INPUT', 'Manager request timeout must be a positive number.', false);
+  }
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      const seconds = Math.max(1, Math.round(timeoutMs / 1_000));
+      const error = new ManagerTransportError(
+        0,
+        'REQUEST_TIMEOUT',
+        `Manager runtime did not answer within ${seconds} seconds.`,
+        true,
+      );
+      reject(error);
+      controller.abort(error);
+    }, timeoutMs);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([request(controller.signal), timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 function transportError(status: number, value: unknown): ManagerTransportError {
   if (managerRpcResponseValidator.validate(value) && !value.ok) {
     return new ManagerTransportError(status, value.error.code, value.error.message, value.error.recoverable);
   }
   return new ManagerTransportError(status, 'OPERATION_FAILED', 'Manager runtime request failed.', true);
-}
-
-function isMutating(operation: ManagerProtocolOperation): boolean {
-  return ![
-    'snapshot', 'library.list', 'library.show', 'provider.list', 'provider.effective', 'provider.preview',
-    'project.root.list', 'project.discoveries', 'project.promotion-preview', 'skill.inspect', 'secret.status',
-    'history.list', 'activity.list', 'search', 'sync.status', 'remote.status', 'session.list', 'diagnostics',
-    'migration.preview', 'migration.status',
-  ].includes(operation);
 }
 
 function isRecord(value: unknown): value is Record<string, JsonValue> {

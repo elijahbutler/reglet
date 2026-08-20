@@ -10,6 +10,15 @@ import type { ApplyContent } from './apply.js';
 import type { OperationReceipt } from './operations.js';
 
 export type ProjectionUnitStatus = 'ready' | 'blocked' | 'applied' | 'failed';
+export type ProjectionValidationIssueCode =
+  | 'invalid-content'
+  | 'executable-skill-approval-required'
+  | 'provider-override-active';
+
+export interface ProjectionValidationIssue {
+  code: ProjectionValidationIssueCode;
+  message: string;
+}
 
 export interface ProjectionUnitPreview {
   key: string;
@@ -19,6 +28,7 @@ export interface ProjectionUnitPreview {
   masterRevision: string;
   status: 'ready' | 'blocked';
   validationIssues: string[];
+  validationIssueCodes: ProjectionValidationIssueCode[];
   entries: StructuredApplyPreviewEntry[];
 }
 
@@ -51,8 +61,14 @@ export interface ProjectionBatchApplyResult {
 export interface ProjectionBatchOptions {
   providers?: ProviderId[];
   contents?: ApplyContent[];
+  unitSelections?: readonly ProjectionUnitSelection[];
   home?: string;
-  unitIssues?: Readonly<Record<string, readonly string[]>>;
+  unitIssues?: Readonly<Record<string, readonly ProjectionValidationIssue[]>>;
+}
+
+export interface ProjectionUnitSelection {
+  provider: ProviderId;
+  content: ApplyContent;
 }
 
 export interface ApplyProjectionBatchOptions extends ProjectionBatchOptions {
@@ -69,32 +85,35 @@ const defaultContents: ApplyContent[] = ['rules', 'skills', 'mcp'];
 export async function previewProjectionBatch(
   options: ProjectionBatchOptions = {},
 ): Promise<ProjectionBatchPreview> {
-  const providers = options.providers ?? allAdapters().map((adapter) => adapter.id);
-  const contents = options.contents ?? defaultContents;
+  const selections = projectionUnitSelections(options);
   const units: ProjectionUnitPreview[] = [];
 
-  for (const provider of providers) {
-    for (const content of contents) {
-      const preview = await previewApplyStructured({
-        providers: [provider],
-        contents: [content],
-        home: options.home,
-      });
-      const key = projectionUnitKey(provider, content);
-      const validationIssues = [...preview.validationIssues, ...(options.unitIssues?.[key] ?? [])];
-      units.push({
-        key,
-        provider,
-        content,
-        digest: validationIssues.length === preview.validationIssues.length
-          ? preview.digest
-          : sha256String(JSON.stringify({ previewDigest: preview.digest, validationIssues })),
-        masterRevision: preview.masterRevision,
-        status: validationIssues.length === 0 ? 'ready' : 'blocked',
-        validationIssues,
-        entries: preview.entries,
-      });
-    }
+  for (const { provider, content } of selections) {
+    const preview = await previewApplyStructured({
+      providers: [provider],
+      contents: [content],
+      home: options.home,
+    });
+    const key = projectionUnitKey(provider, content);
+    const unitIssues = options.unitIssues?.[key] ?? [];
+    const validationIssues = [...preview.validationIssues, ...unitIssues.map((issue) => issue.message)];
+    const validationIssueCodes: ProjectionValidationIssueCode[] = [
+      ...preview.validationIssues.map(() => 'invalid-content' as const),
+      ...unitIssues.map((issue) => issue.code),
+    ];
+    units.push({
+      key,
+      provider,
+      content,
+      digest: validationIssues.length === preview.validationIssues.length
+        ? preview.digest
+        : sha256String(JSON.stringify({ previewDigest: preview.digest, validationIssues, validationIssueCodes })),
+      masterRevision: preview.masterRevision,
+      status: validationIssues.length === 0 ? 'ready' : 'blocked',
+      validationIssues,
+      validationIssueCodes,
+      entries: preview.entries,
+    });
   }
 
   return {
@@ -102,6 +121,20 @@ export async function previewProjectionBatch(
     digest: batchDigest(units),
     units,
   };
+}
+
+function projectionUnitSelections(options: ProjectionBatchOptions): ProjectionUnitSelection[] {
+  const selections = options.unitSelections === undefined
+    ? (options.providers ?? allAdapters().map((adapter) => adapter.id)).flatMap((provider) =>
+        (options.contents ?? defaultContents).map((content) => ({ provider, content })))
+    : [...options.unitSelections];
+  const keys = new Set<string>();
+  for (const selection of selections) {
+    const key = projectionUnitKey(selection.provider, selection.content);
+    if (keys.has(key)) throw new Error(`Duplicate projection unit: ${key}`);
+    keys.add(key);
+  }
+  return selections;
 }
 
 export async function applyProjectionBatch(

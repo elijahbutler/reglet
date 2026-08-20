@@ -26,6 +26,7 @@ export interface ActiveSyncV2State {
   credentialId: string;
   files: Record<string, SyncV2FileState>;
   lastSync?: SyncV2LastRun;
+  lastError?: SyncV2LastError;
   keyRotationRequired?: boolean;
 }
 
@@ -60,6 +61,11 @@ export interface SyncV2LastRun {
   conflicts: number;
   deleted: number;
   providerReviewRequired: boolean;
+}
+
+export interface SyncV2LastError {
+  occurredAt: string;
+  message: string;
 }
 
 export type PendingSyncV2State = PendingSyncV2PairState | PendingSyncV2BootstrapState;
@@ -193,6 +199,7 @@ function normalizeSyncV2State(value: unknown): SyncV2State {
     credentialId: value.credentialId,
     files,
     ...(isLastSync(value.lastSync) ? { lastSync: value.lastSync } : {}),
+    ...(isLastError(value.lastError) ? { lastError: value.lastError } : {}),
     ...(value.keyRotationRequired === true ? { keyRotationRequired: true } : {}),
   };
 }
@@ -202,6 +209,11 @@ function isLastSync(value: unknown): value is SyncV2LastRun {
     isNonNegativeSafeInteger(value.pulled) && isNonNegativeSafeInteger(value.pushed) &&
     isNonNegativeSafeInteger(value.merged) && isNonNegativeSafeInteger(value.conflicts) &&
     isNonNegativeSafeInteger(value.deleted) && typeof value.providerReviewRequired === 'boolean';
+}
+
+function isLastError(value: unknown): value is SyncV2LastError {
+  return isRecord(value) && typeof value.occurredAt === 'string' &&
+    typeof value.message === 'string' && value.message.length > 0 && value.message.length <= 500;
 }
 
 function isPairRequest(value: unknown): value is SyncV2PairRequest {

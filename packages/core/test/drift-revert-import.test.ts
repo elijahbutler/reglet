@@ -6,9 +6,9 @@ import { defaultConfig, saveConfig, type ProviderName } from '../src/config.js';
 import { applyAll } from '../src/engine/apply.js';
 import { appendDriftEvent, clearDriftEvents, detectDrift, listDriftEvents } from '../src/engine/drift.js';
 import { importDriftedMcp, importDriftedRules, importDriftedSkills, stripGeneratedHeader } from '../src/engine/import.js';
-import { revert, restore } from '../src/engine/revert.js';
+import { previewProviderRestore, restoreReviewedProvider, revert, restore } from '../src/engine/revert.js';
 import { GENERATED_HEADER, LEGACY_GENERATED_HEADER } from '../src/header.js';
-import { loadManifest } from '../src/manifest.js';
+import { loadManifest, saveManifest } from '../src/manifest.js';
 
 let currentHome: string | undefined;
 let currentProviderHome: string | undefined;
@@ -290,6 +290,61 @@ describe('drift, import, and revert', () => {
     const manifest = await loadManifest(home);
     expect(manifest.outputs[path.join(providerHome, '.claude', 'CLAUDE.md')]).toBeUndefined();
     expect(manifest.outputs[path.join(providerHome, '.gemini', 'GEMINI.md')]).toBeDefined();
+  });
+
+  test('binds provider restore to exact current outputs and private backups', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await writeMasterRule(home);
+    await enableProviders(home, ['claude']);
+    const outputPath = path.join(providerHome, '.claude', 'CLAUDE.md');
+    await mkdir(path.dirname(outputPath), { recursive: true });
+    await writeFile(outputPath, 'original provider content\n');
+    await applyAll({ providers: ['claude'], contents: ['rules'] });
+
+    const preview = await previewProviderRestore('claude', home);
+    expect(preview).toMatchObject({
+      provider: 'claude',
+      status: 'ready',
+      targets: [{
+        path: outputPath,
+        content: 'rules',
+        action: 'restored',
+        current: { kind: 'file' },
+        restored: { kind: 'file' },
+      }],
+    });
+
+    await writeFile(outputPath, 'changed after restore review\n');
+    await expect(restoreReviewedProvider('claude', preview.digest, home)).rejects.toThrow('preview is stale');
+    expect(await readFile(outputPath, 'utf8')).toBe('changed after restore review\n');
+
+    const refreshed = await previewProviderRestore('claude', home);
+    const restored = await restoreReviewedProvider('claude', refreshed.digest, home);
+    expect(restored.results).toEqual([{ outputPath, provider: 'claude', action: 'restored' }]);
+    expect(restored.receipt.lifecycle).toBe('completed');
+    expect(await readFile(outputPath, 'utf8')).toBe('original provider content\n');
+    expect((await loadManifest(home)).outputs[outputPath]).toBeUndefined();
+  });
+
+  test('blocks provider restore when its private backup path is outside Reglet state', async () => {
+    const { home, providerHome } = await useTempHomes();
+    await writeMasterRule(home);
+    await enableProviders(home, ['claude']);
+    const outputPath = path.join(providerHome, '.claude', 'CLAUDE.md');
+    await mkdir(path.dirname(outputPath), { recursive: true });
+    await writeFile(outputPath, 'original provider content\n');
+    await applyAll({ providers: ['claude'], contents: ['rules'] });
+    const manifest = await loadManifest(home);
+    const output = manifest.outputs[outputPath];
+    if (output === undefined) throw new Error('expected a managed output');
+    manifest.outputs[outputPath] = { ...output, backedUpTo: path.join(providerHome, 'outside-backup') };
+    await saveManifest(manifest, home);
+
+    const preview = await previewProviderRestore('claude', home);
+    expect(preview).toMatchObject({ status: 'blocked', issues: [expect.stringContaining('escaped Reglet private state')] });
+    await expect(restoreReviewedProvider('claude', preview.digest, home)).rejects.toThrow('escaped Reglet private state');
+    await expect(revert('claude', home)).rejects.toThrow('escaped Reglet private state');
+    expect(await Bun.file(outputPath).text()).toContain('# General');
   });
 
   test('drift queue helpers append, list, and clear events', async () => {

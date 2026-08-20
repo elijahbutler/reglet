@@ -1,7 +1,7 @@
-import { copyFile, cp, mkdir, readdir, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
+import { copyFile, cp, lstat, mkdir, readdir, readFile, readlink, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { assertPrivateFile, ensurePrivateDir, hasPosixModes, writePrivateJson } from '../fsutil.js';
+import { createHash, randomUUID } from 'node:crypto';
+import { assertPrivateFile, ensurePrivateDir, hasPosixModes, sha256String, writePrivateJson } from '../fsutil.js';
 import { loadManifest, saveManifest, type Manifest, type ManifestOutput } from '../manifest.js';
 import { regletHome } from '../paths.js';
 import type { ProviderId } from '../providers/types.js';
@@ -32,6 +32,10 @@ export interface OperationReceipt {
   compositionRevisions?: Record<string, string>;
   targets: OperationTargetReceipt[];
   createdDirectories: string[];
+  restorePolicy?: {
+    allowed: boolean;
+    reason?: string;
+  };
   recovery: {
     attempted: boolean;
     recovered: boolean;
@@ -42,6 +46,39 @@ export interface OperationReceipt {
 export interface RestoreOperationAction {
   path: string;
   action: 'restored' | 'removed';
+}
+
+export interface RestoreReviewedOperationResult {
+  actions: RestoreOperationAction[];
+  receipt: OperationReceipt;
+}
+
+export type OperationPathKind = SnapshotKind | 'symlink' | 'other';
+
+export interface OperationPathFingerprint {
+  kind: OperationPathKind;
+  hash: string | null;
+  size: number | null;
+}
+
+export interface OperationRestorePreviewTarget {
+  path: string;
+  action: RestoreOperationAction['action'];
+  current: OperationPathFingerprint;
+  restored: OperationPathFingerprint;
+}
+
+export interface OperationRestorePreview {
+  version: 1;
+  receiptId: string;
+  lifecycle: OperationLifecycle;
+  startedAt: string;
+  completedAt: string | null;
+  scope: OperationReceipt['scope'];
+  digest: string;
+  restorable: boolean;
+  reason?: string;
+  targets: OperationRestorePreviewTarget[];
 }
 
 export interface RecoveryResult {
@@ -57,6 +94,7 @@ interface OperationJournal {
   structuredPreviewDigest?: string;
   masterRevision?: string;
   compositionRevisions?: Record<string, string>;
+  restorePolicy?: OperationReceipt['restorePolicy'];
   targets: OperationTargetReceipt[];
   createdDirectories: string[];
   manifestSnapshot: Manifest;
@@ -77,6 +115,7 @@ export interface BeginOperationOptions {
   structuredPreviewDigest?: string;
   masterRevision?: string;
   compositionRevisions?: Record<string, string>;
+  restorePolicy?: OperationReceipt['restorePolicy'];
 }
 
 export async function beginOperation(options: BeginOperationOptions): Promise<OperationContext> {
@@ -97,6 +136,7 @@ export async function beginOperation(options: BeginOperationOptions): Promise<Op
     ...(options.structuredPreviewDigest === undefined ? {} : { structuredPreviewDigest: options.structuredPreviewDigest }),
     ...(options.masterRevision === undefined ? {} : { masterRevision: options.masterRevision }),
     ...(options.compositionRevisions === undefined ? {} : { compositionRevisions: options.compositionRevisions }),
+    ...(options.restorePolicy === undefined ? {} : { restorePolicy: options.restorePolicy }),
     targets: [],
     createdDirectories: [],
     manifestSnapshot: await loadManifest(home),
@@ -190,10 +230,11 @@ export async function listOperationReceipts(home = regletHome()): Promise<Operat
 }
 
 export async function getOperationReceipt(id: string, home = regletHome()): Promise<OperationReceipt> {
+  assertOperationId(id);
   const targetPath = receiptPath(home, id);
   await assertPrivateFile(targetPath);
   const parsed = JSON.parse(await readFile(targetPath, 'utf8')) as unknown;
-  if (!isOperationReceipt(parsed)) {
+  if (!isOperationReceipt(parsed) || parsed.id !== id) {
     throw new Error(`Invalid operation receipt: ${id}`);
   }
   return parsed;
@@ -201,6 +242,37 @@ export async function getOperationReceipt(id: string, home = regletHome()): Prom
 
 export async function restoreOperationReceipt(id: string, home = regletHome()): Promise<RestoreOperationAction[]> {
   const receipt = await getOperationReceipt(id, home);
+  const preview = await operationRestorePreview(receipt, home);
+  assertRestorableOperation(preview);
+  return (await restoreOperationReceiptFromPreview(receipt, preview, home)).actions;
+}
+
+export async function previewOperationReceiptRestore(
+  id: string,
+  home = regletHome(),
+): Promise<OperationRestorePreview> {
+  return operationRestorePreview(await getOperationReceipt(id, home), home);
+}
+
+export async function restoreReviewedOperationReceipt(
+  id: string,
+  digest: string,
+  home = regletHome(),
+): Promise<RestoreReviewedOperationResult> {
+  const receipt = await getOperationReceipt(id, home);
+  const preview = await operationRestorePreview(receipt, home);
+  assertRestorableOperation(preview);
+  if (preview.digest !== digest) {
+    throw new Error(`Operation restore preview is stale: expected ${digest}, got ${preview.digest}`);
+  }
+  return restoreOperationReceiptFromPreview(receipt, preview, home);
+}
+
+async function restoreOperationReceiptFromPreview(
+  receipt: OperationReceipt,
+  preview: OperationRestorePreview,
+  home: string,
+): Promise<RestoreReviewedOperationResult> {
   const operation = await beginOperation({
     home,
     ...(receipt.scope.providers === undefined ? {} : { providers: receipt.scope.providers }),
@@ -208,6 +280,11 @@ export async function restoreOperationReceipt(id: string, home = regletHome()): 
   });
   const actions: RestoreOperationAction[] = [];
   try {
+    const currentPreview = await operationRestorePreview(await getOperationReceipt(receipt.id, home), home);
+    assertRestorableOperation(currentPreview);
+    if (currentPreview.digest !== preview.digest) {
+      throw new Error('Operation restore preview became stale before restoration started.');
+    }
     const manifest = await loadManifest(home);
     for (const target of receipt.targets) {
       await operation.snapshotTarget(target.path);
@@ -221,6 +298,7 @@ export async function restoreOperationReceipt(id: string, home = regletHome()): 
     }
 
     await saveManifest(manifest, home);
+    const undoReceipt = await operation.complete();
     await saveReceipt(home, {
       ...receipt,
       lifecycle: 'restored',
@@ -231,12 +309,122 @@ export async function restoreOperationReceipt(id: string, home = regletHome()): 
         message: 'Explicitly restored from receipt.',
       },
     });
-    await operation.complete();
-    return actions;
+    return { actions, receipt: undoReceipt };
   } catch (error) {
     await operation.rollback(error instanceof Error ? error.message : String(error));
     throw error;
   }
+}
+
+async function operationRestorePreview(
+  receipt: OperationReceipt,
+  home: string,
+): Promise<OperationRestorePreview> {
+  await assertRestorableReceiptShape(receipt, home);
+  const targets = await Promise.all(receipt.targets.map(async (target): Promise<OperationRestorePreviewTarget> => ({
+    path: target.path,
+    action: target.snapshotKind === 'missing' ? 'removed' : 'restored',
+    current: await fingerprintOperationPath(target.path),
+    restored: target.snapshotKind === 'missing'
+      ? { kind: 'missing', hash: null, size: null }
+      : await fingerprintOperationPath(target.snapshot ?? ''),
+  })));
+  const restorable = receipt.lifecycle === 'completed' && targets.length > 0 && receipt.restorePolicy?.allowed !== false;
+  const reason = receipt.restorePolicy?.allowed === false
+    ? receipt.restorePolicy.reason ?? 'This operation has a dedicated inverse action and cannot be replayed from its receipt.'
+    : targets.length === 0
+    ? 'This receipt did not change any filesystem targets.'
+    : receipt.lifecycle !== 'completed'
+      ? `A ${receipt.lifecycle} receipt cannot be restored.`
+      : undefined;
+  return {
+    version: 1,
+    receiptId: receipt.id,
+    lifecycle: receipt.lifecycle,
+    startedAt: receipt.startedAt,
+    completedAt: receipt.completedAt,
+    scope: receipt.scope,
+    digest: sha256String(JSON.stringify({ version: 1, receipt, targets })),
+    restorable,
+    ...(reason === undefined ? {} : { reason }),
+    targets,
+  };
+}
+
+function assertRestorableOperation(preview: OperationRestorePreview): void {
+  if (!preview.restorable) {
+    throw new Error(preview.reason ?? `Operation receipt ${preview.receiptId} cannot be restored.`);
+  }
+}
+
+async function assertRestorableReceiptShape(receipt: OperationReceipt, home: string): Promise<void> {
+  const targetPaths = new Set<string>();
+  for (const target of receipt.targets) {
+    if (!path.isAbsolute(target.path)) {
+      throw new Error(`Operation receipt target must be absolute: ${target.path}`);
+    }
+    if (targetPaths.has(target.path)) {
+      throw new Error(`Operation receipt contains a duplicate target: ${target.path}`);
+    }
+    targetPaths.add(target.path);
+    if (target.snapshotKind === 'missing') {
+      if (target.snapshot !== null) {
+        throw new Error(`Missing operation target has an unexpected snapshot: ${target.path}`);
+      }
+      continue;
+    }
+    const expectedSnapshot = path.join(snapshotsDir(home), receipt.id, encodeURIComponent(target.path));
+    if (target.snapshot === null || path.resolve(target.snapshot) !== path.resolve(expectedSnapshot)) {
+      throw new Error(`Operation receipt snapshot does not match its private receipt location: ${target.path}`);
+    }
+    const fingerprint = await fingerprintOperationPath(target.snapshot);
+    if (fingerprint.kind !== target.snapshotKind) {
+      throw new Error(`Operation receipt snapshot kind changed for ${target.path}.`);
+    }
+  }
+}
+
+export async function fingerprintOperationPath(targetPath: string): Promise<OperationPathFingerprint> {
+  try {
+    const targetStat = await lstat(targetPath);
+    if (targetStat.isFile()) {
+      const content = await readFile(targetPath);
+      return { kind: 'file', hash: sha256String(content), size: content.byteLength };
+    }
+    if (targetStat.isDirectory()) {
+      const directory = await fingerprintOperationDirectory(targetPath);
+      return { kind: 'directory', hash: directory.hash, size: directory.size };
+    }
+    if (targetStat.isSymbolicLink()) {
+      const link = await readlink(targetPath);
+      return { kind: 'symlink', hash: sha256String(link), size: Buffer.byteLength(link) };
+    }
+    return {
+      kind: 'other',
+      hash: sha256String(`${targetStat.mode}:${targetStat.size}`),
+      size: targetStat.size,
+    };
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') {
+      return { kind: 'missing', hash: null, size: null };
+    }
+    throw error;
+  }
+}
+
+async function fingerprintOperationDirectory(
+  directoryPath: string,
+): Promise<{ hash: string; size: number }> {
+  const hash = createHash('sha256');
+  let size = 0;
+  const entries = await readdir(directoryPath, { withFileTypes: true });
+  entries.sort((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
+    const fingerprint = await fingerprintOperationPath(path.join(directoryPath, entry.name));
+    hash.update(JSON.stringify({ name: entry.name, ...fingerprint }));
+    size += fingerprint.size ?? 0;
+  }
+  return { hash: hash.digest('hex'), size };
 }
 
 export async function replacePathFromFile(sourceFile: string, targetPath: string): Promise<void> {
@@ -471,9 +659,10 @@ async function saveReceipt(home: string, receipt: OperationReceipt): Promise<voi
 async function readJournal(filePath: string): Promise<OperationJournal> {
   await assertPrivateFile(filePath);
   const parsed = JSON.parse(await readFile(filePath, 'utf8')) as unknown;
-  if (!isOperationJournal(parsed)) {
+  if (!isOperationJournal(parsed) || parsed.id !== path.basename(filePath, '.json')) {
     throw new Error(`Invalid operation journal: ${filePath}`);
   }
+  assertJournalPaths(parsed);
   return parsed;
 }
 
@@ -503,6 +692,7 @@ function receiptFromJournal(
     ...(journal.structuredPreviewDigest === undefined ? {} : { structuredPreviewDigest: journal.structuredPreviewDigest }),
     ...(journal.masterRevision === undefined ? {} : { masterRevision: journal.masterRevision }),
     ...(journal.compositionRevisions === undefined ? {} : { compositionRevisions: journal.compositionRevisions }),
+    ...(journal.restorePolicy === undefined ? {} : { restorePolicy: journal.restorePolicy }),
     targets: journal.targets,
     createdDirectories: journal.createdDirectories,
     recovery,
@@ -552,12 +742,18 @@ function receiptPath(home: string, id: string): string {
   return path.join(receiptsDir(home), `${id}.json`);
 }
 
+function assertOperationId(id: string): void {
+  if (!/^[A-Za-z0-9._-]+$/.test(id)) {
+    throw new Error(`Invalid operation receipt id: ${id}`);
+  }
+}
+
 function isOperationReceipt(value: unknown): value is OperationReceipt {
-  return isRecord(value) && value.version === 1 && typeof value.id === 'string' && isLifecycle(value.lifecycle) && typeof value.startedAt === 'string' && (typeof value.completedAt === 'string' || value.completedAt === null) && isRecord(value.scope) && optionalString(value.masterRevision) && optionalStringRecord(value.compositionRevisions) && Array.isArray(value.targets) && value.targets.every(isTarget) && Array.isArray(value.createdDirectories) && value.createdDirectories.every((directory) => typeof directory === 'string') && isRecord(value.recovery);
+  return isRecord(value) && exactKeys(value, ['version', 'id', 'lifecycle', 'startedAt', 'completedAt', 'scope', 'structuredPreviewDigest', 'masterRevision', 'compositionRevisions', 'targets', 'createdDirectories', 'restorePolicy', 'recovery']) && value.version === 1 && typeof value.id === 'string' && isLifecycle(value.lifecycle) && typeof value.startedAt === 'string' && (typeof value.completedAt === 'string' || value.completedAt === null) && isOperationScope(value.scope) && optionalString(value.structuredPreviewDigest) && optionalString(value.masterRevision) && optionalStringRecord(value.compositionRevisions) && optionalRestorePolicy(value.restorePolicy) && Array.isArray(value.targets) && value.targets.every(isTarget) && Array.isArray(value.createdDirectories) && value.createdDirectories.every((directory) => typeof directory === 'string') && isRecovery(value.recovery);
 }
 
 function isOperationJournal(value: unknown): value is OperationJournal {
-  return isRecord(value) && value.version === 1 && typeof value.id === 'string' && (value.lifecycle === 'pending' || value.lifecycle === 'completed') && typeof value.startedAt === 'string' && isRecord(value.scope) && optionalString(value.masterRevision) && optionalStringRecord(value.compositionRevisions) && Array.isArray(value.targets) && value.targets.every(isTarget) && Array.isArray(value.createdDirectories) && value.createdDirectories.every((directory) => typeof directory === 'string') && isRecord(value.manifestSnapshot);
+  return isRecord(value) && exactKeys(value, ['version', 'id', 'lifecycle', 'startedAt', 'scope', 'structuredPreviewDigest', 'masterRevision', 'compositionRevisions', 'restorePolicy', 'targets', 'createdDirectories', 'manifestSnapshot']) && value.version === 1 && typeof value.id === 'string' && (value.lifecycle === 'pending' || value.lifecycle === 'completed') && typeof value.startedAt === 'string' && isOperationScope(value.scope) && optionalString(value.structuredPreviewDigest) && optionalString(value.masterRevision) && optionalStringRecord(value.compositionRevisions) && optionalRestorePolicy(value.restorePolicy) && Array.isArray(value.targets) && value.targets.every(isTarget) && Array.isArray(value.createdDirectories) && value.createdDirectories.every((directory) => typeof directory === 'string') && isManifestSnapshot(value.manifestSnapshot);
 }
 
 function isTarget(value: unknown): value is OperationTargetReceipt {
@@ -582,6 +778,60 @@ function optionalString(value: unknown): boolean {
 
 function optionalStringRecord(value: unknown): boolean {
   return value === undefined || (isRecord(value) && Object.values(value).every((item) => typeof item === 'string'));
+}
+
+function optionalRestorePolicy(value: unknown): boolean {
+  return value === undefined || (isRecord(value) && exactKeys(value, ['allowed', 'reason']) &&
+    typeof value.allowed === 'boolean' && optionalString(value.reason));
+}
+
+function isOperationScope(value: unknown): value is OperationReceipt['scope'] {
+  return isRecord(value) && exactKeys(value, ['providers', 'contents']) &&
+    (value.providers === undefined || isUniqueArray(value.providers, isProviderId)) &&
+    (value.contents === undefined || isUniqueArray(value.contents, isApplyContent));
+}
+
+function isRecovery(value: unknown): value is OperationReceipt['recovery'] {
+  return isRecord(value) && exactKeys(value, ['attempted', 'recovered', 'message']) &&
+    typeof value.attempted === 'boolean' && typeof value.recovered === 'boolean' && optionalString(value.message);
+}
+
+function isManifestSnapshot(value: unknown): value is Manifest {
+  return isRecord(value) && exactKeys(value, ['version', 'outputs']) && value.version === 1 && isRecord(value.outputs) &&
+    Object.values(value.outputs).every(isManifestOutput);
+}
+
+function isProviderId(value: unknown): value is ProviderId {
+  return value === 'claude' || value === 'codex' || value === 'cursor' || value === 'gemini' ||
+    value === 'windsurf' || value === 'opencode';
+}
+
+function isApplyContent(value: unknown): value is ApplyContent {
+  return value === 'rules' || value === 'skills' || value === 'mcp';
+}
+
+function isUniqueArray<T>(value: unknown, validate: (entry: unknown) => entry is T): value is T[] {
+  return Array.isArray(value) && value.every(validate) && new Set(value).size === value.length;
+}
+
+function exactKeys(value: Record<string, unknown>, allowedKeys: readonly string[]): boolean {
+  const allowed = new Set(allowedKeys);
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
+function assertJournalPaths(journal: OperationJournal): void {
+  const targetPaths = new Set(journal.targets.map((target) => path.resolve(target.path)));
+  if (targetPaths.size !== journal.targets.length || journal.targets.some((target) => !path.isAbsolute(target.path))) {
+    throw new Error(`Invalid operation journal target set: ${journal.id}`);
+  }
+  for (const directory of journal.createdDirectories) {
+    const resolved = path.resolve(directory);
+    const root = path.parse(resolved).root;
+    if (!path.isAbsolute(directory) || resolved === root ||
+      ![...targetPaths].some((target) => target.startsWith(`${resolved}${path.sep}`))) {
+      throw new Error(`Invalid created directory in operation journal ${journal.id}: ${directory}`);
+    }
+  }
 }
 
 function isLifecycle(value: unknown): value is OperationLifecycle {

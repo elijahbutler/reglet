@@ -1,36 +1,39 @@
-import { CheckCircle2, Database, Download, FolderRoot, KeyRound, Laptop, Radio, RefreshCw, Settings, Shield, ShieldAlert, ShieldCheck, Stethoscope } from 'lucide-react';
-import { useState } from 'react';
+import { AlertTriangle, CheckCircle2, Database, Download, FileCode2, FolderRoot, KeyRound, Laptop, LoaderCircle, Radio, RefreshCw, Settings, Shield, ShieldAlert, ShieldCheck, Stethoscope } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { ManagerSnapshotV3 } from '@reglet/manager-protocol';
+import type { JsonValue, ManagerProviderId, ManagerSnapshotV3 } from '@reglet/manager-protocol';
 import type { ManagerHostActions, ManagerUpdateDownloadEvent, ManagerUpdateStatus } from '../../app/ManagerApp.js';
 import type { ManagerClient } from '../../client/ManagerClient.js';
 import { Button } from '../../design-system/Button.js';
 import { Pane, PaneHeader } from '../../design-system/Pane.js';
 import { Row } from '../../design-system/Row.js';
 import { SyncConnectionPanel } from './SyncConnectionPanel.js';
+import { SyncOperationsPanel } from './SyncOperationsPanel.js';
 
 const sections = [
   { id: 'general', label: 'General', icon: Settings },
   { id: 'roots', label: 'Project roots', icon: FolderRoot },
   { id: 'secrets', label: 'Secrets', icon: KeyRound },
+  { id: 'executable-skills', label: 'Executable skills', icon: ShieldCheck },
   { id: 'sync', label: 'Sync & devices', icon: Laptop },
   { id: 'remote', label: 'Remote access', icon: Radio },
   { id: 'backups', label: 'Backups', icon: Database },
   { id: 'diagnostics', label: 'Diagnostics', icon: Stethoscope },
 ] as const;
 
-type SettingsSection = (typeof sections)[number]['id'];
+export type SettingsSection = (typeof sections)[number]['id'];
 
-export function SettingsWorkbench({ client, hostActions, updateStatus, onUpdateStatus, snapshot, onRefresh, onError }: {
+export function SettingsWorkbench({ client, hostActions, updateStatus, onUpdateStatus, section, onSection, snapshot, onRefresh, onError }: {
   client: ManagerClient;
   hostActions?: ManagerHostActions;
   updateStatus: ManagerUpdateStatus | null;
   onUpdateStatus: (status: ManagerUpdateStatus | null) => void;
+  section: SettingsSection;
+  onSection: (section: SettingsSection) => void;
   snapshot: ManagerSnapshotV3 | null;
   onRefresh: () => Promise<void>;
   onError: (message: string) => void;
 }) {
-  const [section, setSection] = useState<SettingsSection>('general');
   const [rootPath, setRootPath] = useState('');
   const [secretId, setSecretId] = useState('');
   const [secretValue, setSecretValue] = useState('');
@@ -45,7 +48,7 @@ export function SettingsWorkbench({ client, hostActions, updateStatus, onUpdateS
       <Pane label="Settings sections" className="rg-collection rg-operation-list">
         <PaneHeader><span>Settings</span></PaneHeader>
         <div className="rg-collection-label">Local manager</div>
-        <div className="rg-artifact-list">{sections.map(({ id, label, icon: Icon }) => <Row key={id} active={section === id} leading={<Icon size={15} />} onClick={() => setSection(id)}>{label}</Row>)}</div>
+        <div className="rg-artifact-list">{sections.map(({ id, label, icon: Icon }) => <Row key={id} active={section === id} leading={<Icon size={15} />} onClick={() => onSection(id)}>{label}</Row>)}</div>
       </Pane>
       <Pane label="Settings detail" className="rg-operation-canvas">
         <PaneHeader><span>{sections.find((candidate) => candidate.id === section)?.label}</span></PaneHeader>
@@ -61,6 +64,7 @@ export function SettingsWorkbench({ client, hostActions, updateStatus, onUpdateS
             setSecretValue('');
             await onRefresh();
           })} /> : null}
+          {section === 'executable-skills' ? <ExecutableSkillsSettings client={client} snapshot={snapshot} onRefresh={onRefresh} onError={onError} /> : null}
           {section === 'sync' ? <SyncSettings client={client} snapshot={snapshot} busy={busy} onRefresh={onRefresh} onError={onError} onDisable={() => void run(async () => { await client.command('sync.disable', {}); await onRefresh(); })} /> : null}
           {section === 'remote' ? <RemoteSettings snapshot={snapshot} busy={busy} onDisable={() => void run(async () => { await client.command('remote.disable', {}); await onRefresh(); })} /> : null}
           {section === 'backups' ? <BackupsSettings /> : null}
@@ -69,8 +73,8 @@ export function SettingsWorkbench({ client, hostActions, updateStatus, onUpdateS
       </Pane>
       <Pane label="Settings security boundary" className="rg-inspector" tone="raised">
         <PaneHeader><span>Security boundary</span></PaneHeader>
-        <section className="rg-inspector-section"><h2>Local by default</h2><div className="rg-artifact-summary"><Shield size={17} /><span><strong>Admin scope required</strong><small>Roots, secrets, sessions, sync endpoints, and network settings are excluded from remote write sessions.</small></span></div></section>
-        <section className="rg-inspector-section"><h2>Current session</h2><dl className="rg-key-values"><div><dt>Scope</dt><dd>{snapshot?.permissions.scope ?? '—'}</dd></div><div><dt>Admin</dt><dd>{snapshot?.permissions.canAdmin ? 'Yes' : 'No'}</dd></div></dl></section>
+        <section className="rg-inspector-section"><h2>Local by default</h2><div className="rg-artifact-summary"><Shield size={17} /><span><strong>Admin scope required</strong><small>Roots, secrets, executable approvals, sessions, sync endpoints, and network settings are excluded from remote write sessions.</small></span></div></section>
+        <section className="rg-inspector-section"><h2>Current session</h2><dl className="rg-key-values"><div><dt>Scope</dt><dd>{snapshot?.permissions.scope ?? 'Unavailable'}</dd></div><div><dt>Admin</dt><dd>{snapshot?.permissions.canAdmin ? 'Yes' : 'No'}</dd></div></dl></section>
       </Pane>
     </>
   );
@@ -115,7 +119,7 @@ function GeneralSettings({ hostActions, updateStatus, onUpdateStatus, snapshot }
     }
   };
   const installing = installProgress.phase !== 'idle';
-  return <><SectionHeader title="General" description="Canonical library and local runtime status." /><dl className="rg-key-values"><div><dt>Library schema</dt><dd>v{snapshot?.library.schemaVersion ?? '—'}</dd></div><div><dt>Protocol</dt><dd>v{snapshot?.protocolVersion ?? '—'}</dd></div><div><dt>Revision</dt><dd>{snapshot?.revision ?? '—'}</dd></div><div><dt>Migration</dt><dd>{snapshot?.library.migration.status ?? '—'}</dd></div></dl>{hostActions?.checkForUpdates !== undefined ? <section className="rg-settings-group rg-update-panel" aria-labelledby="desktop-updates-title">
+  return <><SectionHeader title="General" description="Canonical library and local runtime status." /><dl className="rg-key-values"><div><dt>Library schema</dt><dd>{snapshot === null ? 'Unavailable' : `v${snapshot.library.schemaVersion}`}</dd></div><div><dt>Protocol</dt><dd>{snapshot === null ? 'Unavailable' : `v${snapshot.protocolVersion}`}</dd></div><div><dt>Revision</dt><dd>{snapshot?.revision ?? 'Unavailable'}</dd></div><div><dt>Migration</dt><dd>{snapshot?.library.migration.status ?? 'Unavailable'}</dd></div></dl>{hostActions?.checkForUpdates !== undefined ? <section className="rg-settings-group rg-update-panel" aria-labelledby="desktop-updates-title">
     <div className="rg-update-panel__header"><div><h2 id="desktop-updates-title">Desktop updates</h2><p>Updates are downloaded from Reglet Releases and verified before installation.</p></div><Button disabled={checking || installing} icon={<RefreshCw className={checking ? 'rg-spin' : undefined} size={14} />} onClick={() => void check()}>{checking ? 'Checking…' : updateStatus === null ? 'Check for updates' : 'Check again'}</Button></div>
     <div className="rg-update-state" aria-live="polite">
       {checking ? <UpdateSummary icon={<ShieldCheck size={18} />} title="Checking for a signed update…" detail="Reglet is comparing this installation with the latest desktop release." /> : null}
@@ -164,9 +168,265 @@ function SecretSettings({ snapshot, id, value, busy, onId, onValue, onBind }: { 
   return <><SectionHeader title="Secrets" description="Values remain in the native keychain and never enter APIs or canonical content." /><label className="rg-field"><span>Reference ID</span><input value={id} onChange={(event) => onId(event.target.value)} autoComplete="off" /></label><label className="rg-field"><span>Secret value</span><input type="password" value={value} onChange={(event) => onValue(event.target.value)} autoComplete="new-password" /></label><Button disabled={busy || id.trim().length === 0 || value.length === 0} onClick={onBind}>Bind locally</Button><div className="rg-settings-list">{snapshot?.settings.secretBindings.map((binding) => <div key={binding.id}><strong>{binding.id}</strong><span>{binding.bound ? 'Bound' : 'Unbound'}</span></div>)}</div></>;
 }
 
+type SkillTrustState = 'not-required' | 'untrusted' | 'changed' | 'trusted' | 'blocked';
+
+interface ExecutableSkillInspection {
+  artifact: {
+    id: string;
+    title: string;
+    slug: string;
+    targets: ManagerProviderId[];
+  };
+  revision: string;
+  totalBytes: number;
+  files: Array<{
+    relPath: string;
+    size: number;
+    executable: boolean;
+    binary: boolean;
+    contentHash?: string;
+  }>;
+  risks: Array<{
+    code: string;
+    severity: 'info' | 'warning' | 'error';
+    relPath: string;
+    message: string;
+  }>;
+  promotionBlocked: boolean;
+  requiresExecutableConfirmation: boolean;
+  trust: {
+    state: SkillTrustState;
+    revision?: string;
+    trustedAt?: string;
+  };
+}
+
+function ExecutableSkillsSettings({ client, snapshot, onRefresh, onError }: {
+  client: ManagerClient;
+  snapshot: ManagerSnapshotV3 | null;
+  onRefresh: () => Promise<void>;
+  onError: (message: string) => void;
+}) {
+  const [inspections, setInspections] = useState<ExecutableSkillInspection[]>([]);
+  const [confirmed, setConfirmed] = useState<Set<string>>(() => new Set());
+  const [approving, setApproving] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const skills = useMemo(
+    () => snapshot?.library.artifacts.filter((artifact) => artifact.metadata.kind === 'skill' && artifact.metadata.lifecycle === 'active') ?? [],
+    [snapshot],
+  );
+
+  useEffect(() => {
+    let current = true;
+    setLoading(true);
+    setLoadError(null);
+    const loadInspections = async () => {
+      const settled: PromiseSettledResult<ExecutableSkillInspection>[] = [];
+      for (let index = 0; index < skills.length; index += 4) {
+        const batch = skills.slice(index, index + 4);
+        settled.push(...await Promise.allSettled(batch.map(async (skill) => {
+          try {
+            const result = await client.command('skill.inspect', { artifact: skill.metadata.id });
+            const inspection = readExecutableSkillInspection(result.data);
+            if (inspection === null) throw new Error('Reglet returned an invalid inspection.');
+            return inspection;
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : 'Executable skill inspection failed.';
+            throw new Error(`${skill.metadata.title}: ${detail}`);
+          }
+        })));
+      }
+      if (!current) return;
+      const ready = settled.flatMap((entry) => entry.status === 'fulfilled' ? [entry.value] : []);
+      const failures = settled.flatMap((entry) => entry.status === 'rejected'
+        ? [entry.reason instanceof Error ? entry.reason.message : 'Executable skill inspection failed.']
+        : []);
+      setInspections(ready.sort((left, right) => left.artifact.title.localeCompare(right.artifact.title)));
+      setLoadError(failures.length === 0 ? null : failures.join(' '));
+    };
+    void loadInspections().catch((error: unknown) => {
+      if (!current) return;
+      setInspections([]);
+      setLoadError(error instanceof Error ? error.message : 'Executable skill inspection failed.');
+    }).finally(() => {
+      if (current) setLoading(false);
+    });
+    return () => { current = false; };
+  }, [client, loadAttempt, snapshot?.revision]);
+
+  const executableSkills = inspections.filter((inspection) =>
+    inspection.requiresExecutableConfirmation || inspection.promotionBlocked);
+  const needsReview = executableSkills.filter((inspection) =>
+    inspection.trust.state === 'untrusted' || inspection.trust.state === 'changed').length;
+
+  const approve = async (inspection: ExecutableSkillInspection) => {
+    setApproving(inspection.artifact.id);
+    try {
+      await client.command('skill.trust', {
+        artifact: inspection.artifact.id,
+        revision: inspection.revision,
+        confirmed: true,
+      });
+      setConfirmed((current) => {
+        const next = new Set(current);
+        next.delete(inspection.artifact.id);
+        return next;
+      });
+      await onRefresh();
+      setLoadAttempt((attempt) => attempt + 1);
+    } catch (error) {
+      onError(error instanceof Error ? error.message : 'Reglet could not approve this skill revision.');
+      setLoadAttempt((attempt) => attempt + 1);
+    } finally {
+      setApproving(null);
+    }
+  };
+
+  return <>
+    <SectionHeader title="Executable skills" description="Review executable files before Reglet copies them into provider skill directories." />
+    <div className="rg-executable-boundary">
+      <ShieldCheck size={18} aria-hidden="true" />
+      <span><strong>Approval is revision-specific</strong><small>Reglet inventories and copies these files. It does not execute them. Any file change invalidates approval and requires another review.</small></span>
+    </div>
+    {loading ? <div className="rg-settings-state" role="status"><LoaderCircle className="rg-spin" size={18} /><span><strong>Inspecting canonical skills</strong><small>No skill code is executed during inspection.</small></span></div> : null}
+    {!loading && loadError !== null ? <div className="rg-settings-state rg-settings-state--error" role="alert"><AlertTriangle size={18} /><span><strong>Inspection needs attention</strong><small>{loadError}</small></span><Button tone="secondary" icon={<RefreshCw size={14} />} onClick={() => setLoadAttempt((attempt) => attempt + 1)}>Retry</Button></div> : null}
+    {!loading && loadError === null && executableSkills.length === 0 ? <div className="rg-settings-state"><CheckCircle2 size={18} /><span><strong>No executable approvals needed</strong><small>{skills.length === 0 ? 'Your canonical library has no active skills.' : 'Active skills contain no executable files.'}</small></span></div> : null}
+    {!loading && executableSkills.length > 0 ? <section className="rg-executable-skills" aria-label="Executable skill approvals">
+      <div className="rg-executable-skills__summary"><span><strong>{executableSkills.length}</strong> executable skill{executableSkills.length === 1 ? '' : 's'}</span><span><strong>{needsReview}</strong> need{needsReview === 1 ? 's' : ''} review</span></div>
+      {executableSkills.map((inspection) => {
+        const state = inspection.trust.state;
+        const reviewRequired = state === 'untrusted' || state === 'changed';
+        const executableFiles = inspection.files.filter((file) => file.executable);
+        const additionalRisks = inspection.risks.filter((risk) => risk.code !== 'executable');
+        const checked = confirmed.has(inspection.artifact.id);
+        const isApproving = approving === inspection.artifact.id;
+        return <article className={`rg-executable-skill rg-executable-skill--${state}`} key={inspection.artifact.id}>
+          <header>
+            <span className="rg-executable-skill__icon"><FileCode2 size={17} aria-hidden="true" /></span>
+            <div><h2>{inspection.artifact.title}</h2><p><code>{inspection.artifact.slug}</code> · {inspection.artifact.targets.map(providerLabelForSettings).join(', ') || 'No provider targets'}</p></div>
+            <span className={`rg-executable-status rg-executable-status--${state}`}>{skillTrustLabel(state)}</span>
+          </header>
+          <dl className="rg-executable-metadata">
+            <div><dt>Current revision</dt><dd><code title={inspection.revision}>{shortRevision(inspection.revision)}</code></dd></div>
+            <div><dt>Executable files</dt><dd>{executableFiles.length}</dd></div>
+            <div><dt>Total size</dt><dd>{formatBytes(inspection.totalBytes)}</dd></div>
+            {inspection.trust.trustedAt === undefined ? null : <div><dt>Last approved</dt><dd>{formatTrustDate(inspection.trust.trustedAt)}</dd></div>}
+          </dl>
+          {state === 'changed' ? <div className="rg-executable-skill__notice"><AlertTriangle size={15} /><span><strong>This skill changed after approval.</strong> Review the current revision before syncing it again.</span></div> : null}
+          {state === 'blocked' ? <div className="rg-executable-skill__notice rg-executable-skill__notice--error"><ShieldAlert size={15} /><span><strong>This skill cannot be approved.</strong> Resolve the blocking filesystem risks first.</span></div> : null}
+          <details open={reviewRequired || state === 'blocked'}>
+            <summary>Review {executableFiles.length} executable file{executableFiles.length === 1 ? '' : 's'}</summary>
+            <div className="rg-executable-files">{executableFiles.map((file) => <div key={file.relPath}><code>{file.relPath}</code><span>{formatBytes(file.size)}{file.binary ? ' · binary' : ''}{file.contentHash === undefined ? '' : ` · ${shortRevision(file.contentHash)}`}</span></div>)}</div>
+          </details>
+          {additionalRisks.length === 0 ? null : <details open={inspection.promotionBlocked}><summary>Review {additionalRisks.length} additional finding{additionalRisks.length === 1 ? '' : 's'}</summary><ul className="rg-executable-risks">{additionalRisks.map((risk) => <li key={`${risk.code}:${risk.relPath}`}><AlertTriangle size={14} /><span><strong>{risk.relPath}</strong><small>{risk.message}</small></span></li>)}</ul></details>}
+          {reviewRequired ? <footer>
+            <label><input type="checkbox" checked={checked} disabled={isApproving} onChange={(event) => setConfirmed((current) => {
+              const next = new Set(current);
+              if (event.target.checked) next.add(inspection.artifact.id);
+              else next.delete(inspection.artifact.id);
+              return next;
+            })} /><span>I reviewed the executable files in revision <code>{shortRevision(inspection.revision)}</code>.</span></label>
+            <Button tone="primary" disabled={!checked || isApproving} icon={isApproving ? <LoaderCircle className="rg-spin" size={14} /> : <ShieldCheck size={14} />} onClick={() => void approve(inspection)}>{isApproving ? 'Approving…' : 'Approve this revision'}</Button>
+          </footer> : null}
+        </article>;
+      })}
+    </section> : null}
+  </>;
+}
+
+function readExecutableSkillInspection(value: JsonValue): ExecutableSkillInspection | null {
+  if (!isJsonRecord(value) || !isJsonRecord(value.artifact) || !isJsonRecord(value.trust) ||
+    typeof value.artifact.id !== 'string' || typeof value.artifact.title !== 'string' ||
+    typeof value.artifact.slug !== 'string' || !Array.isArray(value.artifact.targets) ||
+    !value.artifact.targets.every(isManagerProviderId) || typeof value.revision !== 'string' ||
+    typeof value.totalBytes !== 'number' || !Array.isArray(value.files) || !Array.isArray(value.risks) ||
+    typeof value.promotionBlocked !== 'boolean' || typeof value.requiresExecutableConfirmation !== 'boolean' ||
+    !isSkillTrustState(value.trust.state)) return null;
+  const files = value.files.map(readSkillFile);
+  const risks = value.risks.map(readSkillRisk);
+  if (files.some((file) => file === null) || risks.some((risk) => risk === null)) return null;
+  return {
+    artifact: {
+      id: value.artifact.id,
+      title: value.artifact.title,
+      slug: value.artifact.slug,
+      targets: value.artifact.targets,
+    },
+    revision: value.revision,
+    totalBytes: value.totalBytes,
+    files: files.filter((file): file is NonNullable<typeof file> => file !== null),
+    risks: risks.filter((risk): risk is NonNullable<typeof risk> => risk !== null),
+    promotionBlocked: value.promotionBlocked,
+    requiresExecutableConfirmation: value.requiresExecutableConfirmation,
+    trust: {
+      state: value.trust.state,
+      ...(typeof value.trust.revision === 'string' ? { revision: value.trust.revision } : {}),
+      ...(typeof value.trust.trustedAt === 'string' ? { trustedAt: value.trust.trustedAt } : {}),
+    },
+  };
+}
+
+function readSkillFile(value: JsonValue) {
+  if (!isJsonRecord(value) || typeof value.relPath !== 'string' || typeof value.size !== 'number' ||
+    typeof value.executable !== 'boolean' || typeof value.binary !== 'boolean') return null;
+  return {
+    relPath: value.relPath,
+    size: value.size,
+    executable: value.executable,
+    binary: value.binary,
+    ...(typeof value.contentHash === 'string' ? { contentHash: value.contentHash } : {}),
+  };
+}
+
+function readSkillRisk(value: JsonValue) {
+  if (!isJsonRecord(value) || typeof value.code !== 'string' || !isRiskSeverity(value.severity) ||
+    typeof value.relPath !== 'string' || typeof value.message !== 'string') return null;
+  return { code: value.code, severity: value.severity, relPath: value.relPath, message: value.message };
+}
+
+function isJsonRecord(value: JsonValue | undefined): value is Record<string, JsonValue> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isManagerProviderId(value: JsonValue): value is ManagerProviderId {
+  return value === 'claude' || value === 'codex' || value === 'cursor' || value === 'gemini' || value === 'windsurf' || value === 'opencode';
+}
+
+function isSkillTrustState(value: JsonValue | undefined): value is SkillTrustState {
+  return value === 'not-required' || value === 'untrusted' || value === 'changed' || value === 'trusted' || value === 'blocked';
+}
+
+function isRiskSeverity(value: JsonValue | undefined): value is 'info' | 'warning' | 'error' {
+  return value === 'info' || value === 'warning' || value === 'error';
+}
+
+function skillTrustLabel(state: SkillTrustState): string {
+  if (state === 'trusted') return 'Approved';
+  if (state === 'changed') return 'Changed';
+  if (state === 'blocked') return 'Blocked';
+  if (state === 'not-required') return 'No approval needed';
+  return 'Needs review';
+}
+
+function providerLabelForSettings(provider: ManagerProviderId): string {
+  const labels: Record<ManagerProviderId, string> = { claude: 'Claude', codex: 'Codex', cursor: 'Cursor', gemini: 'Gemini', windsurf: 'Windsurf', opencode: 'OpenCode' };
+  return labels[provider];
+}
+
+function shortRevision(revision: string): string {
+  return revision.slice(0, 12);
+}
+
+function formatTrustDate(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? value : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+}
+
 function SyncSettings({ client, snapshot, busy, onRefresh, onError, onDisable }: { client: ManagerClient; snapshot: ManagerSnapshotV3 | null; busy: boolean; onRefresh: () => Promise<void>; onError: (message: string) => void; onDisable: () => void }) {
   const sync = snapshot?.settings.sync;
-  return <><SectionHeader title="Sync & devices" description="Optional, self-hosted, end-to-end encrypted canonical-library sync." /><dl className="rg-key-values"><div><dt>Status</dt><dd>{sync?.state ?? 'disabled'}</dd></div><div><dt>Conflicts</dt><dd>{sync?.conflictCount ?? 0}</dd></div><div><dt>Manager sessions</dt><dd>{snapshot?.settings.sessions?.length ?? 0}</dd></div></dl><section className="rg-settings-group"><h2>Server connection</h2><SyncConnectionPanel client={client} snapshot={snapshot} onRefresh={onRefresh} onError={onError} /></section>{sync?.enabled ? <section className="rg-settings-group"><h2>Disconnect</h2><p>Local editing and provider Apply remain available after disconnecting.</p><Button tone="danger" disabled={busy} onClick={onDisable}>Disable sync</Button></section> : null}</>;
+  return <><SectionHeader title="Sync & devices" description="Optional, self-hosted, end-to-end encrypted canonical-library sync." /><dl className="rg-key-values"><div><dt>Status</dt><dd>{sync?.state ?? 'disabled'}</dd></div><div><dt>Conflicts</dt><dd>{sync?.conflictCount ?? 0}</dd></div><div><dt>Manager sessions</dt><dd>{snapshot?.settings.sessions?.length ?? 0}</dd></div></dl><section className="rg-settings-group"><h2>Server connection</h2><SyncConnectionPanel client={client} snapshot={snapshot} onRefresh={onRefresh} onError={onError} /></section>{sync?.phase === 'active' ? <SyncOperationsPanel client={client} revision={snapshot?.revision ?? 0} onRefresh={onRefresh} onError={onError} /> : null}{sync?.enabled ? <section className="rg-settings-group"><h2>Disconnect</h2><p>Local editing and provider Apply remain available after disconnecting.</p><Button tone="danger" disabled={busy} onClick={onDisable}>Disable sync</Button></section> : null}</>;
 }
 
 function RemoteSettings({ snapshot, busy, onDisable }: { snapshot: ManagerSnapshotV3 | null; busy: boolean; onDisable: () => void }) {

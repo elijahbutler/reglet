@@ -34,8 +34,10 @@
     },
     "sync": {
       "enabled": false,
+      "phase": "disabled",
       "state": "disabled",
-      "conflictCount": 0
+      "conflictCount": 0,
+      "conflicts": []
     },
     "remote": {
       "enabled": false

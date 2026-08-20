@@ -1,8 +1,14 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { loadManifest, purgeProviderBackups, saveManifest } from '../src/index.js';
+import {
+  loadManifest,
+  previewPurgeProviderBackups,
+  purgeProviderBackups,
+  purgeReviewedProviderBackups,
+  saveManifest,
+} from '../src/index.js';
 
 let home: string | undefined;
 
@@ -33,5 +39,56 @@ describe('provider backup purge', () => {
     expect(await Bun.file(claudeBackup).exists()).toBe(true);
     expect(manifest.outputs['/tmp/codex-output']?.backedUpTo).toBeNull();
     expect(manifest.outputs['/tmp/claude-output']?.backedUpTo).toBe(claudeBackup);
+  });
+
+  test('binds backup purge to the exact private tree and manifest references', async () => {
+    home = await mkdtemp(path.join(tmpdir(), 'reglet-backups-'));
+    const backup = path.join(home, '.state', 'backups', 'codex', 'revision', 'AGENTS.md');
+    await mkdir(path.dirname(backup), { recursive: true });
+    await writeFile(backup, 'first backup');
+    await saveManifest({ version: 1, outputs: {
+      '/tmp/codex-output': {
+        provider: 'codex',
+        content: 'rules',
+        hash: 'a',
+        appliedAt: new Date().toISOString(),
+        backedUpTo: backup,
+      },
+    } }, home);
+
+    const preview = await previewPurgeProviderBackups('codex', home);
+    expect(preview).toMatchObject({
+      provider: 'codex',
+      backup: { kind: 'directory' },
+      detachedOutputs: ['/tmp/codex-output'],
+    });
+    await writeFile(backup, 'changed after review');
+    await expect(purgeReviewedProviderBackups('codex', preview.digest, home)).rejects.toThrow('preview is stale');
+    expect(await Bun.file(backup).exists()).toBe(true);
+    expect((await loadManifest(home)).outputs['/tmp/codex-output']?.backedUpTo).toBe(backup);
+
+    const refreshed = await previewPurgeProviderBackups('codex', home);
+    expect(await purgeReviewedProviderBackups('codex', refreshed.digest, home)).toEqual({
+      provider: 'codex',
+      removed: true,
+      detachedOutputs: ['/tmp/codex-output'],
+    });
+  });
+
+  test('refuses a symbolic-link provider backup root', async () => {
+    if (process.platform === 'win32') return;
+    home = await mkdtemp(path.join(tmpdir(), 'reglet-backups-'));
+    const outside = await mkdtemp(path.join(tmpdir(), 'reglet-backups-outside-'));
+    try {
+      const backupRoot = path.join(home, '.state', 'backups', 'codex');
+      await mkdir(path.dirname(backupRoot), { recursive: true });
+      await writeFile(path.join(outside, 'keep.txt'), 'keep');
+      await symlink(outside, backupRoot);
+
+      await expect(previewPurgeProviderBackups('codex', home)).rejects.toThrow('symlink');
+      expect(await Bun.file(path.join(outside, 'keep.txt')).exists()).toBe(true);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 });

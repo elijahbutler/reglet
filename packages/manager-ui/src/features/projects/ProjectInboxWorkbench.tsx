@@ -1,5 +1,5 @@
 import { AlertTriangle, FileSearch, FolderPlus, Inbox, ScanSearch, ShieldCheck } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { JsonValue, ManagerSnapshotV3 } from '@reglet/manager-protocol';
 import type { ManagerClient } from '../../client/ManagerClient.js';
 import { Button } from '../../design-system/Button.js';
@@ -17,13 +17,22 @@ export function ProjectInboxWorkbench({ client, snapshot, onRefresh, onError }: 
   const discoveries = snapshot?.projectInbox?.discoveries ?? [];
   const [selectedId, setSelectedId] = useState<string>();
   const [preview, setPreview] = useState<JsonValue>();
+  const [confirmedExecutable, setConfirmedExecutable] = useState(false);
   const [busy, setBusy] = useState(false);
   const selected = useMemo(
     () => discoveries.find((discovery) => discovery.id === selectedId) ?? discoveries[0],
     [discoveries, selectedId],
   );
+  const selectedDiscoveryRef = useRef(selected?.id);
+  const previewRequestRef = useRef(0);
+  selectedDiscoveryRef.current = selected?.id;
 
-  useEffect(() => { setPreview(undefined); }, [selected?.id]);
+  useEffect(() => {
+    previewRequestRef.current += 1;
+    setPreview(undefined);
+    setConfirmedExecutable(false);
+    return () => { previewRequestRef.current += 1; };
+  }, [selected?.id]);
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -32,20 +41,39 @@ export function ProjectInboxWorkbench({ client, snapshot, onRefresh, onError }: 
 
   const previewPromotion = () => run(async () => {
     if (selected === undefined) return;
-    setPreview((await client.command('project.promotion-preview', { discoveryId: selected.id })).data);
+    const discoveryId = selected.id;
+    const requestId = ++previewRequestRef.current;
+    const requestIsCurrent = () => requestId === previewRequestRef.current &&
+      selectedDiscoveryRef.current === discoveryId;
+    setPreview(undefined);
+    setConfirmedExecutable(false);
+    let response: Awaited<ReturnType<ManagerClient['command']>>;
+    try {
+      response = await client.command('project.promotion-preview', { discoveryId });
+    } catch (error) {
+      if (!requestIsCurrent()) return;
+      throw error;
+    }
+    if (!requestIsCurrent()) return;
+    setPreview(response.data);
   });
 
   const promote = () => run(async () => {
     if (selected === undefined) return;
+    const executableRevision = requiredExecutableRevision(preview);
+    if (executableRevision !== undefined && !confirmedExecutable) return;
     await client.command('project.promote', {
       discoveryId: selected.id,
       targets: selected.recognizedBy,
-      confirmExecutables: true,
       ...(firstServerName(preview) === undefined ? {} : { serverName: firstServerName(preview) }),
+      ...(executableRevision === undefined ? {} : { confirmedExecutableRevision: executableRevision }),
     });
     setPreview(undefined);
+    setConfirmedExecutable(false);
     await onRefresh();
   });
+
+  const executableRevision = requiredExecutableRevision(preview);
 
   return (
     <>
@@ -89,7 +117,13 @@ export function ProjectInboxWorkbench({ client, snapshot, onRefresh, onError }: 
               <p>Reglet will recommend Global instruction only for root-level, always-active guidance. Scoped or nested guidance becomes a skill by default.</p>
               <Button tone="secondary" disabled={busy} onClick={() => void previewPromotion()}>Preview promotion</Button>
             </section>
-            {preview === undefined ? null : <PromotionSummary preview={preview} />}
+            {preview === undefined ? null : (
+              <PromotionSummary
+                preview={preview}
+                confirmedExecutable={confirmedExecutable}
+                onConfirmedExecutable={setConfirmedExecutable}
+              />
+            )}
           </div>
         )}
       </Pane>
@@ -103,7 +137,12 @@ export function ProjectInboxWorkbench({ client, snapshot, onRefresh, onError }: 
           <h2>Actions</h2>
           <div className="rg-action-stack">
             <Button tone="secondary" disabled={busy || selected === undefined} onClick={() => void previewPromotion()}>Preview</Button>
-            <Button tone="primary" disabled={busy || selected === undefined || preview === undefined} onClick={() => void promote()}>Promote reviewed</Button>
+            <Button
+              tone="primary"
+              disabled={busy || selected === undefined || preview === undefined ||
+                (executableRevision !== undefined && !confirmedExecutable)}
+              onClick={() => void promote()}
+            >Promote reviewed</Button>
           </div>
         </section>
       </Pane>
@@ -111,15 +150,35 @@ export function ProjectInboxWorkbench({ client, snapshot, onRefresh, onError }: 
   );
 }
 
-function PromotionSummary({ preview }: { preview: JsonValue }) {
+function PromotionSummary({ preview, confirmedExecutable, onConfirmedExecutable }: {
+  preview: JsonValue;
+  confirmedExecutable: boolean;
+  onConfirmedExecutable: (confirmed: boolean) => void;
+}) {
+  const executableRevision = requiredExecutableRevision(preview);
   return (
     <section className="rg-detail-section">
       <h2>Proposed canonical artifact</h2>
       <dl className="rg-key-values">
         <div><dt>Kind</dt><dd>{readString(preview, 'kind') || 'Unknown'}</dd></div>
         <div><dt>Mode</dt><dd>{readString(preview, 'mode') || 'Normalized MCP'}</dd></div>
-        <div><dt>Server</dt><dd>{firstServerName(preview) ?? '—'}</dd></div>
+        <div><dt>Server</dt><dd>{firstServerName(preview) ?? 'None'}</dd></div>
+        {executableRevision === undefined ? null : (
+          <div><dt>Executable revision</dt><dd><code>{executableRevision}</code></dd></div>
+        )}
       </dl>
+      {executableRevision === undefined ? null : (
+        <div className="rg-promotion-executable-confirmation">
+          <label>
+            <input
+              type="checkbox"
+              checked={confirmedExecutable}
+              onChange={(event) => onConfirmedExecutable(event.target.checked)}
+            />
+            <span>I reviewed the executable files in revision <code>{executableRevision}</code> and approve promoting this exact revision.</span>
+          </label>
+        </div>
+      )}
     </section>
   );
 }
@@ -132,6 +191,13 @@ function firstServerName(value: JsonValue | undefined): string | undefined {
   if (!isRecord(value) || !Array.isArray(value.servers)) return undefined;
   const first = value.servers[0];
   return isRecord(first) && typeof first.name === 'string' ? first.name : undefined;
+}
+
+function requiredExecutableRevision(value: JsonValue | undefined): string | undefined {
+  if (!isRecord(value) || !isRecord(value.inspection)) return undefined;
+  return value.inspection.requiresExecutableConfirmation === true && typeof value.inspection.revision === 'string'
+    ? value.inspection.revision
+    : undefined;
 }
 
 function readString(value: JsonValue, key: string): string {

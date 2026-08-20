@@ -8,15 +8,19 @@ import {
   beginOperation,
   defaultConfig,
   detachManagedContent,
+  detachReviewedManagedContent,
   getOperationReceipt,
   initMasterDir,
   listOperationReceipts,
   loadManifest,
   previewApplyStructured,
+  previewDetachManagedContent,
+  previewOperationReceiptRestore,
   recoverPendingOperations,
   replacePathFromDirectory,
   replacePathFromText,
   restoreOperationReceipt,
+  restoreReviewedOperationReceipt,
   saveConfig,
   getAdapter,
   type ProviderName,
@@ -220,6 +224,74 @@ describe('operation receipts and recovery', () => {
     }
   });
 
+  test('binds explicit recovery to the exact reviewed receipt and current targets', async () => {
+    await setup(['claude']);
+    await writeMasterRule('# Reviewed recovery\n');
+    const outputPath = path.join(providerHome, '.claude', 'CLAUDE.md');
+    await mkdir(path.dirname(outputPath), { recursive: true });
+    await writeFile(outputPath, 'provider content before apply\n');
+    const applied = await applyAll({ providers: ['claude'], contents: ['rules'], home });
+    const receiptId = applied.receipt?.id ?? '';
+
+    const preview = await previewOperationReceiptRestore(receiptId, home);
+    expect(preview).toMatchObject({
+      receiptId,
+      lifecycle: 'completed',
+      restorable: true,
+      targets: [{
+        path: outputPath,
+        action: 'restored',
+        current: { kind: 'file' },
+        restored: { kind: 'file' },
+      }],
+    });
+
+    await writeFile(outputPath, 'changed after review\n');
+    await expect(restoreReviewedOperationReceipt(receiptId, preview.digest, home))
+      .rejects.toThrow('preview is stale');
+    expect(await readFile(outputPath, 'utf8')).toBe('changed after review\n');
+
+    const refreshed = await previewOperationReceiptRestore(receiptId, home);
+    await restoreReviewedOperationReceipt(receiptId, refreshed.digest, home);
+    expect(await readFile(outputPath, 'utf8')).toBe('provider content before apply\n');
+    expect((await getOperationReceipt(receiptId, home)).lifecycle).toBe('restored');
+  });
+
+  test('refuses replay of rolled-back receipts and invalid receipt ids', async () => {
+    await setup(['claude']);
+    const outputPath = path.join(providerHome, '.claude', 'CLAUDE.md');
+    await mkdir(path.dirname(outputPath), { recursive: true });
+    await writeFile(outputPath, 'original\n');
+    const operation = await beginOperation({ home, providers: ['claude'], contents: ['rules'] });
+    await operation.snapshotTarget(outputPath);
+    await replacePathFromText('temporary\n', outputPath);
+    const receipt = await operation.rollback('test rollback');
+
+    const preview = await previewOperationReceiptRestore(receipt.id, home);
+    expect(preview).toMatchObject({ restorable: false, lifecycle: 'rolled-back' });
+    await expect(restoreOperationReceipt(receipt.id, home)).rejects.toThrow('rolled-back receipt cannot be restored');
+    await expect(getOperationReceipt('../outside', home)).rejects.toThrow('Invalid operation receipt id');
+  });
+
+  test('rejects corrupted receipt identities and unsafe pending-journal directories', async () => {
+    await setup(['claude']);
+    const operation = await beginOperation({ home, providers: ['claude'], contents: ['rules'] });
+    const journalPath = path.join(home, '.state', 'operations', 'journals', `${operation.id}.json`);
+    const journal = JSON.parse(await readFile(journalPath, 'utf8')) as { createdDirectories: string[] };
+    journal.createdDirectories = [path.parse(home).root];
+    await writeFile(journalPath, `${JSON.stringify(journal, null, 2)}\n`);
+    await expect(recoverPendingOperations(home)).rejects.toThrow('Invalid created directory');
+
+    await rm(journalPath, { force: true });
+    const receipt = await beginOperation({ home, providers: ['claude'], contents: ['rules'] });
+    const completed = await receipt.complete();
+    const receiptPath = path.join(home, '.state', 'operations', 'receipts', `${completed.id}.json`);
+    const parsed = JSON.parse(await readFile(receiptPath, 'utf8')) as { id: string };
+    parsed.id = 'different-receipt-id';
+    await writeFile(receiptPath, `${JSON.stringify(parsed, null, 2)}\n`);
+    await expect(getOperationReceipt(completed.id, home)).rejects.toThrow('Invalid operation receipt');
+  });
+
   test('requires a reviewed structured plan to replace managed drift', async () => {
     await setup(['claude']);
     await writeMasterRule('# Reviewed\n');
@@ -273,6 +345,35 @@ describe('operation receipts and recovery', () => {
     expect(detached.detached).toEqual([{ outputPath, content: 'rules', headerRemoved: true }]);
     expect(await readFile(outputPath, 'utf8')).toBe('<!-- source: rules/00-general.md -->\n\n# Keep this rule\n');
     expect((await loadManifest(home)).outputs[outputPath]).toBeUndefined();
+  });
+
+  test('reviews exact detachment and routes reversal through start managing instead of receipt replay', async () => {
+    await setup(['claude']);
+    await writeMasterRule('# Keep this reviewed rule\n');
+    const outputPath = path.join(providerHome, '.claude', 'CLAUDE.md');
+    await applyAll({ providers: ['claude'], contents: ['rules'], home });
+
+    const preview = await previewDetachManagedContent('claude', 'rules', home);
+    expect(preview).toMatchObject({
+      provider: 'claude',
+      content: 'rules',
+      status: 'ready',
+      targets: [{ path: outputPath, operation: 'rewrite', current: { kind: 'file' }, resulting: { kind: 'file' } }],
+    });
+    expect(preview.targets[0]?.diff).toContain('GENERATED BY REGLET');
+
+    await writeFile(outputPath, `${await readFile(outputPath, 'utf8')}\nChanged after review.\n`);
+    await expect(detachReviewedManagedContent('claude', 'rules', preview.digest, home)).rejects.toThrow('preview is stale');
+
+    const refreshed = await previewDetachManagedContent('claude', 'rules', home);
+    const detached = await detachReviewedManagedContent('claude', 'rules', refreshed.digest, home);
+    expect(detached.detached).toEqual([{ outputPath, content: 'rules', headerRemoved: true }]);
+    const recovery = await previewOperationReceiptRestore(detached.receipt.id, home);
+    expect(recovery).toMatchObject({
+      restorable: false,
+      reason: 'Use start managing, then review and apply the current canonical projection.',
+    });
+    await expect(restoreOperationReceipt(detached.receipt.id, home)).rejects.toThrow('Use start managing');
   });
 
   test('detaches and restores MCP outputs for every compatible provider adapter', async () => {

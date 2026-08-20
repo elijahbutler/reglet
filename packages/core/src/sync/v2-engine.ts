@@ -28,6 +28,7 @@ import { hasLibraryManifest, loadLibraryManifest } from '../artifacts/library.js
 import { tryMergeLibraryManifestText } from './library-merge.js';
 
 export interface SyncV2Result {
+  completedAt: string;
   pulled: string[];
   pushed: string[];
   merged: string[];
@@ -42,6 +43,18 @@ export interface SyncV2OnceOptions {
   secretStore?: SyncV2SecretStore;
 }
 
+export type SyncV2ConflictContent =
+  | { state: 'text'; content: string; size: number; hash: string }
+  | { state: 'deleted'; content: null; size: 0; hash: null }
+  | { state: 'binary' | 'too-large'; content: null; size: number; hash: string };
+
+export interface SyncV2ConflictPreview {
+  version: 1;
+  path: string;
+  local: SyncV2ConflictContent;
+  remote: SyncV2ConflictContent;
+}
+
 interface DecryptedChange {
   envelope: StoredSyncV2Envelope;
   plaintext: SyncV2ObjectPlaintext;
@@ -52,36 +65,55 @@ interface DecryptedChange {
 export async function syncOnceV2(options: SyncV2OnceOptions = {}): Promise<SyncV2Result> {
   const home = options.home ?? regletHome();
   const state = await loadActiveSyncV2State(home);
-  const store = options.secretStore ?? platformSyncV2SecretStore();
-  const secrets = await loadSyncV2DeviceSecrets(state.credentialId, store);
-  if (secrets.vaultId !== state.vaultId || secrets.keyEpoch !== state.keyEpoch) {
-    throw new Error('Sync state does not match the operating system credential store');
+  try {
+    const store = options.secretStore ?? platformSyncV2SecretStore();
+    const secrets = await loadSyncV2DeviceSecrets(state.credentialId, store);
+    if (secrets.vaultId !== state.vaultId || secrets.keyEpoch !== state.keyEpoch) {
+      throw new Error('Sync state does not match the operating system credential store');
+    }
+    await repairDerivedSyncV2Bases(home, state);
+    const client = new SyncV2Client(state.serverUrl, options.fetchImpl);
+    await client.ensureCompatible();
+    const result: SyncV2Result = {
+      completedAt: '',
+      pulled: [],
+      pushed: [],
+      merged: [],
+      conflicts: [],
+      deleted: [],
+      providerReviewRequired: false,
+    };
+    const pullChanged = await pullEncryptedChanges(home, state, secrets, client, result);
+    await pushEncryptedChanges(home, state, secrets, client, result);
+    result.providerReviewRequired = pullChanged || result.merged.length > 0 || result.conflicts.length > 0;
+    result.completedAt = new Date().toISOString();
+    state.lastSync = {
+      completedAt: result.completedAt,
+      pulled: result.pulled.length,
+      pushed: result.pushed.length,
+      merged: result.merged.length,
+      conflicts: result.conflicts.length,
+      deleted: result.deleted.length,
+      providerReviewRequired: result.providerReviewRequired,
+    };
+    delete state.lastError;
+    await saveSyncV2State(state, home);
+    return result;
+  } catch (error) {
+    state.lastError = {
+      occurredAt: new Date().toISOString(),
+      message: syncErrorMessage(error),
+    };
+    try { await saveSyncV2State(state, home); } catch { /* Preserve the original sync failure. */ }
+    throw error;
   }
-  await repairDerivedSyncV2Bases(home, state);
-  const client = new SyncV2Client(state.serverUrl, options.fetchImpl);
-  await client.ensureCompatible();
-  const result: SyncV2Result = {
-    pulled: [],
-    pushed: [],
-    merged: [],
-    conflicts: [],
-    deleted: [],
-    providerReviewRequired: false,
-  };
-  const pullChanged = await pullEncryptedChanges(home, state, secrets, client, result);
-  await pushEncryptedChanges(home, state, secrets, client, result);
-  result.providerReviewRequired = pullChanged || result.merged.length > 0 || result.conflicts.length > 0;
-  state.lastSync = {
-    completedAt: new Date().toISOString(),
-    pulled: result.pulled.length,
-    pushed: result.pushed.length,
-    merged: result.merged.length,
-    conflicts: result.conflicts.length,
-    deleted: result.deleted.length,
-    providerReviewRequired: result.providerReviewRequired,
-  };
-  await saveSyncV2State(state, home);
-  return result;
+}
+
+function syncErrorMessage(error: unknown): string {
+  const message = error instanceof Error && error.message.trim().length > 0
+    ? error.message.trim()
+    : 'Encrypted sync failed.';
+  return message.slice(0, 500);
 }
 
 export async function resolveSyncV2Conflict(
@@ -97,12 +129,81 @@ export async function resolveSyncV2Conflict(
   const conflictPath = conflictFilePath(localPath, state.deviceName);
   if (choice === 'theirs') {
     if (tracked.deleted === true) await rm(localPath, { recursive: true, force: true });
-    else await writePrivateFile(localPath, await readFile(conflictPath));
+    else await writePrivateFile(localPath, await verifiedConflictFile(conflictPath, tracked.hash, canonicalPath));
   }
   await rm(conflictPath, { force: true });
   state.files[canonicalPath] = { ...tracked, conflicted: false };
   await saveSyncV2State(state, home);
   return { path: canonicalPath, choice, resolved: true };
+}
+
+export async function inspectSyncV2Conflict(
+  filePath: string,
+  home = regletHome(),
+): Promise<SyncV2ConflictPreview> {
+  const canonicalPath = requireAllowedEncryptedSyncPath(filePath);
+  const state = await loadActiveSyncV2State(home);
+  const tracked = state.files[canonicalPath];
+  if (tracked?.conflicted !== true) throw new Error(`Encrypted sync conflict does not exist: ${JSON.stringify(canonicalPath)}`);
+  const localPath = await safeLocalSyncV2Path(home, canonicalPath);
+  const conflictPath = conflictFilePath(localPath, state.deviceName);
+  const local = await inspectOptionalConflictContent(localPath);
+  const remote = tracked.deleted === true
+    ? deletedConflictContent()
+    : inspectConflictContent(await verifiedConflictFile(conflictPath, tracked.hash, canonicalPath));
+  return { version: 1, path: canonicalPath, local, remote };
+}
+
+const maximumConflictTextPreviewBytes = 1_000_000;
+
+async function inspectOptionalConflictContent(filePath: string): Promise<SyncV2ConflictContent> {
+  try {
+    const details = await lstat(filePath);
+    if (!details.isFile()) throw new Error('Encrypted sync conflict content is not a regular file.');
+    return inspectConflictContent(await readFile(filePath));
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') return deletedConflictContent();
+    throw error;
+  }
+}
+
+function inspectConflictContent(content: Uint8Array): SyncV2ConflictContent {
+  const hash = sha256String(content);
+  if (content.byteLength > maximumConflictTextPreviewBytes) {
+    return { state: 'too-large', content: null, size: content.byteLength, hash };
+  }
+  try {
+    return {
+      state: 'text',
+      content: new TextDecoder('utf-8', { fatal: true }).decode(content),
+      size: content.byteLength,
+      hash,
+    };
+  } catch {
+    return { state: 'binary', content: null, size: content.byteLength, hash };
+  }
+}
+
+function deletedConflictContent(): SyncV2ConflictContent {
+  return { state: 'deleted', content: null, size: 0, hash: null };
+}
+
+async function verifiedConflictFile(conflictPath: string, expectedHash: string, canonicalPath: string): Promise<Uint8Array> {
+  let details;
+  try {
+    details = await lstat(conflictPath);
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') {
+      throw new Error(`Encrypted remote conflict copy is missing: ${JSON.stringify(canonicalPath)}`);
+    }
+    throw error;
+  }
+  if (!details.isFile()) throw new Error(`Encrypted remote conflict copy is not a regular file: ${JSON.stringify(canonicalPath)}`);
+  const content = await readFile(conflictPath);
+  if (sha256String(content) !== expectedHash) {
+    throw new Error(`Encrypted remote conflict copy changed after sync: ${JSON.stringify(canonicalPath)}`);
+  }
+  return content;
 }
 
 async function pullEncryptedChanges(

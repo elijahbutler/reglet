@@ -422,6 +422,30 @@ project
     else for (const discovery of asRecordList(discoveries)) console.log(`${stringField(discovery, 'id')}\t${stringField(discovery, 'state')}\t${stringField(discovery, 'kind')}\t${stringField(discovery, 'relativePath')}`);
   });
 
+project
+  .command('preview')
+  .description('Inspect a project promotion without changing canonical content')
+  .argument('<discovery>')
+  .option('--mode <mode>', 'global-instruction, convert-to-skill, or disabled-draft', parsePromotionMode)
+  .option('--json')
+  .action(async (discoveryId: string, options: { mode?: PromotionMode; json?: boolean }) => {
+    const preview = await applicationData('project.promotion-preview', {
+      discoveryId,
+      ...(options.mode === undefined ? {} : { mode: options.mode }),
+    });
+    if (options.json === true) {
+      printJson(preview);
+      return;
+    }
+    console.log(`kind\t${stringField(preview, 'kind')}`);
+    const inspection = isRecordValue(preview) && isRecordValue(preview.inspection)
+      ? preview.inspection
+      : undefined;
+    if (inspection !== undefined && booleanField(inspection, 'requiresExecutableConfirmation')) {
+      console.log(`executable-revision\t${stringField(inspection, 'revision')}`);
+    }
+  });
+
 program
   .command('promote')
   .description('Promote a reviewed project discovery into the canonical library')
@@ -430,14 +454,14 @@ program
   .option('-p, --provider <provider...>', 'target provider(s)', parseProviderList)
   .option('--destination <artifact>', 'merge into an existing artifact')
   .option('--server <name>', 'MCP server name when a source contains multiple servers')
-  .option('--confirm-executables', 'confirm reviewed executable skill files')
+  .option('--confirm-executable-revision <revision>', 'confirm the exact executable skill revision returned by project preview')
   .option('--json')
   .action(async (discoveryId: string, options: {
     mode?: PromotionMode;
     provider?: ProviderId[];
     destination?: string;
     server?: string;
-    confirmExecutables?: boolean;
+    confirmExecutableRevision?: string;
     json?: boolean;
   }) => {
     const result = await applicationData('project.promote', {
@@ -446,7 +470,9 @@ program
       ...(options.provider === undefined ? {} : { targets: options.provider }),
       ...(options.destination === undefined ? {} : { destinationArtifact: options.destination }),
       ...(options.server === undefined ? {} : { serverName: options.server }),
-      ...(options.confirmExecutables === undefined ? {} : { confirmExecutables: options.confirmExecutables }),
+      ...(options.confirmExecutableRevision === undefined
+        ? {}
+        : { confirmedExecutableRevision: options.confirmExecutableRevision }),
     });
     printApplicationResult(result, options.json, 'promoted');
   });
@@ -1894,14 +1920,7 @@ async function dispatchManagerRpc(request: ManagerRpcRequest): Promise<unknown> 
       return buildSyncSnapshot();
     case 'sync.run': {
       await requireSyncPreviewAcknowledged();
-      const result = await syncOnceV2();
-      const state = await loadSyncV2State();
-      const run: SyncRunResult = {
-        completedAt: state?.phase === 'active' && state.lastSync !== undefined
-          ? state.lastSync.completedAt
-          : new Date().toISOString(),
-        ...result,
-      };
+      const run: SyncRunResult = await syncOnceV2();
       return run;
     }
     case 'sync.device.rename':
@@ -1937,9 +1956,11 @@ async function requireSyncPreviewAcknowledged(): Promise<void> {
 
 async function buildSyncSnapshot(): Promise<SyncSnapshot> {
   const previewAcknowledged = (await loadConfig()).encryptedSyncPreview.acknowledged;
-  const empty: Pick<SyncSnapshot, 'devices' | 'lastSync' | 'pending' | 'keyRotationRequired'> = {
+  const empty: Pick<SyncSnapshot, 'devices' | 'conflicts' | 'lastSync' | 'lastError' | 'pending' | 'keyRotationRequired'> = {
     devices: [],
+    conflicts: [],
     lastSync: null,
+    lastError: null,
     pending: null,
     keyRotationRequired: false,
   };
@@ -1999,7 +2020,9 @@ async function buildSyncSnapshot(): Promise<SyncSnapshot> {
             expiresAt: state.request.expiresAt,
           },
       devices: [],
+      conflicts: [],
       lastSync: null,
+      lastError: null,
       keyRotationRequired: false,
     };
   }
@@ -2024,7 +2047,12 @@ async function buildSyncSnapshot(): Promise<SyncSnapshot> {
         lastSeenAt: device.lastSeenAt,
         revokedAt: device.revokedAt,
       })),
+      conflicts: Object.entries(state.files)
+        .filter(([, file]) => file.conflicted === true)
+        .map(([filePath]) => filePath)
+        .sort((left, right) => left.localeCompare(right)),
       lastSync: state.lastSync ?? null,
+      lastError: state.lastError ?? null,
       keyRotationRequired: state.keyRotationRequired === true,
     };
   } catch (error) {
@@ -2044,7 +2072,12 @@ async function buildSyncSnapshot(): Promise<SyncSnapshot> {
       currentDeviceName: state.deviceName,
       pending: null,
       devices: [],
+      conflicts: Object.entries(state.files)
+        .filter(([, file]) => file.conflicted === true)
+        .map(([filePath]) => filePath)
+        .sort((left, right) => left.localeCompare(right)),
       lastSync: state.lastSync ?? null,
+      lastError: state.lastError ?? null,
       keyRotationRequired: state.keyRotationRequired === true || revoked,
     };
   }

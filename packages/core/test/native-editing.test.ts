@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -6,7 +6,7 @@ import {
   applyAll, createSkill, deleteMcpServer, listManagedSkillTrees, listMcpServers, readMcpServer, readSkillFile,
   applyStructuredPreview, initMasterDir, loadConfig, previewApplyStructured, renameSkill, renameSkillFile, saveConfig,
   listEffectiveMcpServers, providerMcpScope, renameMcpServerDisplayName, serializeMcpServers, upsertMcpServer,
-  validateMcpServer, writeSkillFile,
+  redactMcpCredentialArgumentsInText, validateMcpServer, writeSkillFile,
 } from '../src/index.js';
 
 let home = '';
@@ -210,6 +210,51 @@ describe('native MCP editing', () => {
     await writeFile(output, '{"theme":"light","mcpServers":{}}\n');
     await expect(applyStructuredPreview(preview.digest, { providers: ['claude'], contents: ['mcp'], home: root, providerHome }))
       .rejects.toThrow('stale');
+  });
+
+  test('redacts credential-like command arguments from JSON and TOML provider previews', async () => {
+    const root = await setup();
+    providerHome = await mkdtemp(path.join(tmpdir(), 'reglet-native-provider-'));
+    process.env.REGLET_PROVIDER_HOME = providerHome;
+    await initMasterDir(root);
+    const config = await loadConfig(root);
+    config.providers.codex.enabled = true;
+    config.providers.codex.mcp = true;
+    await saveConfig(config, root);
+    await upsertMcpServer('managed', {
+      command: 'node',
+      args: [
+        '--access-token',
+        'canonical-cli-canary',
+        '--header',
+        'Authorization: Bearer canonical-header-canary',
+        '--api-key=canonical-inline-canary',
+      ],
+    }, root);
+    const output = path.join(providerHome, '.codex', 'config.toml');
+    await mkdir(path.dirname(output), { recursive: true });
+    await writeFile(output, [
+      '[mcp_servers.managed]',
+      'command = "node"',
+      'args = ["--access-token", "provider-cli-canary", "--header", "Authorization: Bearer provider-header-canary"]',
+      '',
+    ].join('\n'));
+
+    const preview = await previewApplyStructured({ providers: ['codex'], contents: ['mcp'], home: root, providerHome });
+    const serialized = JSON.stringify(preview);
+    expect(serialized).toContain('<redacted:argument>');
+    expect(serialized).not.toContain('canonical-cli-canary');
+    expect(serialized).not.toContain('canonical-header-canary');
+    expect(serialized).not.toContain('canonical-inline-canary');
+    expect(serialized).not.toContain('provider-cli-canary');
+    expect(serialized).not.toContain('provider-header-canary');
+  });
+
+  test('preserves nested argument arrays while redacting their values', () => {
+    const input = '{"args":["--safe",["--api-key","nested-secret"]],"after":true}';
+    const redacted = redactMcpCredentialArgumentsInText(input);
+
+    expect(redacted).toBe('{"args":["--safe",["--api-key","<redacted:argument>"]],"after":true}');
   });
 
   test('rejects missing process env references before writing providers', async () => {

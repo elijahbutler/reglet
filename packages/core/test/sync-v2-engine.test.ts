@@ -6,7 +6,10 @@ import {
   approveSyncV2Pairing,
   bootstrapSyncV2,
   completeSyncV2Pairing,
+  loadSyncV2State,
+  newActiveSyncV2State,
   requestSyncV2Pairing,
+  saveSyncV2State,
   syncOnceV2,
   type SyncV2SecretStore,
   saveLibraryManifest,
@@ -28,6 +31,33 @@ afterEach(async () => {
 });
 
 describe('encrypted sync protocol v2 engine', () => {
+  test('persists a visible failure and clears it after a successful run', async () => {
+    const failedHome = await tempDirectory();
+    await saveSyncV2State(newActiveSyncV2State({
+      serverUrl: 'https://reglet.test',
+      vaultId: 'missing-vault',
+      deviceId: 'missing-device',
+      deviceName: 'Missing credentials',
+      keyEpoch: 1,
+      credentialId: 'missing-credential',
+    }), failedHome);
+    await expect(syncOnceV2({ home: failedHome, secretStore: new MemorySecretStore() }))
+      .rejects.toThrow('credentials are missing');
+    const failed = await loadSyncV2State(failedHome);
+    expect(failed?.phase === 'active' ? failed.lastError?.message : undefined).toContain('credentials are missing');
+
+    const setup = await twoDeviceSetup();
+    const before = await loadSyncV2State(setup.macHome);
+    if (before?.phase !== 'active') throw new Error('Expected active sync state.');
+    before.lastError = { occurredAt: '2020-01-01T00:00:00.000Z', message: 'Previous failure' };
+    await saveSyncV2State(before, setup.macHome);
+    const completed = await syncOnceV2({ home: setup.macHome, fetchImpl: setup.fetchImpl, secretStore: setup.macStore });
+    const after = await loadSyncV2State(setup.macHome);
+
+    expect(completed.completedAt).toBe(after?.phase === 'active' ? after.lastSync?.completedAt : undefined);
+    expect(after?.phase === 'active' ? after.lastError : undefined).toBeUndefined();
+  });
+
   test('syncs only manifest-indexed canonical files after library-v2 migration', async () => {
     const setup = await twoDeviceSetup();
     await mkdir(path.join(setup.macHome, 'rules'), { recursive: true });

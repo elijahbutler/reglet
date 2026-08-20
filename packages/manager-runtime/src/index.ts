@@ -1,7 +1,13 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { access, mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { LocalState, regletHome, systemSecretStore, type RemoteSessionRecord } from '@reglet/core';
+import {
+  LocalState,
+  recoverPendingOperations,
+  regletHome,
+  systemSecretStore,
+  type RemoteSessionRecord,
+} from '@reglet/core';
 import {
   ApplicationPermissionError,
   RegletApplication,
@@ -25,9 +31,13 @@ import { createBunWebSocket } from 'hono/bun';
 import type { WSContext } from 'hono/ws';
 import { recordRuntimeLog } from './logging.js';
 import { ProjectRootWatcher } from './project-watcher.js';
+import { RuntimeRevisionWatcher } from './revision-watcher.js';
+import { ManagedSourceWatcher } from './source-watcher.js';
 
 export * from './logging.js';
 export * from './project-watcher.js';
+export * from './revision-watcher.js';
+export * from './source-watcher.js';
 
 interface RuntimeVariables {
   session: RemoteSessionRecord;
@@ -45,6 +55,7 @@ export interface ManagerRuntimeOptions {
   home?: string;
   managerAssetsDir?: string;
   watchProjects?: boolean;
+  watchExternalChanges?: boolean;
   watcherReady?: () => boolean;
   allowedOrigins?: string[];
 }
@@ -63,6 +74,7 @@ export interface ManagerRuntimeApp {
   app: Hono<{ Variables: RuntimeVariables }>;
   websocket: ReturnType<typeof createBunWebSocket>['websocket'];
   watcher?: ProjectRootWatcher;
+  sourceWatcher?: ManagedSourceWatcher;
   dispose(): Promise<void>;
 }
 
@@ -98,11 +110,30 @@ export function createManagerRuntime(options: ManagerRuntimeOptions = {}): Manag
   ]);
   const { upgradeWebSocket, websocket } = createBunWebSocket();
   const app = new Hono<{ Variables: RuntimeVariables }>();
+  const revisionWatcher = options.watchExternalChanges === false
+    ? undefined
+    : new RuntimeRevisionWatcher({
+        readRevision: () => readCommandRevision(home),
+        onInvalidation: (revision) => broadcastInvalidation(sockets, revision, 'runtime'),
+      });
+  void revisionWatcher?.start();
+  const sourceWatcher = options.watchExternalChanges === false
+    ? undefined
+    : new ManagedSourceWatcher({
+        home,
+        onInvalidation: async () => {
+          broadcastInvalidation(sockets, await readCommandRevision(home), 'filesystem');
+        },
+      });
+  void sourceWatcher?.start();
   const watcher = options.watchProjects === true && options.watcherReady === undefined
     ? new ProjectRootWatcher({
         home,
         application,
-        onInvalidation: (revision) => broadcastInvalidation(sockets, revision, 'filesystem'),
+        onInvalidation: (revision) => {
+          revisionWatcher?.noteRevision(revision);
+          broadcastInvalidation(sockets, revision, 'filesystem');
+        },
       })
     : undefined;
   void watcher?.start();
@@ -162,7 +193,10 @@ export function createManagerRuntime(options: ManagerRuntimeOptions = {}): Manag
   }));
   app.get('/healthz', (context) => context.json({ status: 'ok' }));
   app.get('/readyz', async (context) => {
-    const readiness = await readReadiness(home, options.watcherReady ?? (() => watcher?.isReady() ?? true));
+    const readiness = await readReadiness(
+      home,
+      options.watcherReady ?? (() => (watcher?.isReady() ?? true) && (sourceWatcher?.isReady() ?? true)),
+    );
     return readiness.ready ? context.json(readiness, 200) : context.json(readiness, 503);
   });
   app.get('/manager', (context) => context.redirect('/manager/'));
@@ -279,6 +313,7 @@ export function createManagerRuntime(options: ManagerRuntimeOptions = {}): Manag
     }), request.protocolVersion);
     if (!managerRpcResponseValidator.validate(response)) throw new Error('Runtime produced an invalid protocol response.');
     if (result.changed) {
+      revisionWatcher?.noteRevision(result.revision);
       broadcastInvalidation(sockets, result.revision, 'command');
       if (request.operation === 'project.root.add' || request.operation === 'project.root.remove') await watcher?.refresh();
       if (request.operation === 'session.revoke') closeRevokedSessionSockets(sockets, request.input?.sessionId);
@@ -305,8 +340,11 @@ export function createManagerRuntime(options: ManagerRuntimeOptions = {}): Manag
     app,
     websocket,
     watcher,
+    sourceWatcher,
     async dispose() {
+      revisionWatcher?.dispose();
       await watcher?.dispose();
+      await sourceWatcher?.dispose();
       for (const socket of sockets.keys()) socket.close(1001, 'Runtime stopped');
       sockets.clear();
     },
@@ -318,7 +356,12 @@ export async function serveManagerRuntime(options: ManagerRuntimeServeOptions = 
   const hostname = options.hostname ?? '127.0.0.1';
   validateManagerRuntimeBinding(hostname, options);
   await mkdir(home, { recursive: true });
+  const recovery = await recoverPendingOperations(home);
+  if (recovery.recovered.length > 0) {
+    recordRuntimeLog(home, 'operation-recovery', { count: recovery.recovered.length });
+  }
   const runtime = createManagerRuntime({ ...options, home, watchProjects: options.watchProjects ?? true });
+  await runtime.sourceWatcher?.start();
   const tls = options.tlsCertificate !== undefined && options.tlsPrivateKey !== undefined
     ? { cert: options.tlsCertificate, key: options.tlsPrivateKey }
     : undefined;
@@ -381,6 +424,15 @@ async function readReadiness(home: string, watcherReady: () => boolean): Promise
   try { await systemSecretStore().status('reglet-readiness-probe'); keychain = true; } catch { keychain = false; }
   const watcher = watcherReady();
   return { ready: canonicalDirectory && database && watcher, database, canonicalDirectory, watcher, keychain };
+}
+
+async function readCommandRevision(home: string): Promise<number> {
+  const state = await LocalState.open(home);
+  try {
+    return state.commandRevision();
+  } finally {
+    state.close();
+  }
 }
 
 function managerAssetResponse(requestPath: string, assetsDir: string): Response {
@@ -466,7 +518,11 @@ function prunePairingFailures(failures: number[]): void {
   while ((failures[0] ?? Number.POSITIVE_INFINITY) < cutoff) failures.shift();
 }
 
-function broadcastInvalidation(sockets: Map<WSContext, string>, revision: number, reason: 'command' | 'filesystem'): void {
+function broadcastInvalidation(
+  sockets: Map<WSContext, string>,
+  revision: number,
+  reason: 'command' | 'filesystem' | 'runtime',
+): void {
   const payload = JSON.stringify({ type: 'invalidated', revision, reason });
   for (const socket of sockets.keys()) {
     try { socket.send(payload); } catch { sockets.delete(socket); }

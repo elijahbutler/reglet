@@ -1,13 +1,16 @@
 use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
     time::Duration,
 };
 use tauri::{
     ipc::Channel,
     menu::{MenuBuilder, SubmenuBuilder},
-    AppHandle, Manager, State, WindowEvent,
+    AppHandle, Emitter, Manager, RunEvent, State, WindowEvent,
 };
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
@@ -78,8 +81,17 @@ struct ManagerRuntimeStartup {
 
 #[derive(Default)]
 struct ManagerRuntimeState {
+    lifecycle: tokio::sync::Mutex<()>,
+    shutdown_barrier: Mutex<bool>,
     child: Mutex<Option<CommandChild>>,
     startup: Mutex<Option<ManagerRuntimeStartup>>,
+    generation: AtomicU64,
+}
+
+#[derive(Clone, Copy)]
+enum RuntimeStopMode {
+    Restartable,
+    AppShutdown,
 }
 
 #[derive(Default)]
@@ -90,6 +102,7 @@ async fn manager_runtime_start(
     app: AppHandle,
     state: State<'_, ManagerRuntimeState>,
 ) -> Result<ManagerRuntimeStartup, ManagerRpcError> {
+    let _lifecycle = state.lifecycle.lock().await;
     if let Some(startup) = state
         .startup
         .lock()
@@ -103,7 +116,15 @@ async fn manager_runtime_start(
         .sidecar(SIDECAR_NAME)
         .map_err(|_| runtime_start_error())?
         .args(["serve", "--hostname", "127.0.0.1", "--port", "0", "--json"]);
-    let (mut events, child) = command.spawn().map_err(|_| runtime_start_error())?;
+    let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let mut events = spawn_and_register_runtime_child(
+        &state.shutdown_barrier,
+        &state.child,
+        || command.spawn().map_err(|_| runtime_start_error()),
+        |child| {
+            let _ = child.kill();
+        },
+    )?;
     let startup_result = tokio::time::timeout(RUNTIME_STARTUP_TIMEOUT, async {
         let mut stdout = Vec::new();
         loop {
@@ -129,41 +150,145 @@ async fn manager_runtime_start(
     let startup = match startup_result {
         Ok(Ok(startup)) => startup,
         Ok(Err(error)) => {
-            let _ = child.kill();
+            let _ = discard_runtime_child(&state, generation);
             return Err(error);
         }
         Err(_) => {
-            let _ = child.kill();
+            let _ = discard_runtime_child(&state, generation);
             return Err(runtime_start_error());
         }
     };
-    *state.child.lock().map_err(|_| runtime_state_error())? = Some(child);
-    *state.startup.lock().map_err(|_| runtime_state_error())? = Some(startup.clone());
-    tauri::async_runtime::spawn(async move { while events.recv().await.is_some() {} });
+    if let Err(error) = with_runtime_shutdown_barrier(&state.shutdown_barrier, |shutdown_started| {
+        if shutdown_started {
+            return Err(runtime_shutdown_error());
+        }
+        *state.startup.lock().map_err(|_| runtime_state_error())? = Some(startup.clone());
+        Ok(())
+    }) {
+        let _ = discard_runtime_child(&state, generation);
+        return Err(error);
+    }
+    let runtime_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = events.recv().await {
+            if !matches!(event, CommandEvent::Terminated(_) | CommandEvent::Error(_)) {
+                continue;
+            }
+            let runtime_state = runtime_app.state::<ManagerRuntimeState>();
+            let _lifecycle = runtime_state.lifecycle.lock().await;
+            let terminated_current = runtime_state.generation.load(Ordering::SeqCst) == generation;
+            if terminated_current {
+                let _ = runtime_state.child.lock().map(|mut child| child.take());
+                let _ = runtime_state
+                    .startup
+                    .lock()
+                    .map(|mut startup| startup.take());
+            }
+            drop(_lifecycle);
+            if terminated_current {
+                let _ = runtime_app.emit("manager-runtime-terminated", ());
+            }
+            break;
+        }
+    });
     Ok(startup)
 }
 
 #[tauri::command]
-fn manager_runtime_stop(state: State<'_, ManagerRuntimeState>) -> Result<(), ManagerRpcError> {
-    stop_manager_runtime(&state)
+async fn manager_runtime_stop(
+    state: State<'_, ManagerRuntimeState>,
+) -> Result<(), ManagerRpcError> {
+    stop_manager_runtime(&state).await
 }
 
-fn stop_manager_runtime(state: &ManagerRuntimeState) -> Result<(), ManagerRpcError> {
-    if let Some(child) = state
-        .child
-        .lock()
-        .map_err(|_| runtime_state_error())?
-        .take()
-    {
-        child.kill().map_err(|_| {
-            update_error(
-                "RUNTIME_STOP_FAILED",
-                "Reglet could not stop the local Manager runtime.",
-            )
-        })?;
+async fn stop_manager_runtime(state: &ManagerRuntimeState) -> Result<(), ManagerRpcError> {
+    let _lifecycle = state.lifecycle.lock().await;
+    stop_manager_runtime_immediately(state, RuntimeStopMode::Restartable)
+}
+
+fn stop_manager_runtime_immediately(
+    state: &ManagerRuntimeState,
+    mode: RuntimeStopMode,
+) -> Result<(), ManagerRpcError> {
+    stop_registered_runtime_child(&state.shutdown_barrier, &state.child, mode, |child| {
+        state.generation.fetch_add(1, Ordering::SeqCst);
+        if let Some(child) = child {
+            child.kill().map_err(|_| {
+                update_error(
+                    "RUNTIME_STOP_FAILED",
+                    "Reglet could not stop the local Manager runtime.",
+                )
+            })?;
+        }
+        *state.startup.lock().map_err(|_| runtime_state_error())? = None;
+        Ok(())
+    })
+}
+
+fn with_runtime_shutdown_barrier<Output>(
+    shutdown_barrier: &Mutex<bool>,
+    operation: impl FnOnce(bool) -> Result<Output, ManagerRpcError>,
+) -> Result<Output, ManagerRpcError> {
+    let shutdown_barrier = shutdown_barrier.lock().map_err(|_| runtime_state_error())?;
+    operation(*shutdown_barrier)
+}
+
+fn spawn_and_register_runtime_child<Events, Child>(
+    shutdown_barrier: &Mutex<bool>,
+    child_slot: &Mutex<Option<Child>>,
+    spawn: impl FnOnce() -> Result<(Events, Child), ManagerRpcError>,
+    kill: impl FnOnce(Child),
+) -> Result<Events, ManagerRpcError> {
+    with_runtime_shutdown_barrier(shutdown_barrier, |shutdown_started| {
+        if shutdown_started {
+            return Err(runtime_shutdown_error());
+        }
+        let (events, child) = spawn()?;
+        match child_slot.lock() {
+            Ok(mut registered_child) => {
+                *registered_child = Some(child);
+                Ok(events)
+            }
+            Err(_) => {
+                kill(child);
+                Err(runtime_state_error())
+            }
+        }
+    })
+}
+
+fn stop_registered_runtime_child<Child>(
+    shutdown_barrier: &Mutex<bool>,
+    child_slot: &Mutex<Option<Child>>,
+    mode: RuntimeStopMode,
+    stop: impl FnOnce(Option<Child>) -> Result<(), ManagerRpcError>,
+) -> Result<(), ManagerRpcError> {
+    let mut shutdown_barrier = shutdown_barrier.lock().map_err(|_| runtime_state_error())?;
+    if matches!(mode, RuntimeStopMode::AppShutdown) {
+        *shutdown_barrier = true;
     }
-    *state.startup.lock().map_err(|_| runtime_state_error())? = None;
-    Ok(())
+    let child = child_slot.lock().map_err(|_| runtime_state_error())?.take();
+    stop(child)
+}
+
+fn discard_runtime_child(
+    state: &ManagerRuntimeState,
+    generation: u64,
+) -> Result<(), ManagerRpcError> {
+    with_runtime_shutdown_barrier(&state.shutdown_barrier, |_| {
+        if state.generation.load(Ordering::SeqCst) != generation {
+            return Ok(());
+        }
+        if let Some(child) = state
+            .child
+            .lock()
+            .map_err(|_| runtime_state_error())?
+            .take()
+        {
+            let _ = child.kill();
+        }
+        Ok(())
+    })
 }
 
 fn validate_runtime_startup(startup: &ManagerRuntimeStartup) -> Result<(), ManagerRpcError> {
@@ -203,6 +328,13 @@ fn runtime_state_error() -> ManagerRpcError {
     update_error(
         "RUNTIME_STATE_FAILED",
         "Reglet could not access local Manager runtime state.",
+    )
+}
+
+fn runtime_shutdown_error() -> ManagerRpcError {
+    update_error(
+        "RUNTIME_SHUTDOWN",
+        "Reglet is closing its local Manager runtime.",
     )
 }
 
@@ -367,7 +499,7 @@ fn user_home() -> Option<PathBuf> {
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(ManagerRuntimeState::default())
         .manage(PendingUpdateState::default())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -414,7 +546,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             if matches!(event, WindowEvent::Destroyed) && window.label() == "main" {
                 let state = window.state::<ManagerRuntimeState>();
-                let _ = stop_manager_runtime(&state);
+                let _ = stop_manager_runtime_immediately(&state, RuntimeStopMode::AppShutdown);
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -424,8 +556,14 @@ pub fn run() {
             install_update,
             open_file_location
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Reglet desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building Reglet desktop");
+    app.run(|app, event| {
+        if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
+            let state = app.state::<ManagerRuntimeState>();
+            let _ = stop_manager_runtime_immediately(&state, RuntimeStopMode::AppShutdown);
+        }
+    });
 }
 
 fn update_error(code: &str, message: &str) -> ManagerRpcError {
@@ -491,6 +629,86 @@ mod tests {
             .expect("valid startup JSON")
             .expect("complete startup JSON");
         assert_eq!(startup.url, "http://127.0.0.1:43210");
+    }
+
+    #[test]
+    fn immediate_runtime_stop_invalidates_startup_state() {
+        let state = ManagerRuntimeState::default();
+        *state.startup.lock().expect("runtime startup lock") = Some(ManagerRuntimeStartup {
+            version: 1,
+            listening: true,
+            url: "http://127.0.0.1:43210".to_string(),
+            manager_url: "http://127.0.0.1:43210/manager/#pair=ABC123".to_string(),
+            pairing_expires_at: "2026-08-20T18:00:00.000Z".to_string(),
+            remote: false,
+            protocol_version: 2,
+        });
+
+        stop_manager_runtime_immediately(&state, RuntimeStopMode::Restartable)
+            .expect("immediate runtime stop");
+
+        assert!(state
+            .startup
+            .lock()
+            .expect("runtime startup lock")
+            .is_none());
+        assert_eq!(state.generation.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn app_shutdown_kills_a_pending_child_before_startup_completes() {
+        use std::sync::{Arc, Barrier};
+
+        let shutdown_barrier = Arc::new(Mutex::new(false));
+        let child_slot = Arc::new(Mutex::new(None));
+        let startup_pending = Arc::new(Barrier::new(2));
+        let finish_startup = Arc::new(Barrier::new(2));
+        let child_killed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let state_published = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let startup_thread = {
+            let shutdown_barrier = Arc::clone(&shutdown_barrier);
+            let child_slot = Arc::clone(&child_slot);
+            let startup_pending = Arc::clone(&startup_pending);
+            let finish_startup = Arc::clone(&finish_startup);
+            let state_published = Arc::clone(&state_published);
+            std::thread::spawn(move || {
+                spawn_and_register_runtime_child(
+                    &shutdown_barrier,
+                    &child_slot,
+                    || Ok(((), ())),
+                    |_| panic!("registered test child should not be discarded"),
+                )
+                .expect("spawn and register pending child");
+                startup_pending.wait();
+                finish_startup.wait();
+                let result = with_runtime_shutdown_barrier(&shutdown_barrier, |shutdown_started| {
+                    if shutdown_started {
+                        return Err(runtime_shutdown_error());
+                    }
+                    state_published.store(true, Ordering::SeqCst);
+                    Ok(())
+                });
+                assert_eq!(result, Err(runtime_shutdown_error()));
+            })
+        };
+
+        startup_pending.wait();
+        stop_registered_runtime_child(
+            &shutdown_barrier,
+            &child_slot,
+            RuntimeStopMode::AppShutdown,
+            |child| {
+                child_killed.store(child.is_some(), Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .expect("window destruction shutdown");
+        assert!(child_killed.load(Ordering::SeqCst));
+        assert!(child_slot.lock().expect("pending child slot").is_none());
+        finish_startup.wait();
+        startup_thread.join().expect("startup thread");
+
+        assert!(!state_published.load(Ordering::SeqCst));
     }
 
     #[test]
