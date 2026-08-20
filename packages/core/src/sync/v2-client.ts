@@ -389,7 +389,6 @@ export class SyncV2Client {
   private async request(path: string, init: RequestInit, auth: SyncAuth): Promise<Response> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
-    timeout.unref?.();
     try {
       return await this.fetchImpl(`${this.baseUrl}${path}`, {
         ...init,
