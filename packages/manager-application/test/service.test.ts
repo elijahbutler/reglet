@@ -596,6 +596,13 @@ describe('RegletApplication', () => {
         reason: expect.stringContaining('start managing'),
       }),
     ]));
+    const detachRecovery = await app.execute({
+      operation: 'recovery.preview',
+      input: { receiptId: isManagerProviderDetachResultV3(detached) ? detached.receiptId : '' },
+    });
+    expect(detachRecovery.data).toMatchObject({
+      receipt: { restorable: false, reason: expect.stringContaining('start managing') },
+    });
 
     const resumed = await app.execute({
       operation: 'provider.source.start-managing',
@@ -704,11 +711,12 @@ describe('RegletApplication', () => {
       batchDigest: string;
       content: 'rules';
       unitDigest: string;
-      review: { units: Array<{ status: string; validationIssues: string[] }> };
+      review: { units: Array<{ status: string; validationIssues: string[]; validationIssueCodes: string[] }> };
     };
     expect(projectionPreview.review.units[0]).toMatchObject({
       status: 'blocked',
       validationIssues: [expect.stringContaining('AGENTS.override.md shadows')],
+      validationIssueCodes: ['provider-override-active'],
     });
     const blocked = await app.execute({
       operation: 'provider.apply',
@@ -843,6 +851,30 @@ describe('RegletApplication', () => {
       kind: 'mcp',
       targets: ['codex'],
     });
+  });
+
+  test('sanitizes prototype-named provider MCP environment keys without leaking values', async () => {
+    const { app } = await applicationWithLegacyRule();
+    await migrate(app);
+    const providerConfig = path.join(currentProviderHome ?? '', '.codex', 'config.toml');
+    await mkdir(path.dirname(providerConfig), { recursive: true });
+    await writeFile(providerConfig, [
+      '[mcp_servers.local-tools]',
+      'command = "node"',
+      '',
+      '[mcp_servers.local-tools.env]',
+      '__proto__ = "provider-prototype-secret"',
+      '',
+    ].join('\n'));
+
+    const preview = (await app.execute({
+      operation: 'provider.source.preview',
+      input: { provider: 'codex', content: 'mcp', name: 'local-tools', destination: 'shared', targets: ['codex'] },
+    })).data as { blocked: boolean; contentText: string };
+
+    expect(JSON.stringify(preview)).not.toContain('provider-prototype-secret');
+    expect(preview.contentText).toContain('"__proto__"');
+    expect(preview.blocked).toBe(true);
   });
 
   test('blocks provider MCP adoption when credential-like command arguments would enter canonical content', async () => {
@@ -1039,6 +1071,10 @@ describe('RegletApplication', () => {
     )).rejects.toBeInstanceOf(ApplicationPermissionError);
     await expect(app.execute(
       { operation: 'skill.inspect', input: { artifact: 'missing' } },
+      { scope: 'write' },
+    )).rejects.toBeInstanceOf(ApplicationPermissionError);
+    await expect(app.execute(
+      { operation: 'provider.source.preview', input: { provider: 'codex', content: 'rules', destination: 'provider' } },
       { scope: 'write' },
     )).rejects.toBeInstanceOf(ApplicationPermissionError);
     await expect(app.execute(

@@ -41,8 +41,21 @@ export function useDialogFocus<T extends HTMLElement>(open: boolean, onEscape?: 
       ? []
       : Array.from(overlay.parentElement.children)
         .filter((element): element is HTMLElement => element instanceof HTMLElement && element !== overlay)
-        .map((element) => ({ element, wasInert: element.inert === true }));
-    for (const { element } of background) element.inert = true;
+        .map((element) => ({
+          element,
+          supportsInert: 'inert' in element,
+          wasInert: element.inert === true,
+          ariaHidden: element.getAttribute('aria-hidden'),
+          pointerEvents: element.style.pointerEvents,
+        }));
+    for (const item of background) {
+      if (item.supportsInert) {
+        item.element.inert = true;
+      } else {
+        item.element.setAttribute('aria-hidden', 'true');
+        item.element.style.pointerEvents = 'none';
+      }
+    }
 
     const focusableElements = () => Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector))
       .filter((element) => !element.closest('[aria-hidden="true"]'));
@@ -90,7 +103,15 @@ export function useDialogFocus<T extends HTMLElement>(open: boolean, onEscape?: 
       window.cancelAnimationFrame(frame);
       document.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('focusin', onFocusIn);
-      for (const { element, wasInert } of background) element.inert = wasInert;
+      for (const item of background) {
+        if (item.supportsInert) {
+          item.element.inert = item.wasInert;
+        } else {
+          if (item.ariaHidden === null) item.element.removeAttribute('aria-hidden');
+          else item.element.setAttribute('aria-hidden', item.ariaHidden);
+          item.element.style.pointerEvents = item.pointerEvents;
+        }
+      }
       const active = document.activeElement;
       if (previousFocus?.isConnected && (active === document.body || active === null || dialog.contains(active))) {
         previousFocus.focus({ preventScroll: true });

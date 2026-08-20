@@ -41,3 +41,23 @@ describe('Review and Apply workbench contract', () => {
     expect(applied.revision).toBe(response.revision + 1);
   });
 });
+
+describe('Fixture Manager client contract', () => {
+  test('advances revisions and invalidates device mutations', async () => {
+    const client = new FixtureManagerClient();
+    const initialRevision = (await client.snapshot()).revision;
+    const invalidations: number[] = [];
+    const unsubscribe = client.subscribe((invalidation) => invalidations.push(invalidation.revision));
+
+    const renamed = await client.command('sync.device.rename', {
+      deviceId: 'fixture-device-mobile',
+      name: 'Travel laptop',
+    });
+    const revoked = await client.command('sync.device.revoke', { deviceId: 'fixture-device-mobile' });
+
+    expect(renamed.revision).toBe(initialRevision + 1);
+    expect(revoked.revision).toBe(initialRevision + 2);
+    expect(invalidations).toEqual([initialRevision + 1, initialRevision + 2]);
+    unsubscribe();
+  });
+});

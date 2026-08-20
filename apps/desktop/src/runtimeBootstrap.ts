@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { TauriManagerClient } from '@reglet/manager-ui';
 
 export interface RuntimeStartup {
@@ -12,6 +13,8 @@ export interface RuntimeStartup {
 }
 
 let managerClientPromise: Promise<TauriManagerClient> | undefined;
+let runtimeTerminationListenerPromise: Promise<UnlistenFn> | undefined;
+const runtimeTerminationListeners = new Set<() => void>();
 
 export function parseRuntimeStartup(value: unknown): RuntimeStartup {
   if (!isRecord(value) || !hasOnlyKeys(value, ['version', 'listening', 'url', 'managerUrl', 'pairingExpiresAt', 'remote', 'protocolVersion']) ||
@@ -34,11 +37,32 @@ export function parseRuntimeStartup(value: unknown): RuntimeStartup {
 }
 
 export async function bootstrapTauriManagerClient(): Promise<TauriManagerClient> {
-  managerClientPromise ??= createTauriManagerClient().catch((error: unknown) => {
+  await ensureRuntimeTerminationListener();
+  if (managerClientPromise === undefined) {
+    const pending = createTauriManagerClient();
+    managerClientPromise = pending;
+    void pending.catch(() => {
+      if (managerClientPromise === pending) managerClientPromise = undefined;
+    });
+  }
+  return managerClientPromise;
+}
+
+export function subscribeManagerRuntimeTermination(listener: () => void): () => void {
+  runtimeTerminationListeners.add(listener);
+  void ensureRuntimeTerminationListener().catch(() => undefined);
+  return () => runtimeTerminationListeners.delete(listener);
+}
+
+async function ensureRuntimeTerminationListener(): Promise<void> {
+  runtimeTerminationListenerPromise ??= listen('manager-runtime-terminated', () => {
     managerClientPromise = undefined;
+    for (const listener of runtimeTerminationListeners) listener();
+  }).catch((error: unknown) => {
+    runtimeTerminationListenerPromise = undefined;
     throw error;
   });
-  return managerClientPromise;
+  await runtimeTerminationListenerPromise;
 }
 
 async function createTauriManagerClient(): Promise<TauriManagerClient> {

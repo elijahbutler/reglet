@@ -100,6 +100,7 @@ export function redactMcpCredentialArgumentsInText(content: string): string {
 function findArgumentArrayEnd(content: string, start: number): number {
   let quote: '"' | "'" | null = null;
   let escaped = false;
+  let depth = 0;
   for (let index = start; index < content.length; index += 1) {
     const character = content[index];
     if (quote !== null) {
@@ -113,7 +114,11 @@ function findArgumentArrayEnd(content: string, start: number): number {
       continue;
     }
     if (character === '"' || character === "'") quote = character;
-    if (character === ']') return index;
+    if (character === '[') depth += 1;
+    if (character === ']') {
+      if (depth === 0) return index;
+      depth -= 1;
+    }
   }
   return -1;
 }

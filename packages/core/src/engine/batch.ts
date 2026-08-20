@@ -10,6 +10,15 @@ import type { ApplyContent } from './apply.js';
 import type { OperationReceipt } from './operations.js';
 
 export type ProjectionUnitStatus = 'ready' | 'blocked' | 'applied' | 'failed';
+export type ProjectionValidationIssueCode =
+  | 'invalid-content'
+  | 'executable-skill-approval-required'
+  | 'provider-override-active';
+
+export interface ProjectionValidationIssue {
+  code: ProjectionValidationIssueCode;
+  message: string;
+}
 
 export interface ProjectionUnitPreview {
   key: string;
@@ -19,6 +28,7 @@ export interface ProjectionUnitPreview {
   masterRevision: string;
   status: 'ready' | 'blocked';
   validationIssues: string[];
+  validationIssueCodes: ProjectionValidationIssueCode[];
   entries: StructuredApplyPreviewEntry[];
 }
 
@@ -53,7 +63,7 @@ export interface ProjectionBatchOptions {
   contents?: ApplyContent[];
   unitSelections?: readonly ProjectionUnitSelection[];
   home?: string;
-  unitIssues?: Readonly<Record<string, readonly string[]>>;
+  unitIssues?: Readonly<Record<string, readonly ProjectionValidationIssue[]>>;
 }
 
 export interface ProjectionUnitSelection {
@@ -85,17 +95,23 @@ export async function previewProjectionBatch(
       home: options.home,
     });
     const key = projectionUnitKey(provider, content);
-    const validationIssues = [...preview.validationIssues, ...(options.unitIssues?.[key] ?? [])];
+    const unitIssues = options.unitIssues?.[key] ?? [];
+    const validationIssues = [...preview.validationIssues, ...unitIssues.map((issue) => issue.message)];
+    const validationIssueCodes: ProjectionValidationIssueCode[] = [
+      ...preview.validationIssues.map(() => 'invalid-content' as const),
+      ...unitIssues.map((issue) => issue.code),
+    ];
     units.push({
       key,
       provider,
       content,
       digest: validationIssues.length === preview.validationIssues.length
         ? preview.digest
-        : sha256String(JSON.stringify({ previewDigest: preview.digest, validationIssues })),
+        : sha256String(JSON.stringify({ previewDigest: preview.digest, validationIssues, validationIssueCodes })),
       masterRevision: preview.masterRevision,
       status: validationIssues.length === 0 ? 'ready' : 'blocked',
       validationIssues,
+      validationIssueCodes,
       entries: preview.entries,
     });
   }

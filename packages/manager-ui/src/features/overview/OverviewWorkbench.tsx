@@ -147,15 +147,17 @@ function projectionReviewUnits(snapshot: ManagerSnapshotV3 | null): ReviewReques
 }
 
 function projectionAttention(snapshot: ManagerSnapshotV3 | null) {
-  return (snapshot?.library.artifacts ?? []).flatMap((artifact) => artifact.projections
-    .filter((projection) => attentionStatuses.has(projection.status))
-    .map((projection) => ({
-      artifactId: artifact.metadata.id,
-      title: artifact.metadata.title,
-      provider: projection.provider,
-      content: contentForKind(artifact.metadata.kind),
-      status: projection.status,
-    })));
+  return (snapshot?.library.artifacts ?? [])
+    .filter((artifact) => artifact.metadata.lifecycle === 'active')
+    .flatMap((artifact) => artifact.projections
+      .filter((projection) => attentionStatuses.has(projection.status))
+      .map((projection) => ({
+        artifactId: artifact.metadata.id,
+        title: artifact.metadata.title,
+        provider: projection.provider,
+        content: contentForKind(artifact.metadata.kind),
+        status: projection.status,
+      })));
 }
 
 function providerContentState(snapshot: ManagerSnapshotV3 | null, provider: ManagerProviderV3, content: ManagerContentId): ManagerProjectionStatusV3 {

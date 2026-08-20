@@ -96,7 +96,15 @@ async function purgeProviderBackupsFromPreview(
       const rollback = await loadManifest(home);
       for (const outputPath of detachedOutputs) {
         const output = originalOutputs.get(outputPath);
-        if (output !== undefined) rollback.outputs[outputPath] = output;
+        if (output === undefined || output.backedUpTo === null) continue;
+        try {
+          const backup = await fingerprintOperationPath(output.backedUpTo);
+          if (backup.kind === 'file' || backup.kind === 'directory') {
+            rollback.outputs[outputPath] = output;
+          }
+        } catch {
+          // Keep the output detached if its backup cannot be confirmed.
+        }
       }
       await saveManifest(rollback, home);
     }

@@ -222,15 +222,31 @@ function ExecutableSkillsSettings({ client, snapshot, onRefresh, onError }: {
     let current = true;
     setLoading(true);
     setLoadError(null);
-    void Promise.all(skills.map(async (skill) => {
-      const result = await client.command('skill.inspect', { artifact: skill.metadata.id });
-      const inspection = readExecutableSkillInspection(result.data);
-      if (inspection === null) throw new Error(`Reglet returned an invalid inspection for ${skill.metadata.title}.`);
-      return inspection;
-    })).then((next) => {
+    const loadInspections = async () => {
+      const settled: PromiseSettledResult<ExecutableSkillInspection>[] = [];
+      for (let index = 0; index < skills.length; index += 4) {
+        const batch = skills.slice(index, index + 4);
+        settled.push(...await Promise.allSettled(batch.map(async (skill) => {
+          try {
+            const result = await client.command('skill.inspect', { artifact: skill.metadata.id });
+            const inspection = readExecutableSkillInspection(result.data);
+            if (inspection === null) throw new Error('Reglet returned an invalid inspection.');
+            return inspection;
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : 'Executable skill inspection failed.';
+            throw new Error(`${skill.metadata.title}: ${detail}`);
+          }
+        })));
+      }
       if (!current) return;
-      setInspections(next.sort((left, right) => left.artifact.title.localeCompare(right.artifact.title)));
-    }).catch((error: unknown) => {
+      const ready = settled.flatMap((entry) => entry.status === 'fulfilled' ? [entry.value] : []);
+      const failures = settled.flatMap((entry) => entry.status === 'rejected'
+        ? [entry.reason instanceof Error ? entry.reason.message : 'Executable skill inspection failed.']
+        : []);
+      setInspections(ready.sort((left, right) => left.artifact.title.localeCompare(right.artifact.title)));
+      setLoadError(failures.length === 0 ? null : failures.join(' '));
+    };
+    void loadInspections().catch((error: unknown) => {
       if (!current) return;
       setInspections([]);
       setLoadError(error instanceof Error ? error.message : 'Executable skill inspection failed.');
@@ -277,7 +293,7 @@ function ExecutableSkillsSettings({ client, snapshot, onRefresh, onError }: {
     {loading ? <div className="rg-settings-state" role="status"><LoaderCircle className="rg-spin" size={18} /><span><strong>Inspecting canonical skills</strong><small>No skill code is executed during inspection.</small></span></div> : null}
     {!loading && loadError !== null ? <div className="rg-settings-state rg-settings-state--error" role="alert"><AlertTriangle size={18} /><span><strong>Inspection needs attention</strong><small>{loadError}</small></span><Button tone="secondary" icon={<RefreshCw size={14} />} onClick={() => setLoadAttempt((attempt) => attempt + 1)}>Retry</Button></div> : null}
     {!loading && loadError === null && executableSkills.length === 0 ? <div className="rg-settings-state"><CheckCircle2 size={18} /><span><strong>No executable approvals needed</strong><small>{skills.length === 0 ? 'Your canonical library has no active skills.' : 'Active skills contain no executable files.'}</small></span></div> : null}
-    {!loading && loadError === null && executableSkills.length > 0 ? <section className="rg-executable-skills" aria-label="Executable skill approvals">
+    {!loading && executableSkills.length > 0 ? <section className="rg-executable-skills" aria-label="Executable skill approvals">
       <div className="rg-executable-skills__summary"><span><strong>{executableSkills.length}</strong> executable skill{executableSkills.length === 1 ? '' : 's'}</span><span><strong>{needsReview}</strong> need{needsReview === 1 ? 's' : ''} review</span></div>
       {executableSkills.map((inspection) => {
         const state = inspection.trust.state;

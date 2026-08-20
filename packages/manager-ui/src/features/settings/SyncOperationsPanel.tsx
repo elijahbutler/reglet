@@ -90,29 +90,34 @@ function ConflictSheet({ path, client, onClose, onResolved }: { path: string | n
 
   useEffect(() => {
     if (path === null) return;
+    let current = true;
     setPreview(null);
     setChoice(null);
     setError(null);
     setPhase('loading');
     void client.command('sync.conflict.preview', { path }).then((response) => {
       if (!isSyncConflictPreview(response.data) || response.data.path !== path) throw new Error('Reglet returned an invalid conflict review.');
+      if (!current) return;
       setPreview(response.data);
       setPhase('review');
     }).catch((previewError: unknown) => {
+      if (!current) return;
       setError(messageFrom(previewError, 'Reglet could not inspect this conflict.'));
       setPhase('review');
     });
+    return () => { current = false; };
   }, [client, path]);
 
   if (path === null) return null;
 
   const resolve = async () => {
-    if (choice === null) return;
+    if (choice === null || preview?.path !== path) return;
+    const reviewedPath = preview.path;
     setPhase('resolving');
     setError(null);
     try {
-      const response = await client.command('sync.resolve', { path, choice });
-      if (!isResolution(response.data, path, choice)) throw new Error('Reglet could not verify the conflict resolution. Check sync state before trying again.');
+      const response = await client.command('sync.resolve', { path: reviewedPath, choice });
+      if (!isResolution(response.data, reviewedPath, choice)) throw new Error('Reglet could not verify the conflict resolution. Check sync state before trying again.');
       await onResolved();
       setPhase('complete');
     } catch (resolveError) {

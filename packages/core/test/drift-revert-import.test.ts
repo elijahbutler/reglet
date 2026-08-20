@@ -343,6 +343,7 @@ describe('drift, import, and revert', () => {
     const preview = await previewProviderRestore('claude', home);
     expect(preview).toMatchObject({ status: 'blocked', issues: [expect.stringContaining('escaped Reglet private state')] });
     await expect(restoreReviewedProvider('claude', preview.digest, home)).rejects.toThrow('escaped Reglet private state');
+    await expect(revert('claude', home)).rejects.toThrow('escaped Reglet private state');
     expect(await Bun.file(outputPath).text()).toContain('# General');
   });
 

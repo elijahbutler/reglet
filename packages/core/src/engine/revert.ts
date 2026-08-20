@@ -165,6 +165,7 @@ export async function revert(provider?: ProviderId, home = regletHome()): Promis
         await removePathAtomically(outputPath);
         results.push({ outputPath, provider: output.provider, action: 'removed' });
       } else {
+        await assertManagedBackupPath(output.backedUpTo, output.provider, home);
         await restorePath(output.backedUpTo, outputPath);
         results.push({ outputPath, provider: output.provider, action: 'restored' });
       }
@@ -204,13 +205,18 @@ function providerRestoreDigest(
 
 async function assertManagedBackupPath(
   backupPath: string,
-  provider: ProviderId,
+  provider: string,
   home: string,
 ): Promise<void> {
   const candidate = path.resolve(backupPath);
+  const backupParent = path.resolve(home, '.state', 'backups');
+  const providerBackupRoot = path.resolve(backupParent, provider);
+  if (path.dirname(providerBackupRoot) !== backupParent) {
+    throw new Error(`Provider backup escaped Reglet private state: ${backupPath}`);
+  }
   const allowedRoots = [
     path.resolve(home, '.state', 'operations', 'snapshots'),
-    path.resolve(home, '.state', 'backups', provider),
+    providerBackupRoot,
   ];
   const root = allowedRoots.find((allowed) => candidate.startsWith(`${allowed}${path.sep}`));
   if (root === undefined) {

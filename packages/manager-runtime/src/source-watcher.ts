@@ -16,6 +16,8 @@ export class ManagedSourceWatcher {
   private watchers: FSWatcher[] = [];
   private startPromise: Promise<void> | undefined;
   private debounce: ReturnType<typeof setTimeout> | undefined;
+  private retry: ReturnType<typeof setTimeout> | undefined;
+  private retryAttempt = 0;
   private ready = false;
   private disposed = false;
 
@@ -65,7 +67,9 @@ export class ManagedSourceWatcher {
     this.disposed = true;
     this.ready = false;
     if (this.debounce !== undefined) clearTimeout(this.debounce);
+    if (this.retry !== undefined) clearTimeout(this.retry);
     this.debounce = undefined;
+    this.retry = undefined;
     const watchers = this.watchers;
     this.watchers = [];
     await Promise.all(watchers.map((watcher) => watcher.close()));
@@ -74,13 +78,30 @@ export class ManagedSourceWatcher {
   private schedule(): void {
     if (this.disposed) return;
     if (this.debounce !== undefined) clearTimeout(this.debounce);
+    if (this.retry !== undefined) clearTimeout(this.retry);
+    this.retry = undefined;
+    this.retryAttempt = 0;
     this.debounce = setTimeout(() => {
       this.debounce = undefined;
-      void Promise.resolve(this.options.onInvalidation()).catch(() => {
-        // A later filesystem event can recover from a transient database lock.
-      });
+      void this.invalidate();
     }, this.debounceMs);
     this.debounce.unref?.();
+  }
+
+  private async invalidate(): Promise<void> {
+    try {
+      await this.options.onInvalidation();
+      this.retryAttempt = 0;
+    } catch {
+      if (this.disposed) return;
+      const retryDelayMs = Math.min(100 * (2 ** Math.min(this.retryAttempt, 6)), 5_000);
+      this.retryAttempt += 1;
+      this.retry = setTimeout(() => {
+        this.retry = undefined;
+        void this.invalidate();
+      }, retryDelayMs);
+      this.retry.unref?.();
+    }
   }
 }
 

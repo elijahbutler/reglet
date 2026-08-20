@@ -99,7 +99,7 @@ describe('shared Manager workbench', () => {
     const trigger = (await screen.findAllByRole('button', { name: 'Review changes' }))[0];
     if (trigger === undefined) throw new Error('Review trigger is missing.');
     fireEvent.click(trigger);
-    expect(await screen.findByText(/Executable skill impeccable has not been approved/u)).toBeInTheDocument();
+    expect(await screen.findByText(/Executable skill reglet-skill has not been approved/u)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Review executable skills' }));
 
     expect(await screen.findByRole('heading', { name: 'Executable skills' })).toBeInTheDocument();
@@ -253,7 +253,15 @@ describe('shared Manager workbench', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Command palette' });
     const search = within(dialog).getByPlaceholderText('Search commands…');
     await waitFor(() => expect(search).toHaveFocus());
-    expect(document.querySelector('main')).toHaveProperty('inert', true);
+    const background = document.querySelector('main');
+    if (!(background instanceof HTMLElement)) throw new Error('Manager background is missing.');
+    const supportsInert = Reflect.has(background, 'inert');
+    if (supportsInert) {
+      expect(background).toHaveProperty('inert', true);
+    } else {
+      expect(background).toHaveAttribute('aria-hidden', 'true');
+      expect(background).toHaveStyle({ pointerEvents: 'none' });
+    }
 
     const lastCommand = within(dialog).getByRole('button', { name: 'Open Settings' });
     lastCommand.focus();
@@ -265,7 +273,12 @@ describe('shared Manager workbench', () => {
     fireEvent.keyDown(search, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument());
     expect(trigger).toHaveFocus();
-    expect(document.querySelector('main')).toHaveProperty('inert', false);
+    if (supportsInert) {
+      expect(background).toHaveProperty('inert', false);
+    } else {
+      expect(background).not.toHaveAttribute('aria-hidden');
+      expect(background.style.pointerEvents).toBe('');
+    }
   });
 
   test('runs truthful global shortcuts without hijacking editor input', async () => {

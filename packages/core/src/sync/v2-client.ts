@@ -73,13 +73,28 @@ type SyncAuth =
   | { kind: 'pairing'; token: string }
   | { kind: 'connection'; token: string };
 
+export class SyncV2RequestError extends Error {
+  readonly status: number;
+
+  constructor(status: number, detail: string) {
+    super(`Encrypted sync request failed: ${status}${detail}`);
+    this.name = 'SyncV2RequestError';
+    this.status = status;
+  }
+}
+
 export class SyncV2Client {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly requestTimeoutMs: number;
 
-  constructor(baseUrl: string, fetchImpl: typeof fetch = fetch) {
+  constructor(baseUrl: string, fetchImpl: typeof fetch = fetch, requestTimeoutMs = 30_000) {
+    if (!Number.isFinite(requestTimeoutMs) || requestTimeoutMs <= 0) {
+      throw new Error('Encrypted sync request timeout must be a positive number');
+    }
     this.baseUrl = requireSecureSyncServerUrl(baseUrl).replace(/\/+$/, '');
     this.fetchImpl = fetchImpl;
+    this.requestTimeoutMs = requestTimeoutMs;
   }
 
   async ensureCompatible(): Promise<CompatibilityResponse> {
@@ -371,21 +386,34 @@ export class SyncV2Client {
     return value;
   }
 
-  private request(path: string, init: RequestInit, auth: SyncAuth): Promise<Response> {
-    return this.fetchImpl(`${this.baseUrl}${path}`, {
-      ...init,
-      headers: {
-        'content-type': 'application/json',
-        ...(auth.kind === 'device'
-          ? { authorization: `Bearer ${auth.token}` }
-          : auth.kind === 'pairing'
-            ? { authorization: `Pairing ${auth.token}` }
-            : auth.kind === 'connection'
-              ? { authorization: `Connection ${auth.token}` }
-              : {}),
-        ...init.headers,
-      },
-    });
+  private async request(path: string, init: RequestInit, auth: SyncAuth): Promise<Response> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+    timeout.unref?.();
+    try {
+      return await this.fetchImpl(`${this.baseUrl}${path}`, {
+        ...init,
+        headers: {
+          'content-type': 'application/json',
+          ...(auth.kind === 'device'
+            ? { authorization: `Bearer ${auth.token}` }
+            : auth.kind === 'pairing'
+              ? { authorization: `Pairing ${auth.token}` }
+              : auth.kind === 'connection'
+                ? { authorization: `Connection ${auth.token}` }
+                : {}),
+          ...init.headers,
+        },
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error(`Encrypted sync request timed out after ${this.requestTimeoutMs}ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 }
 
@@ -511,7 +539,7 @@ function apiError(status: number, value: unknown): Error {
   const detail = error !== null && typeof error.code === 'string' && typeof error.message === 'string'
     ? ` (${error.code}: ${error.message})`
     : '';
-  return new Error(`Encrypted sync request failed: ${status}${detail}`);
+  return new SyncV2RequestError(status, detail);
 }
 
 function isPositiveSafeInteger(value: unknown): value is number {

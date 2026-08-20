@@ -6,7 +6,7 @@ import {
   applyAll, createSkill, deleteMcpServer, listManagedSkillTrees, listMcpServers, readMcpServer, readSkillFile,
   applyStructuredPreview, initMasterDir, loadConfig, previewApplyStructured, renameSkill, renameSkillFile, saveConfig,
   listEffectiveMcpServers, providerMcpScope, renameMcpServerDisplayName, serializeMcpServers, upsertMcpServer,
-  validateMcpServer, writeSkillFile,
+  redactMcpCredentialArgumentsInText, validateMcpServer, writeSkillFile,
 } from '../src/index.js';
 
 let home = '';
@@ -248,6 +248,13 @@ describe('native MCP editing', () => {
     expect(serialized).not.toContain('canonical-inline-canary');
     expect(serialized).not.toContain('provider-cli-canary');
     expect(serialized).not.toContain('provider-header-canary');
+  });
+
+  test('preserves nested argument arrays while redacting their values', () => {
+    const input = '{"args":["--safe",["--api-key","nested-secret"]],"after":true}';
+    const redacted = redactMcpCredentialArgumentsInText(input);
+
+    expect(redacted).toBe('{"args":["--safe",["--api-key","<redacted:argument>"]],"after":true}');
   });
 
   test('rejects missing process env references before writing providers', async () => {

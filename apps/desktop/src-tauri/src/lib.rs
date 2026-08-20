@@ -10,7 +10,7 @@ use std::{
 use tauri::{
     ipc::Channel,
     menu::{MenuBuilder, SubmenuBuilder},
-    AppHandle, Manager, RunEvent, State, WindowEvent,
+    AppHandle, Emitter, Manager, RunEvent, State, WindowEvent,
 };
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
@@ -117,12 +117,14 @@ async fn manager_runtime_start(
         .map_err(|_| runtime_start_error())?
         .args(["serve", "--hostname", "127.0.0.1", "--port", "0", "--json"]);
     let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
-    let (mut events, child) = with_runtime_shutdown_barrier(&state, |shutdown_started| {
-        if shutdown_started {
-            return Err(runtime_shutdown_error());
-        }
-        command.spawn().map_err(|_| runtime_start_error())
-    })?;
+    let mut events = spawn_and_register_runtime_child(
+        &state.shutdown_barrier,
+        &state.child,
+        || command.spawn().map_err(|_| runtime_start_error()),
+        |child| {
+            let _ = child.kill();
+        },
+    )?;
     let startup_result = tokio::time::timeout(RUNTIME_STARTUP_TIMEOUT, async {
         let mut stdout = Vec::new();
         loop {
@@ -148,26 +150,24 @@ async fn manager_runtime_start(
     let startup = match startup_result {
         Ok(Ok(startup)) => startup,
         Ok(Err(error)) => {
-            let _ = child.kill();
+            let _ = discard_runtime_child(&state, generation);
             return Err(error);
         }
         Err(_) => {
-            let _ = child.kill();
+            let _ = discard_runtime_child(&state, generation);
             return Err(runtime_start_error());
         }
     };
-    publish_runtime_startup_if_open(
-        &state,
-        child,
-        |child| {
-            *state.child.lock().map_err(|_| runtime_state_error())? = Some(child);
-            *state.startup.lock().map_err(|_| runtime_state_error())? = Some(startup.clone());
-            Ok(())
-        },
-        |child| {
-            let _ = child.kill();
-        },
-    )?;
+    if let Err(error) = with_runtime_shutdown_barrier(&state.shutdown_barrier, |shutdown_started| {
+        if shutdown_started {
+            return Err(runtime_shutdown_error());
+        }
+        *state.startup.lock().map_err(|_| runtime_state_error())? = Some(startup.clone());
+        Ok(())
+    }) {
+        let _ = discard_runtime_child(&state, generation);
+        return Err(error);
+    }
     let runtime_app = app.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = events.recv().await {
@@ -176,12 +176,17 @@ async fn manager_runtime_start(
             }
             let runtime_state = runtime_app.state::<ManagerRuntimeState>();
             let _lifecycle = runtime_state.lifecycle.lock().await;
-            if runtime_state.generation.load(Ordering::SeqCst) == generation {
+            let terminated_current = runtime_state.generation.load(Ordering::SeqCst) == generation;
+            if terminated_current {
                 let _ = runtime_state.child.lock().map(|mut child| child.take());
                 let _ = runtime_state
                     .startup
                     .lock()
                     .map(|mut startup| startup.take());
+            }
+            drop(_lifecycle);
+            if terminated_current {
+                let _ = runtime_app.emit("manager-runtime-terminated", ());
             }
             break;
         }
@@ -205,54 +210,84 @@ fn stop_manager_runtime_immediately(
     state: &ManagerRuntimeState,
     mode: RuntimeStopMode,
 ) -> Result<(), ManagerRpcError> {
-    let mut shutdown_barrier = state
-        .shutdown_barrier
-        .lock()
-        .map_err(|_| runtime_state_error())?;
-    if matches!(mode, RuntimeStopMode::AppShutdown) {
-        *shutdown_barrier = true;
-    }
-    state.generation.fetch_add(1, Ordering::SeqCst);
-    if let Some(child) = state
-        .child
-        .lock()
-        .map_err(|_| runtime_state_error())?
-        .take()
-    {
-        child.kill().map_err(|_| {
-            update_error(
-                "RUNTIME_STOP_FAILED",
-                "Reglet could not stop the local Manager runtime.",
-            )
-        })?;
-    }
-    *state.startup.lock().map_err(|_| runtime_state_error())? = None;
-    Ok(())
+    stop_registered_runtime_child(&state.shutdown_barrier, &state.child, mode, |child| {
+        state.generation.fetch_add(1, Ordering::SeqCst);
+        if let Some(child) = child {
+            child.kill().map_err(|_| {
+                update_error(
+                    "RUNTIME_STOP_FAILED",
+                    "Reglet could not stop the local Manager runtime.",
+                )
+            })?;
+        }
+        *state.startup.lock().map_err(|_| runtime_state_error())? = None;
+        Ok(())
+    })
 }
 
 fn with_runtime_shutdown_barrier<Output>(
-    state: &ManagerRuntimeState,
+    shutdown_barrier: &Mutex<bool>,
     operation: impl FnOnce(bool) -> Result<Output, ManagerRpcError>,
 ) -> Result<Output, ManagerRpcError> {
-    let shutdown_barrier = state
-        .shutdown_barrier
-        .lock()
-        .map_err(|_| runtime_state_error())?;
+    let shutdown_barrier = shutdown_barrier.lock().map_err(|_| runtime_state_error())?;
     operation(*shutdown_barrier)
 }
 
-fn publish_runtime_startup_if_open<Child>(
-    state: &ManagerRuntimeState,
-    child: Child,
-    publish: impl FnOnce(Child) -> Result<(), ManagerRpcError>,
+fn spawn_and_register_runtime_child<Events, Child>(
+    shutdown_barrier: &Mutex<bool>,
+    child_slot: &Mutex<Option<Child>>,
+    spawn: impl FnOnce() -> Result<(Events, Child), ManagerRpcError>,
     kill: impl FnOnce(Child),
-) -> Result<(), ManagerRpcError> {
-    with_runtime_shutdown_barrier(state, |shutdown_started| {
+) -> Result<Events, ManagerRpcError> {
+    with_runtime_shutdown_barrier(shutdown_barrier, |shutdown_started| {
         if shutdown_started {
-            kill(child);
             return Err(runtime_shutdown_error());
         }
-        publish(child)
+        let (events, child) = spawn()?;
+        match child_slot.lock() {
+            Ok(mut registered_child) => {
+                *registered_child = Some(child);
+                Ok(events)
+            }
+            Err(_) => {
+                kill(child);
+                Err(runtime_state_error())
+            }
+        }
+    })
+}
+
+fn stop_registered_runtime_child<Child>(
+    shutdown_barrier: &Mutex<bool>,
+    child_slot: &Mutex<Option<Child>>,
+    mode: RuntimeStopMode,
+    stop: impl FnOnce(Option<Child>) -> Result<(), ManagerRpcError>,
+) -> Result<(), ManagerRpcError> {
+    let mut shutdown_barrier = shutdown_barrier.lock().map_err(|_| runtime_state_error())?;
+    if matches!(mode, RuntimeStopMode::AppShutdown) {
+        *shutdown_barrier = true;
+    }
+    let child = child_slot.lock().map_err(|_| runtime_state_error())?.take();
+    stop(child)
+}
+
+fn discard_runtime_child(
+    state: &ManagerRuntimeState,
+    generation: u64,
+) -> Result<(), ManagerRpcError> {
+    with_runtime_shutdown_barrier(&state.shutdown_barrier, |_| {
+        if state.generation.load(Ordering::SeqCst) != generation {
+            return Ok(());
+        }
+        if let Some(child) = state
+            .child
+            .lock()
+            .map_err(|_| runtime_state_error())?
+            .take()
+        {
+            let _ = child.kill();
+        }
+        Ok(())
     })
 }
 
@@ -621,49 +656,58 @@ mod tests {
     }
 
     #[test]
-    fn app_shutdown_while_startup_is_pending_blocks_publication() {
+    fn app_shutdown_kills_a_pending_child_before_startup_completes() {
         use std::sync::{Arc, Barrier};
 
-        let state = Arc::new(ManagerRuntimeState::default());
+        let shutdown_barrier = Arc::new(Mutex::new(false));
+        let child_slot = Arc::new(Mutex::new(None));
         let startup_pending = Arc::new(Barrier::new(2));
         let finish_startup = Arc::new(Barrier::new(2));
         let child_killed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let state_published = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let startup_thread = {
-            let state = Arc::clone(&state);
+            let shutdown_barrier = Arc::clone(&shutdown_barrier);
+            let child_slot = Arc::clone(&child_slot);
             let startup_pending = Arc::clone(&startup_pending);
             let finish_startup = Arc::clone(&finish_startup);
-            let child_killed = Arc::clone(&child_killed);
             let state_published = Arc::clone(&state_published);
             std::thread::spawn(move || {
-                let spawned =
-                    with_runtime_shutdown_barrier(&state, |shutdown_started| Ok(!shutdown_started))
-                        .expect("startup barrier before spawn");
-                assert!(spawned);
+                spawn_and_register_runtime_child(
+                    &shutdown_barrier,
+                    &child_slot,
+                    || Ok(((), ())),
+                    |_| panic!("registered test child should not be discarded"),
+                )
+                .expect("spawn and register pending child");
                 startup_pending.wait();
                 finish_startup.wait();
-                let result = publish_runtime_startup_if_open(
-                    &state,
-                    (),
-                    |_| {
-                        state_published.store(true, Ordering::SeqCst);
-                        Ok(())
-                    },
-                    |_| {
-                        child_killed.store(true, Ordering::SeqCst);
-                    },
-                );
+                let result = with_runtime_shutdown_barrier(&shutdown_barrier, |shutdown_started| {
+                    if shutdown_started {
+                        return Err(runtime_shutdown_error());
+                    }
+                    state_published.store(true, Ordering::SeqCst);
+                    Ok(())
+                });
                 assert_eq!(result, Err(runtime_shutdown_error()));
             })
         };
 
         startup_pending.wait();
-        stop_manager_runtime_immediately(&state, RuntimeStopMode::AppShutdown)
-            .expect("window destruction shutdown");
+        stop_registered_runtime_child(
+            &shutdown_barrier,
+            &child_slot,
+            RuntimeStopMode::AppShutdown,
+            |child| {
+                child_killed.store(child.is_some(), Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .expect("window destruction shutdown");
+        assert!(child_killed.load(Ordering::SeqCst));
+        assert!(child_slot.lock().expect("pending child slot").is_none());
         finish_startup.wait();
         startup_thread.join().expect("startup thread");
 
-        assert!(child_killed.load(Ordering::SeqCst));
         assert!(!state_published.load(Ordering::SeqCst));
     }
 

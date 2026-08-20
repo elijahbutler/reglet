@@ -26,6 +26,11 @@ export interface ManagerProjectionReviewEntryV3 {
   note?: string;
 }
 
+export type ManagerProjectionValidationIssueCodeV3 =
+  | 'invalid-content'
+  | 'executable-skill-approval-required'
+  | 'provider-override-active';
+
 export interface ManagerProjectionReviewUnitV3 {
   key: string;
   provider: ManagerProviderId;
@@ -34,6 +39,7 @@ export interface ManagerProjectionReviewUnitV3 {
   masterRevision: string;
   status: 'ready' | 'blocked';
   validationIssues: string[];
+  validationIssueCodes: ManagerProjectionValidationIssueCodeV3[];
   entries: ManagerProjectionReviewEntryV3[];
   artifacts: ManagerProjectionReviewArtifactV3[];
   requiresDriftConfirmation: boolean;
@@ -49,6 +55,11 @@ const providers: readonly ManagerProviderId[] = ['claude', 'codex', 'cursor', 'g
 const contents: readonly ManagerContentId[] = ['rules', 'skills', 'mcp'];
 const kinds: readonly ManagerArtifactKind[] = ['instruction', 'skill', 'mcp'];
 const drifts: readonly ManagerProjectionReviewDriftV3[] = ['clean', 'modified', 'missing', 'unmanaged', 'not-applicable'];
+const validationIssueCodes: readonly ManagerProjectionValidationIssueCodeV3[] = [
+  'invalid-content',
+  'executable-skill-approval-required',
+  'provider-override-active',
+];
 
 export function isManagerProjectionReviewV3(value: unknown): value is ManagerProjectionReviewV3 {
   if (!isRecord(value) || !exact(value, ['version', 'digest', 'units']) || value.version !== 1 ||
@@ -70,12 +81,16 @@ function isReviewUnit(value: unknown): value is ManagerProjectionReviewUnitV3 {
     'masterRevision',
     'status',
     'validationIssues',
+    'validationIssueCodes',
     'entries',
     'artifacts',
     'requiresDriftConfirmation',
   ]) || !isProvider(value.provider) || !isContent(value.content) || value.key !== `${value.provider}:${value.content}` ||
     typeof value.digest !== 'string' || typeof value.masterRevision !== 'string' ||
     (value.status !== 'ready' && value.status !== 'blocked') || !isStringArray(value.validationIssues) ||
+    !Array.isArray(value.validationIssueCodes) ||
+    !value.validationIssueCodes.every((code) => validationIssueCodes.includes(code as ManagerProjectionValidationIssueCodeV3)) ||
+    value.validationIssueCodes.length !== value.validationIssues.length ||
     !Array.isArray(value.entries) || !value.entries.every(isReviewEntry) ||
     !Array.isArray(value.artifacts) || !value.artifacts.every(isReviewArtifact) ||
     typeof value.requiresDriftConfirmation !== 'boolean') return false;

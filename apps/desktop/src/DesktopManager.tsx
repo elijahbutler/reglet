@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ManagerApp, type TauriManagerClient } from '@reglet/manager-ui';
 import { tauriConnectLinks } from './deepLinks.js';
-import { bootstrapTauriManagerClient } from './runtimeBootstrap.js';
+import { bootstrapTauriManagerClient, subscribeManagerRuntimeTermination } from './runtimeBootstrap.js';
 import { desktopHostActions } from './updater.js';
 
 export function DesktopManager() {
@@ -10,12 +10,22 @@ export function DesktopManager() {
 
   useEffect(() => {
     let disposed = false;
-    void bootstrapTauriManagerClient().then((next) => {
-      if (!disposed) setClient(next);
-    }).catch((cause: unknown) => {
-      if (!disposed) setError(cause instanceof Error ? cause.message : 'The local Manager runtime could not start.');
-    });
-    return () => { disposed = true; };
+    let connectionAttempt = 0;
+    const connect = () => {
+      const attempt = ++connectionAttempt;
+      setClient(null);
+      setError(null);
+      void bootstrapTauriManagerClient().then((next) => {
+        if (!disposed && attempt === connectionAttempt) setClient(next);
+      }).catch((cause: unknown) => {
+        if (!disposed && attempt === connectionAttempt) {
+          setError(cause instanceof Error ? cause.message : 'The local Manager runtime could not start.');
+        }
+      });
+    };
+    const unsubscribe = subscribeManagerRuntimeTermination(connect);
+    connect();
+    return () => { disposed = true; connectionAttempt += 1; unsubscribe(); };
   }, []);
 
   useEffect(() => {

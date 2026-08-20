@@ -113,6 +113,7 @@ function RecoverySheet({ receipt, client, onClose, onRefresh }: {
 
   useEffect(() => {
     if (receipt === null) return;
+    let current = true;
     setReview(null);
     setResult(null);
     setConfirmed(false);
@@ -122,23 +123,27 @@ function RecoverySheet({ receipt, client, onClose, onRefresh }: {
       if (!isManagerRecoveryReviewV3(response.data) || response.data.receipt.id !== receipt.id) {
         throw new Error('Reglet returned an invalid recovery review.');
       }
+      if (!current) return;
       setReview(response.data);
       setPhase('review');
     }).catch((previewError: unknown) => {
+      if (!current) return;
       setError(messageFrom(previewError));
       setPhase('review');
     });
+    return () => { current = false; };
   }, [client, receipt]);
 
   if (receipt === null) return null;
 
   const restore = async () => {
-    if (review === null || !confirmed) return;
+    if (review === null || review.receipt.id !== receipt.id || !confirmed) return;
+    const reviewedReceiptId = review.receipt.id;
     setPhase('restoring');
     setError(null);
     try {
-      const response = await client.command('recovery.restore', { receiptId: receipt.id, digest: review.digest, confirmed: true });
-      if (!isManagerRecoveryRestoreResultV3(response.data) || response.data.receiptId !== receipt.id) {
+      const response = await client.command('recovery.restore', { receiptId: reviewedReceiptId, digest: review.digest, confirmed: true });
+      if (!isManagerRecoveryRestoreResultV3(response.data) || response.data.receiptId !== reviewedReceiptId) {
         throw new Error('Reglet could not verify the recovery result. Check Activity before trying again.');
       }
       setResult(response.data);

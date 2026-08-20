@@ -33,6 +33,7 @@ import {
   loadManifest as loadProjectionManifest,
   loadMasterDir,
   loadSyncV2State,
+  saveSyncV2State,
   loadConfig,
   LocalState,
   pendingSyncV2ConnectionStatus,
@@ -95,12 +96,14 @@ import {
   type ProjectionBatchApplyResult,
   type ProjectionBatchPreview,
   type ProjectionUnitPreview,
+  type ProjectionValidationIssue,
   type ProviderRestorePreview,
   type ProviderId,
   type ProviderInventory,
   type SecretRef,
   type SecretStore,
   type SkillInspection,
+  SyncV2RequestError,
 } from '@reglet/core';
 import {
   isManagerMutatingOperation,
@@ -975,8 +978,8 @@ function sanitizeProviderMcpDefinition(value: unknown): {
   definition: Record<string, unknown>;
   issues: ManagerProjectionIssueV3[];
 } {
-  if (!isRecord(value)) return { definition: {}, issues: [] };
-  const definition: Record<string, unknown> = {};
+  if (!isRecord(value)) return { definition: Object.create(null) as Record<string, unknown>, issues: [] };
+  const definition = Object.create(null) as Record<string, unknown>;
   for (const key of ['command', 'url'] as const) {
     if (value[key] !== undefined) definition[key] = value[key];
   }
@@ -995,7 +998,7 @@ function sanitizeProviderMcpDefinition(value: unknown): {
     definition.args = value.args;
   }
   if (isRecord(value.env)) {
-    const env: Record<string, unknown> = {};
+    const env = Object.create(null) as Record<string, unknown>;
     for (const [key, entry] of Object.entries(value.env)) {
       if (typeof entry === 'string') {
         env[key] = { source: 'process-env', name: key, required: true };
@@ -1462,6 +1465,7 @@ function managerProjectionReview(
       masterRevision: unit.masterRevision,
       status: unit.status,
       validationIssues: unit.validationIssues,
+      validationIssueCodes: unit.validationIssueCodes,
       entries: unit.entries.map((entry) => ({
         operation: entry.operation,
         path: entry.path,
@@ -1553,6 +1557,7 @@ function managerRecoveryReview(preview: OperationRestorePreview): ManagerRecover
       providers: preview.scope.providers ?? [],
       contents: preview.scope.contents ?? [],
       targetCount: preview.targets.length,
+      restoreAllowed: preview.restorable,
       reason: preview.reason,
     }),
     digest: preview.digest,
@@ -1950,14 +1955,17 @@ async function projectionUnitIssues(
   home: string,
   state: LocalState,
   providers?: ProviderId[],
-): Promise<Record<string, string[]>> {
+): Promise<Record<string, ProjectionValidationIssue[]>> {
   const issues = await skillTrustUnitIssues(home, state, providers);
   if (providers === undefined || providers.includes('codex')) {
     const rulesPath = getAdapter('codex').rulesPath();
     const overridePath = rulesPath === null ? null : path.join(path.dirname(rulesPath), 'AGENTS.override.md');
     if (overridePath !== null && await fileExists(overridePath)) {
       const current = issues['codex:rules'] ?? [];
-      current.push('AGENTS.override.md shadows the managed Codex AGENTS.md file. Adopt, move, or remove the override before applying Codex instructions.');
+      current.push({
+        code: 'provider-override-active',
+        message: 'AGENTS.override.md shadows the managed Codex AGENTS.md file. Adopt, move, or remove the override before applying Codex instructions.',
+      });
       issues['codex:rules'] = current;
     }
   }
@@ -1968,10 +1976,10 @@ async function skillTrustUnitIssues(
   home: string,
   state: LocalState,
   providers: ProviderId[] | undefined,
-): Promise<Record<string, string[]>> {
+): Promise<Record<string, ProjectionValidationIssue[]>> {
   const selectedProviders = providers ?? allAdapters().map((adapter) => adapter.id);
   const manifest = await loadLibraryManifest(home);
-  const issues: Record<string, string[]> = {};
+  const issues: Record<string, ProjectionValidationIssue[]> = {};
   for (const artifact of manifest.artifacts.filter((candidate) =>
     candidate.kind === 'skill' && candidate.lifecycle === 'active' && candidate.locator.type === 'directory')) {
     const inspection = await inspectSkill(path.join(home, ...artifact.locator.path.split('/')));
@@ -1984,7 +1992,7 @@ async function skillTrustUnitIssues(
     for (const provider of selectedProviders.filter((candidate) => artifact.targets.includes(candidate))) {
       const key = `${provider}:skills`;
       const current = issues[key] ?? [];
-      current.push(message);
+      current.push({ code: 'executable-skill-approval-required', message });
       issues[key] = current;
     }
   }
@@ -2314,8 +2322,13 @@ async function encryptedSyncCompatibilitySnapshot(home: string): Promise<SyncSna
       lastSeenAt: device.lastSeenAt,
       revokedAt: device.revokedAt,
     }));
-  } catch {
-    compatibility = 'unreachable';
+  } catch (error) {
+    const revoked = error instanceof SyncV2RequestError && error.status === 401;
+    compatibility = revoked ? 'revoked' : 'unreachable';
+    if (revoked && state.keyRotationRequired !== true) {
+      state.keyRotationRequired = true;
+      await saveSyncV2State(state, home);
+    }
   }
   return {
     version: 1,
@@ -2334,7 +2347,7 @@ async function encryptedSyncCompatibilitySnapshot(home: string): Promise<SyncSna
       .sort((left, right) => left.localeCompare(right)),
     lastSync: state.lastSync ?? null,
     lastError: state.lastError ?? null,
-    keyRotationRequired: state.keyRotationRequired === true,
+    keyRotationRequired: state.keyRotationRequired === true || compatibility === 'revoked',
   };
 }
 
@@ -2484,7 +2497,7 @@ const writeOperations = new Set<ManagerProtocolOperation>([
   'history.undo', 'external.open', 'external.reveal',
 ]);
 const adminOperations = new Set<ManagerProtocolOperation>([
-  'provider.purge-backups.preview', 'provider.purge-backups', 'project.root.add', 'project.root.remove', 'project.root.list',
+  'provider.source.preview', 'provider.purge-backups.preview', 'provider.purge-backups', 'project.root.add', 'project.root.remove', 'project.root.list',
   'project.scan', 'project.discoveries', 'project.ignore',
   'project.promotion-preview', 'project.promote', 'skill.inspect', 'skill.trust', 'secret.set', 'secret.delete', 'secret.status',
   'recovery.list', 'recovery.preview', 'recovery.restore',

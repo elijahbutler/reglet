@@ -147,6 +147,7 @@ describe('manager protocol v2', () => {
         masterRevision: 'master-revision',
         status: 'ready',
         validationIssues: [],
+        validationIssueCodes: [],
         entries: [{
           operation: 'write',
           path: '/provider/AGENTS.md',

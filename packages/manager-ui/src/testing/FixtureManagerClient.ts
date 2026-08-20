@@ -112,6 +112,7 @@ export class FixtureManagerClient implements ManagerClient {
               masterRevision: 'fixture-master-revision',
               status: 'ready',
               validationIssues: [],
+              validationIssueCodes: [],
               entries: [{
                 operation: 'write',
                 path: '~/.codex/AGENTS.md',
@@ -350,12 +351,18 @@ export class FixtureManagerClient implements ManagerClient {
       const renameInput = input as ManagerRpcInputs['sync.device.rename'] | undefined;
       if (renameInput === undefined) throw new Error('Fixture device rename requires a device.');
       this.syncDevices = this.syncDevices.map((device) => device.id === renameInput.deviceId ? { ...device, name: renameInput.name } : device);
+      this.state = { ...this.state, revision: this.state.revision + 1 };
+      const invalidation: ManagerInvalidation = { revision: this.state.revision, reason: 'command' };
+      for (const listener of this.listeners) listener(invalidation);
       return { revision: this.state.revision, changed: true, data: { renamed: true, deviceId: renameInput.deviceId, name: renameInput.name } };
     }
     if (operation === 'sync.device.revoke') {
       const revokeInput = input as ManagerRpcInputs['sync.device.revoke'] | undefined;
       if (revokeInput === undefined) throw new Error('Fixture device revocation requires a device.');
       this.syncDevices = this.syncDevices.map((device) => device.id === revokeInput.deviceId ? { ...device, status: 'revoked', revokedAt: '2026-08-19T18:45:00.000Z' } : device);
+      this.state = { ...this.state, revision: this.state.revision + 1 };
+      const invalidation: ManagerInvalidation = { revision: this.state.revision, reason: 'command' };
+      for (const listener of this.listeners) listener(invalidation);
       return { revision: this.state.revision, changed: true, data: { revoked: true, deviceId: revokeInput.deviceId } };
     }
     if (operation === 'sync.run') {
@@ -425,8 +432,11 @@ function fixtureProjectionReview(units: Array<{ provider: ManagerProviderId; con
         masterRevision: `fixture-master-${content}`,
         status: blocked ? 'blocked' : 'ready',
         validationIssues: executableBlocked
-          ? ['Executable skill impeccable has not been approved for provider sync at revision fixture-skil.']
+          ? ['Executable skill reglet-skill has not been approved for provider sync at revision fixture-skill-revision.']
           : provider === 'opencode' ? ['The OpenCode target directory is not writable.'] : [],
+        validationIssueCodes: executableBlocked
+          ? ['executable-skill-approval-required']
+          : provider === 'opencode' ? ['invalid-content'] : [],
         entries: [{
           operation,
           path: targetPath,

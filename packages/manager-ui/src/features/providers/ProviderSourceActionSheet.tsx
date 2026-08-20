@@ -7,7 +7,7 @@ import {
   ShieldAlert,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   isManagerProviderDetachReviewV3,
   isManagerProviderDetachResultV3,
@@ -82,11 +82,14 @@ export function ProviderSourceActionSheet({ action, client, providers, onClose, 
   const [confirmedExecutable, setConfirmedExecutable] = useState(false);
   const [confirmedDetach, setConfirmedDetach] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const previewRequestRef = useRef(0);
   const busy = phase === 'loading';
   const dialog = useDialogFocus<HTMLElement>(action !== null, busy ? undefined : onClose);
 
   useEffect(() => {
+    previewRequestRef.current += 1;
     if (action === null) return;
+    let current = true;
     setDestination('provider');
     setTargets(new Set([action.provider.id]));
     setPreview(null);
@@ -100,14 +103,18 @@ export function ProviderSourceActionSheet({ action, client, providers, onClose, 
         provider: action.provider.id,
         content: action.source.content,
       }).then((response) => {
-        if (!isManagerProviderDetachReviewV3(response.data)) throw new Error('Reglet returned an invalid stop-managing review.');
+        if (!isManagerProviderDetachReviewV3(response.data) || response.data.provider !== action.provider.id ||
+          response.data.content !== action.source.content) throw new Error('Reglet returned an invalid stop-managing review.');
+        if (!current) return;
         setDetachReview(response.data);
         setPhase('review');
       }).catch((detachError: unknown) => {
+        if (!current) return;
         setError(messageFrom(detachError));
         setPhase('review');
       });
     }
+    return () => { current = false; };
   }, [action, client]);
 
   const selectedTargets = useMemo(() => providers.filter((provider) => targets.has(provider.id)).map((provider) => provider.id), [providers, targets]);
@@ -116,6 +123,7 @@ export function ProviderSourceActionSheet({ action, client, providers, onClose, 
 
   const prepareAdoption = async () => {
     if (action.kind !== 'adopt') return;
+    const requestId = ++previewRequestRef.current;
     setPhase('loading');
     setError(null);
     try {
@@ -129,17 +137,20 @@ export function ProviderSourceActionSheet({ action, client, providers, onClose, 
       const response = await client.command('provider.source.preview', input);
       const next = readProviderSourcePreview(response.data);
       if (next === null) throw new Error('Reglet returned an invalid provider adoption review.');
+      if (requestId !== previewRequestRef.current) return;
       setPreview(next);
       setConfirmedExecutable(false);
       setPhase('review');
     } catch (previewError) {
+      if (requestId !== previewRequestRef.current) return;
       setError(messageFrom(previewError));
       setPhase('configure');
     }
   };
 
   const adopt = async () => {
-    if (action.kind !== 'adopt' || preview === null) return;
+    if (action.kind !== 'adopt' || preview === null ||
+      !providerSourcePreviewMatches(preview, action, destination, selectedTargets)) return;
     setPhase('loading');
     setError(null);
     try {
@@ -164,7 +175,8 @@ export function ProviderSourceActionSheet({ action, client, providers, onClose, 
   };
 
   const detach = async () => {
-    if (action.kind !== 'detach' || detachReview === null) return;
+    if (action.kind !== 'detach' || detachReview === null || detachReview.provider !== action.provider.id ||
+      detachReview.content !== action.source.content) return;
     setPhase('loading');
     setError(null);
     try {
@@ -184,8 +196,11 @@ export function ProviderSourceActionSheet({ action, client, providers, onClose, 
   };
 
   const executableConfirmationRequired = preview?.skillInspection?.requiresExecutableConfirmation === true;
-  const canAdopt = preview !== null && !preview.blocked && (!executableConfirmationRequired || confirmedExecutable);
-  const canDetach = detachReview?.status === 'ready' && confirmedDetach;
+  const canAdopt = action.kind === 'adopt' && preview !== null && !preview.blocked &&
+    providerSourcePreviewMatches(preview, action, destination, selectedTargets) &&
+    (!executableConfirmationRequired || confirmedExecutable);
+  const canDetach = action.kind === 'detach' && detachReview?.status === 'ready' &&
+    detachReview.provider === action.provider.id && detachReview.content === action.source.content && confirmedDetach;
 
   return (
     <div className="rg-sheet-backdrop" role="presentation" onMouseDown={busy ? undefined : onClose}>
@@ -233,6 +248,25 @@ function AdoptionReview({ preview, confirmedExecutable, onConfirmedExecutable }:
 function DetachReview({ review, confirmed, onConfirmed }: { review: ManagerProviderDetachReviewV3 | null; confirmed: boolean; onConfirmed: (confirmed: boolean) => void }) {
   if (review === null) return <div className="rg-review-state rg-review-state--compact"><AlertTriangle size={21} /><strong>The ownership review is unavailable</strong><span>Close this panel and retry after the provider source is readable.</span></div>;
   return <div className="rg-provider-action-content"><section><h2>Exact provider targets</h2><p>Stopping management leaves provider content in place. Generated instruction headers may be removed before Reglet detaches its records.</p><div className="rg-provider-detach-targets">{review.targets.map((target) => <div key={target.path}><span><strong>{target.operation === 'rewrite' ? 'Rewrite and detach' : 'Detach only'}</strong><code>{target.path}</code></span><small>{target.current.kind} · {formatSize(target.current.size)}</small>{target.diff.length === 0 ? null : <pre>{target.diff}</pre>}</div>)}</div></section>{review.issues.length === 0 ? null : <section><h2>Blocking issues</h2><ul className="rg-provider-issue-list">{review.issues.map((issue) => <li className="rg-provider-issue rg-provider-issue--error" key={issue}><AlertTriangle size={14} /><span><small>{issue}</small></span></li>)}</ul></section>}<section className="rg-provider-detach-confirmation"><label><input type="checkbox" checked={confirmed} onChange={(event) => onConfirmed(event.target.checked)} disabled={review.status === 'blocked'} /><span>I understand that future canonical changes will no longer update this provider content.</span></label></section></div>;
+}
+
+function providerSourcePreviewMatches(
+  preview: ProviderSourcePreview,
+  action: Extract<ProviderSourceAction, { kind: 'adopt' }>,
+  destination: 'provider' | 'shared',
+  selectedTargets: ManagerProviderId[],
+): boolean {
+  if (preview.provider !== action.provider.id || preview.content !== action.source.content) return false;
+  if (destination === 'provider') {
+    return preview.artifact.scope.kind === 'provider-overlay' &&
+      preview.artifact.scope.provider === action.provider.id &&
+      preview.artifact.targets.length === 1 && preview.artifact.targets[0] === action.provider.id;
+  }
+  if (preview.artifact.scope.kind !== 'global') return false;
+  const reviewedTargets = [...preview.artifact.targets].sort();
+  const currentTargets = [...selectedTargets].sort();
+  return reviewedTargets.length === currentTargets.length &&
+    reviewedTargets.every((provider, index) => provider === currentTargets[index]);
 }
 
 function readProviderSourcePreview(value: JsonValue): ProviderSourcePreview | null {

@@ -27,6 +27,7 @@ import {
   type ManagerRpcInputs,
 } from '@reglet/manager-protocol';
 import type { ManagerClient } from '../../client/ManagerClient.js';
+import { ManagerTransportError } from '../../client/HttpManagerClient.js';
 import { Button } from '../../design-system/Button.js';
 import { Shortcut } from '../../design-system/Shortcut.js';
 
@@ -210,7 +211,8 @@ export function ReviewApplyWorkbench({
       });
     } catch (applyError) {
       const detail = messageFrom(applyError);
-      if (applyRequested && !detail.toLocaleLowerCase().includes('stale')) {
+      const stale = applyError instanceof ManagerTransportError && applyError.code === 'STALE_PLAN';
+      if (applyRequested && !stale) {
         setResultUnconfirmed(true);
         setError(`Reglet could not confirm whether the batch completed. Check Activity before trying again. ${detail}`);
       } else {
@@ -327,7 +329,7 @@ export function ReviewApplyWorkbench({
                   const entries = entriesForFilter(unit, filter);
                   const unitCounts = entryCounts(unit.entries);
                   const executableApprovalRequired = unit.content === 'skills' &&
-                    unit.validationIssues.some((issue) => issue.startsWith('Executable skill '));
+                    unit.validationIssueCodes.includes('executable-skill-approval-required');
                   return (
                     <section className={`rg-review-unit rg-review-unit--${unit.status}`} key={unit.key} aria-labelledby={`review-unit-${safeId(unit.key)}`}>
                       <header className="rg-review-unit__header">

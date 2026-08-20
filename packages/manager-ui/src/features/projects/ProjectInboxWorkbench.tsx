@@ -41,6 +41,9 @@ export function ProjectInboxWorkbench({ client, snapshot, onRefresh, onError }: 
       discoveryId: selected.id,
       targets: selected.recognizedBy,
       ...(firstServerName(preview) === undefined ? {} : { serverName: firstServerName(preview) }),
+      ...(confirmedExecutableRevision(preview) === undefined
+        ? {}
+        : { confirmedExecutableRevision: confirmedExecutableRevision(preview) }),
     });
     setPreview(undefined);
     await onRefresh();
@@ -118,6 +121,9 @@ function PromotionSummary({ preview }: { preview: JsonValue }) {
         <div><dt>Kind</dt><dd>{readString(preview, 'kind') || 'Unknown'}</dd></div>
         <div><dt>Mode</dt><dd>{readString(preview, 'mode') || 'Normalized MCP'}</dd></div>
         <div><dt>Server</dt><dd>{firstServerName(preview) ?? 'None'}</dd></div>
+        {confirmedExecutableRevision(preview) === undefined ? null : (
+          <div><dt>Executable revision</dt><dd><code>{confirmedExecutableRevision(preview)}</code></dd></div>
+        )}
       </dl>
     </section>
   );
@@ -131,6 +137,13 @@ function firstServerName(value: JsonValue | undefined): string | undefined {
   if (!isRecord(value) || !Array.isArray(value.servers)) return undefined;
   const first = value.servers[0];
   return isRecord(first) && typeof first.name === 'string' ? first.name : undefined;
+}
+
+function confirmedExecutableRevision(value: JsonValue | undefined): string | undefined {
+  if (!isRecord(value) || !isRecord(value.inspection)) return undefined;
+  return value.inspection.requiresExecutableConfirmation === true && typeof value.inspection.revision === 'string'
+    ? value.inspection.revision
+    : undefined;
 }
 
 function readString(value: JsonValue, key: string): string {

@@ -174,7 +174,12 @@ function OwnershipBadge({ source, supported }: { source: ManagerProviderSourceV3
 }
 
 function CapabilityRows({ provider }: { provider: ManagerProviderV3 }) {
-  return <div className="rg-capability-list">{Object.entries(provider.capabilities).map(([name, capability]) => <div key={name}><span>{capitalize(name)}</span><strong>{capability.supported ? 'Supported' : 'Blocked'}</strong>{capability.issue === undefined ? null : <small>{capability.issue}</small>}</div>)}</div>;
+  const labels: Record<keyof ManagerProviderV3['capabilities'], string> = {
+    instructions: 'Instructions',
+    skills: 'Skills',
+    mcp: 'MCP servers',
+  };
+  return <div className="rg-capability-list">{Object.entries(provider.capabilities).map(([name, capability]) => <div key={name}><span>{labels[name as keyof typeof labels]}</span><strong>{capability.supported ? 'Supported' : 'Blocked'}</strong>{capability.issue === undefined ? null : <small>{capability.issue}</small>}</div>)}</div>;
 }
 
 function sourceFor(provider: ManagerProviderV3, content: ManagerContentId): ManagerProviderSourceV3 {
@@ -210,8 +215,4 @@ function ownershipLabel(ownership: ManagerProviderSourceV3['ownership'] | Manage
 function providerInitial(provider: ManagerProviderId): string {
   const labels: Record<ManagerProviderId, string> = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor', gemini: 'Gemini CLI', windsurf: 'Windsurf', opencode: 'OpenCode' };
   return labels[provider].slice(0, 1).toLocaleUpperCase();
-}
-
-function capitalize(value: string): string {
-  return value.length === 0 ? value : `${value[0]?.toUpperCase() ?? ''}${value.slice(1)}`;
 }

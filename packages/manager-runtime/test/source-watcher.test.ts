@@ -68,6 +68,30 @@ describe('ManagedSourceWatcher', () => {
 
     expect(invalidations).toBe(0);
   });
+
+  test('retries a rejected source invalidation without another filesystem event', async () => {
+    root = await mkdtemp(path.join(tmpdir(), 'reglet-source-watcher-'));
+    const home = path.join(root, 'reglet');
+    const providerRoot = path.join(root, 'providers');
+    const canonicalRule = path.join(home, 'rules', 'shared.md');
+    await mkdir(path.dirname(canonicalRule), { recursive: true });
+    await writeFile(canonicalRule, '# Shared\n');
+
+    let attempts = 0;
+    watcher = new ManagedSourceWatcher({
+      home,
+      providerRoot,
+      debounceMs: 10,
+      onInvalidation: () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('temporary database lock');
+      },
+    });
+    await watcher.start();
+    await writeFile(canonicalRule, '# Shared changed\n');
+
+    await waitFor(() => attempts === 2);
+  });
 });
 
 async function waitFor(predicate: () => boolean): Promise<void> {

@@ -79,13 +79,16 @@ describe('provider backup purge', () => {
     if (process.platform === 'win32') return;
     home = await mkdtemp(path.join(tmpdir(), 'reglet-backups-'));
     const outside = await mkdtemp(path.join(tmpdir(), 'reglet-backups-outside-'));
-    const backupRoot = path.join(home, '.state', 'backups', 'codex');
-    await mkdir(path.dirname(backupRoot), { recursive: true });
-    await writeFile(path.join(outside, 'keep.txt'), 'keep');
-    await symlink(outside, backupRoot);
+    try {
+      const backupRoot = path.join(home, '.state', 'backups', 'codex');
+      await mkdir(path.dirname(backupRoot), { recursive: true });
+      await writeFile(path.join(outside, 'keep.txt'), 'keep');
+      await symlink(outside, backupRoot);
 
-    await expect(previewPurgeProviderBackups('codex', home)).rejects.toThrow('symlink');
-    expect(await Bun.file(path.join(outside, 'keep.txt')).exists()).toBe(true);
-    await rm(outside, { recursive: true, force: true });
+      await expect(previewPurgeProviderBackups('codex', home)).rejects.toThrow('symlink');
+      expect(await Bun.file(path.join(outside, 'keep.txt')).exists()).toBe(true);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 });
