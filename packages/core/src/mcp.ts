@@ -333,7 +333,28 @@ export async function resolveEffectiveMcpServersEnv(
   env: NodeJS.ProcessEnv = process.env,
   secretStore: SecretStore = systemSecretStore(),
 ): Promise<Record<string, ResolvedMcpServerDef>> {
-  const effective = await listEffectiveMcpServers(provider, home);
+  return resolveEffectiveMcpServerSelection(provider, home, env, secretStore);
+}
+
+export async function resolveSelectedEffectiveMcpServersEnv(
+  provider: ProviderName,
+  displayNames: readonly string[],
+  home = regletHome(),
+  env: NodeJS.ProcessEnv = process.env,
+  secretStore: SecretStore = systemSecretStore(),
+): Promise<Record<string, ResolvedMcpServerDef>> {
+  return resolveEffectiveMcpServerSelection(provider, home, env, secretStore, new Set(displayNames));
+}
+
+async function resolveEffectiveMcpServerSelection(
+  provider: ProviderName,
+  home: string,
+  env: NodeJS.ProcessEnv,
+  secretStore: SecretStore,
+  displayNames?: ReadonlySet<string>,
+): Promise<Record<string, ResolvedMcpServerDef>> {
+  const effective = (await listEffectiveMcpServers(provider, home))
+    .filter((entry) => displayNames === undefined || displayNames.has(entry.displayName));
   const conflict = effective.find((entry) => entry.conflictStatus.state === 'conflict');
   if (conflict !== undefined && conflict.conflictStatus.state === 'conflict') {
     throw new Error(

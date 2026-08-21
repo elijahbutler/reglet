@@ -91,6 +91,45 @@ describe('manager runtime', () => {
     await runtime.dispose();
   });
 
+  test('records the redacted underlying command error in local diagnostics', async () => {
+    const { runtime, token } = await runtimeFixture();
+    const response = await runtime.app.fetch(commandRequest(token, {
+      protocolVersion: 2,
+      operation: 'provider.preview',
+      input: {
+        artifact: 'token=diagnostic-secret',
+        provider: 'codex',
+      },
+    }));
+
+    expect(response.status).toBe(500);
+    const logPath = path.join(home ?? '', '.state', 'logs', 'runtime.log');
+    const deadline = Date.now() + 2_000;
+    let matchingLine: string | undefined;
+    while (Date.now() < deadline) {
+      if (await Bun.file(logPath).exists()) {
+        matchingLine = (await readFile(logPath, 'utf8'))
+          .trim()
+          .split('\n')
+          .find((line) => line.includes('Unknown artifact'));
+        if (matchingLine !== undefined) break;
+      }
+      await Bun.sleep(25);
+    }
+
+    expect(matchingLine).toBeDefined();
+    if (matchingLine === undefined) throw new Error('Expected runtime error was not written before the deadline.');
+    const entry = JSON.parse(matchingLine) as {
+      errorName?: string;
+      errorMessage?: string;
+    };
+    expect(entry).toMatchObject({
+      errorName: 'Error',
+      errorMessage: 'Unknown artifact: [REDACTED]',
+    });
+    await runtime.dispose();
+  });
+
   test('enforces the same session scope over HTTP commands and event tickets', async () => {
     const { runtime, token } = await runtimeFixture('read');
     const mutation = await runtime.app.fetch(commandRequest(token, {
