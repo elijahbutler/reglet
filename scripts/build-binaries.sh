@@ -4,7 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$ROOT_DIR/dist"
 ENTRYPOINT="$ROOT_DIR/packages/cli/src/index.ts"
-VERSION="${REGLET_VERSION:-${GITHUB_REF_NAME:-0.1.0}}"
+if [[ -n "${REGLET_VERSION:-}" ]]; then
+  VERSION="${REGLET_VERSION}"
+elif [[ -n "${GITHUB_REF_NAME:-}" ]]; then
+  VERSION="${GITHUB_REF_NAME}"
+else
+  VERSION="$(git describe --tags --abbrev=0 2>/dev/null || echo "0.5.0")"
+fi
 VERSION="${VERSION#v}"
 
 mkdir -p "$OUT_DIR"
