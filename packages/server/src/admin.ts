@@ -98,8 +98,19 @@ if (command === 'owner-reset-link') {
       database.query('delete from admin_sessions where owner_id = ?').run(owner.id);
       console.log(`Updated owner to ${email}`);
     } else {
-      const userResult = database.query('insert into users (created_at) values (?)').run(now);
-      const userId = Number(userResult.lastInsertRowid);
+      const existingUser = database.query('select id from users where email = ?').get(email) as { id: number } | null;
+      let userId: number;
+      if (existingUser !== null) {
+        userId = existingUser.id;
+      } else {
+        const anyUser = database.query('select id from users order by id asc limit 1').get() as { id: number } | null;
+        if (anyUser !== null) {
+          userId = anyUser.id;
+        } else {
+          const userResult = database.query('insert into users (email, pass_hash) values (?, ?)').run(email, passwordHash);
+          userId = Number(userResult.lastInsertRowid);
+        }
+      }
       database.query(
         'insert into admin_owners (user_id, email, password_hash, created_at, updated_at) values (?, ?, ?, ?, ?)',
       ).run(userId, email, passwordHash, now, now);
