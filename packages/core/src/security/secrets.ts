@@ -3,6 +3,12 @@ export type SecretRef =
   | { source: 'process-env'; name: string; required?: boolean }
   | { source: 'oauth'; provider: string; required?: boolean };
 
+import {
+  resilientSecretDelete,
+  resilientSecretGet,
+  resilientSecretSet,
+} from './keychain-fallback.js';
+
 export interface SecretBinding {
   id: string;
   bound: boolean;
@@ -31,7 +37,7 @@ class NativeSecretStore implements SecretStore {
   async set(id: string, value: string): Promise<SecretBinding> {
     validateSecretInput(id, value);
     try {
-      await (await keyringEntry(id)).setSecret(new TextEncoder().encode(value));
+      await resilientSecretSet(service, id, value);
       return { id, bound: true };
     } catch {
       throw new Error('The operating-system credential store rejected the Reglet secret update.');
@@ -41,10 +47,8 @@ class NativeSecretStore implements SecretStore {
   async delete(id: string): Promise<SecretBinding> {
     validateSecretId(id);
     try {
-      await (await keyringEntry(id)).deleteCredential();
+      await resilientSecretDelete(service, id);
     } catch {
-      // Keyring implementations differ when a missing credential is deleted.
-      // Confirm absence before turning that behavior into an error.
       if ((await this.status(id)).bound) {
         throw new Error('The operating-system credential store rejected the Reglet secret deletion.');
       }
@@ -59,20 +63,14 @@ class NativeSecretStore implements SecretStore {
   async resolve(id: string): Promise<string | undefined> {
     validateSecretId(id);
     try {
-      const value = await (await keyringEntry(id)).getSecret();
-      if (value === undefined || value === null) return undefined;
-      const secret = new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(value));
+      const secret = await resilientSecretGet(service, id);
+      if (secret === null) return undefined;
       requireBoundedSecret(secret);
       return secret;
     } catch {
       throw new Error('The operating-system credential store is unavailable.');
     }
   }
-}
-
-async function keyringEntry(id: string) {
-  const { AsyncEntry } = await import('@napi-rs/keyring');
-  return new AsyncEntry(service, id);
 }
 
 export class MemorySecretStore implements SecretStore {

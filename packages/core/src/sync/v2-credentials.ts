@@ -4,6 +4,11 @@ import type {
   PendingSyncV2PairSecrets,
   SyncV2DeviceSecrets,
 } from './v2-types.js';
+import {
+  resilientSecretDelete,
+  resilientSecretGet,
+  resilientSecretSet,
+} from '../security/keychain-fallback.js';
 
 export interface SyncV2SecretStore {
   get(account: string): Promise<string | null>;
@@ -108,9 +113,8 @@ export async function loadPendingSyncV2BootstrapSecrets(
 class NativeKeyringSecretStore implements SyncV2SecretStore {
   async get(account: string): Promise<string | null> {
     try {
-      const value = await (await nativeKeyringEntry(account)).getSecret();
-      if (value === undefined || value === null) return null;
-      const secret = new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(value));
+      const secret = await resilientSecretGet(credentialService, account);
+      if (secret === null) return null;
       requireBoundedSecret(secret);
       return secret;
     } catch {
@@ -121,7 +125,7 @@ class NativeKeyringSecretStore implements SyncV2SecretStore {
   async set(account: string, secret: string): Promise<void> {
     requireBoundedSecret(secret);
     try {
-      await (await nativeKeyringEntry(account)).setSecret(new TextEncoder().encode(secret));
+      await resilientSecretSet(credentialService, account, secret);
     } catch {
       throw new Error('The operating system credential store rejected the Reglet credential update');
     }
@@ -129,16 +133,11 @@ class NativeKeyringSecretStore implements SyncV2SecretStore {
 
   async delete(account: string): Promise<void> {
     try {
-      await (await nativeKeyringEntry(account)).deleteCredential();
+      await resilientSecretDelete(credentialService, account);
     } catch {
       throw new Error('The operating system credential store rejected the Reglet credential deletion');
     }
   }
-}
-
-async function nativeKeyringEntry(account: string) {
-  const { AsyncEntry } = await import('@napi-rs/keyring');
-  return new AsyncEntry(credentialService, account);
 }
 
 function serverIdentity(serverUrl: string): string {

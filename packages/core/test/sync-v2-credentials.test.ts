@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { platformSyncV2SecretStore } from '../src/sync/v2-credentials.js';
 
 describe('sync protocol v2 credential storage', () => {
-  const nativeCredentialTest = process.platform === 'darwin' || process.platform === 'win32' ? test : test.skip;
+  const nativeCredentialTest = test;
 
   test('supports native credential stores on every desktop platform', () => {
     expect(() => platformSyncV2SecretStore('darwin')).not.toThrow();

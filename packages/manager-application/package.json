@@ -1,6 +1,6 @@
 {
   "name": "@reglet/manager-application",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "private": true,
   "type": "module",
   "main": "src/index.ts",
