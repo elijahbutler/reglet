@@ -20,7 +20,12 @@ import {
   waitForSyncV2ConnectionApproval,
 } from '@reglet/core';
 
-export function registerSyncV2PreviewCommands(program: Command): void {
+export function registerSyncV2PreviewCommands(
+  program: Command,
+  opts: {
+    onConnected?: (result: { providerReviewRequired: boolean }) => Promise<void>;
+  } = {},
+): void {
   // Top-level streamlined commands
   program
     .command('connect')
@@ -32,7 +37,7 @@ export function registerSyncV2PreviewCommands(program: Command): void {
     .option('--no-wait', 'submit connection request without waiting for approval')
     .option('-f, --force', 'replace existing or broken sync connection')
     .action(async (target?: string, options?: { invite?: string; server?: string; deviceName?: string; wait?: boolean; force?: boolean }) => {
-      await handleConnect(target, options ?? {});
+      await handleConnect(target, { ...(options ?? {}), onConnected: opts.onConnected });
     });
 
   program
@@ -333,6 +338,7 @@ export async function handleConnect(
     force?: boolean;
     invite?: string;
     server?: string;
+    onConnected?: (result: { providerReviewRequired: boolean }) => Promise<void>;
   } = {},
 ): Promise<void> {
   let target = targetInput ?? options.invite ?? options.server;
@@ -392,6 +398,7 @@ export async function handleConnect(
       const syncResult = await syncOnceV2();
       console.log(`sync\tconnected\tinitial-sync=complete\tpushed=${syncResult.pushed.length}\tpulled=${syncResult.pulled.length}`);
       console.log(`\n✓ Connected and synchronized with your vault!`);
+      await options.onConnected?.({ providerReviewRequired: syncResult.providerReviewRequired });
     } catch (err) {
       s.stop('Waiting cancelled or timed out.');
       console.log('You can check status or complete connection later using: reglet sync connection-status');
@@ -433,6 +440,7 @@ export async function handleConnect(
     const syncResult = await syncOnceV2();
     console.log(`sync\tpaired\tinitial-sync=complete\tpushed=${syncResult.pushed.length}\tpulled=${syncResult.pulled.length}`);
     console.log(`\n✓ Device "${deviceName}" is paired and synchronized!`);
+    await options.onConnected?.({ providerReviewRequired: syncResult.providerReviewRequired });
   } catch (err) {
     s.stop('Waiting cancelled or timed out.');
     console.log('You can check status or complete pairing later using: reglet sync connection-status');

@@ -160,6 +160,10 @@ import {
 import { handleConnect, registerSyncV2PreviewCommands } from './sync-preview.js';
 import { registerAuthCommands } from './auth.js';
 import { serveManagerRuntime } from '@reglet/manager-runtime';
+import {
+  interactiveDriftReview,
+  runPostConnectProviderSetup,
+} from './post-connect.js';
 
 const providerIds = ['claude', 'codex', 'cursor', 'gemini', 'windsurf', 'opencode'] as const;
 const contentIds = ['rules', 'skills', 'mcp'] as const;
@@ -169,7 +173,7 @@ const rulesSteeringPromptLimit = 4_000;
 type ContentId = (typeof contentIds)[number];
 
 const program = new Command();
-const version = process.env.REGLET_VERSION ?? '0.5.4';
+const version = process.env.REGLET_VERSION ?? '0.5.5';
 const managerApplication = new RegletApplication();
 
 program
@@ -1408,7 +1412,9 @@ mcp
     else console.log(`mcp\tdeleted\t${id}`);
   });
 
-registerSyncV2PreviewCommands(program);
+registerSyncV2PreviewCommands(program, {
+  onConnected: (result) => runPostConnectProviderSetup(result, runOnboarding),
+});
 registerAuthCommands(program);
 
 const daemon = program.command('daemon', { hidden: true }).description('Run or manage the background daemon');
@@ -2419,7 +2425,7 @@ async function runOnboarding(providers: ProviderId[], contents: ApplyContent[], 
   }
 }
 
-async function runInteractiveOnboarding(): Promise<void> {
+ async function runInteractiveOnboarding(): Promise<void> {
   console.log('\n╭────────────────────────────────────────────────────────╮');
   console.log('│  Welcome to Reglet!                                    │');
   console.log('│  The control plane for AI agent rules, skills & MCP.  │');
@@ -2471,8 +2477,12 @@ async function runInteractiveOnboarding(): Promise<void> {
   const contentsToEnroll = normalizeContentSelections(selectedContents as string[]);
 
   if (providersToEnroll.length > 0) {
-    await runOnboarding(providersToEnroll, contentsToEnroll, true);
-    console.log(`\n✓ Configured ${providersToEnroll.length} assistant(s): ${providersToEnroll.join(', ')}\n`);
+    // Enroll and import existing configs, but defer apply until after drift review
+    await runOnboarding(providersToEnroll, contentsToEnroll, false);
+    console.log(`\n✓ Enrolled ${providersToEnroll.length} assistant(s): ${providersToEnroll.join(', ')}\n`);
+
+    // Step 2b: Interactive drift/merge review before writing to provider files
+    await interactiveDriftReview(providersToEnroll);
   }
 
   // Step 3: Sync server setup
