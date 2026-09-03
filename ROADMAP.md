@@ -182,6 +182,7 @@ Goal: produce release artifacts that can be trusted without bypassing platform p
 - [ ] Sign and notarize macOS app archives and disk images.
 - [ ] Sign Windows installers and application binaries.
 - [ ] Verify update metadata and downloads cryptographically; keep automatic checks opt-in.
+- [ ] Self-updating CLI: implement `reglet update` command to query GitHub releases, verify SHA256 checksums, and safely replace the current executable in-place across macOS and Linux.
 - [ ] Publish SBOMs, checksums, provenance, privacy documentation, recovery documentation, sync protocol documentation, and a support policy.
 - [ ] Run clean-install and upgrade matrices across supported operating systems and provider versions.
 - [ ] Run dependency, static analysis, secret scanning, malicious-server, and release-binary smoke tests in CI.
