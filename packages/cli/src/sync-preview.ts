@@ -1,4 +1,5 @@
 import { confirm, isCancel, password } from '@clack/prompts';
+import { hostname } from 'node:os';
 import type { Command } from 'commander';
 import {
   approveSyncV2Pairing,
@@ -26,15 +27,16 @@ export function registerSyncV2PreviewCommands(program: Command): void {
     .command('connect')
     .description('Connect this machine with an invitation from a Reglet server or trusted device')
     .requiredOption('--invite <url>', 'short-lived Reglet Connect invitation URL')
-    .requiredOption('--device-name <name>', 'name for this device')
-    .action(async (options: { invite: string; deviceName: string }) => {
+    .option('--device-name <name>', 'name for this device (defaults to hostname)')
+    .action(async (options: { invite: string; deviceName?: string }) => {
+      const deviceName = options.deviceName?.trim() || hostname() || 'device';
       if (connectionKind(options.invite) === 'pair') {
-        const request = await requestSyncV2Pairing({ connectUrl: options.invite, deviceName: options.deviceName });
+        const request = await requestSyncV2Pairing({ connectUrl: options.invite, deviceName });
         console.log(`sync\tconnection-pending\tmethod=pair\tcode=${request.code}\texpires=${request.expiresAt}`);
         console.log('Approve this request on a connected Reglet device, then run: reglet sync connection-complete');
         return;
       }
-      const request = await startSyncV2BootstrapConnection({ connectUrl: options.invite, deviceName: options.deviceName });
+      const request = await startSyncV2BootstrapConnection({ connectUrl: options.invite, deviceName });
       console.log(`sync\tconnection-pending\tmethod=bootstrap\tfingerprint=${request.fingerprint}\texpires=${request.expiresAt}`);
       console.log('Approve this device in the owner dashboard, compare the fingerprint, then run: reglet sync connection-complete');
     });
@@ -81,12 +83,13 @@ export function registerSyncV2PreviewCommands(program: Command): void {
     .command('bootstrap')
     .description('Create the first encrypted vault from the homeserver bootstrap token')
     .requiredOption('--server <url>', 'HTTPS sync server URL')
-    .requiredOption('--device-name <name>', 'name for this device')
-    .action(async (options: { server: string; deviceName: string }) => {
+    .option('--device-name <name>', 'name for this device (defaults to hostname)')
+    .action(async (options: { server: string; deviceName?: string }) => {
+      const deviceName = options.deviceName?.trim() || hostname() || 'device';
       await bootstrapSyncV2({
         serverUrl: options.server,
         bootstrapToken: await bootstrapToken(),
-        deviceName: options.deviceName,
+        deviceName,
       });
       console.log('sync\tbootstrapped\tprovider-apply=required');
     });
@@ -95,9 +98,10 @@ export function registerSyncV2PreviewCommands(program: Command): void {
     .command('pair')
     .description('Request authorization for this new device')
     .requiredOption('--server <url>', 'HTTPS sync server URL')
-    .requiredOption('--device-name <name>', 'name for this device')
-    .action(async (options: { server: string; deviceName: string }) => {
-      const request = await requestSyncV2Pairing({ serverUrl: options.server, deviceName: options.deviceName });
+    .option('--device-name <name>', 'name for this device (defaults to hostname)')
+    .action(async (options: { server: string; deviceName?: string }) => {
+      const deviceName = options.deviceName?.trim() || hostname() || 'device';
+      const request = await requestSyncV2Pairing({ serverUrl: options.server, deviceName });
       console.log(`sync\tpairing-requested\tcode=${request.code}\texpires=${request.expiresAt}`);
       console.log('Enter this code on an already authorized device with: reglet sync approve <code>');
     });

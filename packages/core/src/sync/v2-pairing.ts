@@ -247,7 +247,23 @@ export async function startSyncV2BootstrapConnection(
   } else {
     secrets = await loadPendingSyncV2BootstrapSecrets(credentialId, store);
     if (secrets.connectionToken !== link.connectionToken || secrets.deviceName !== options.deviceName.trim()) {
-      throw new Error('A different first-device connection is already pending for this sync server');
+      const device = generateSyncV2DeviceKeys();
+      const vault = generateSyncV2VaultKeys();
+      secrets = {
+        version: 1,
+        vaultId: vault.vaultId,
+        rootSecret: vault.rootSecret,
+        authoritySecretKey: vault.authoritySecretKey,
+        keyEpoch: 1,
+        deviceToken: randomBytes(24).toString('base64url'),
+        agreementSecretKey: device.agreementSecretKey,
+        signingSecretKey: device.signingSecretKey,
+        connectionToken: link.connectionToken,
+        deviceId: device.deviceId,
+        deviceName: options.deviceName.trim(),
+        issuedAt: new Date().toISOString(),
+      };
+      await savePendingSyncV2BootstrapSecrets(credentialId, secrets, store);
     }
   }
 
