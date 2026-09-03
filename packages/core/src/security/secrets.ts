@@ -1,6 +1,7 @@
 export type SecretRef =
   | { source: 'keychain'; id: string; required?: boolean }
-  | { source: 'process-env'; name: string; required?: boolean };
+  | { source: 'process-env'; name: string; required?: boolean }
+  | { source: 'oauth'; provider: string; required?: boolean };
 
 export interface SecretBinding {
   id: string;
@@ -108,6 +109,11 @@ export async function secretReferenceStatus(
   if (reference.source === 'process-env') {
     return { reference, bound: env[reference.name] !== undefined };
   }
+  if (reference.source === 'oauth') {
+    const provider = reference.provider.toLowerCase();
+    const bound = (await store.status(`oauth-${provider}`)).bound || (await store.status(`${provider}-token`)).bound;
+    return { reference, bound };
+  }
   return { reference, bound: (await store.status(reference.id)).bound };
 }
 
@@ -115,9 +121,16 @@ export function isSecretRef(value: unknown): value is SecretRef {
   if (!isRecord(value) || (value.required !== undefined && typeof value.required !== 'boolean')) {
     return false;
   }
-  return value.source === 'process-env'
-    ? typeof value.name === 'string' && secretIdPattern.test(value.name)
-    : value.source === 'keychain' && typeof value.id === 'string' && secretIdPattern.test(value.id);
+  if (value.source === 'process-env') {
+    return typeof value.name === 'string' && secretIdPattern.test(value.name);
+  }
+  if (value.source === 'keychain') {
+    return typeof value.id === 'string' && secretIdPattern.test(value.id);
+  }
+  if (value.source === 'oauth') {
+    return typeof value.provider === 'string' && secretIdPattern.test(value.provider);
+  }
+  return false;
 }
 
 function validateSecretInput(id: string, value: string): void {

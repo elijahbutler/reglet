@@ -1,4 +1,5 @@
 export * from './config.js';
+export * from './auth/index.js';
 export * from './artifacts/library.js';
 export * from './artifacts/types.js';
 export * from './engine/apply.js';

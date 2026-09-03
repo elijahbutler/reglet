@@ -13,6 +13,9 @@ import {
   syncOnceV2,
   type SyncV2SecretStore,
   saveLibraryManifest,
+  readCredential,
+  saveCredential,
+  type SyncedCredential,
 } from '../src/index.js';
 import { closeApp, createApp } from '../../server/src/app.js';
 import { removeTestDirectory } from '../../server/test/cleanup.js';
@@ -174,6 +177,27 @@ describe('encrypted sync protocol v2 engine', () => {
     expect(deletion.deleted).toContain('skills/shared/temporary/SKILL.md');
     expect(pulled.deleted).toContain('skills/shared/temporary/SKILL.md');
     await expect(stat(path.join(setup.windowsHome, skillPath))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  test('synchronizes an encrypted credential from Mac to Windows', async () => {
+    const setup = await twoDeviceSetup();
+    const cred: SyncedCredential = {
+      version: 1,
+      provider: 'github',
+      tokenType: 'bearer',
+      token: 'ghp_secret_cross_device_token',
+      scopes: ['repo'],
+      updatedAt: new Date().toISOString(),
+    };
+    await saveCredential(cred, setup.macHome);
+    const pushed = await syncOnceV2({ home: setup.macHome, fetchImpl: setup.fetchImpl, secretStore: setup.macStore });
+    expect(pushed.pushed).toContain('credentials/github.json');
+
+    const pulled = await syncOnceV2({ home: setup.windowsHome, fetchImpl: setup.fetchImpl, secretStore: setup.windowsStore });
+    expect(pulled.pulled).toContain('credentials/github.json');
+
+    const received = await readCredential('github', setup.windowsHome);
+    expect(received?.token).toBe('ghp_secret_cross_device_token');
   });
 
   test('repairs derived merge bases after an interrupted local commit', async () => {

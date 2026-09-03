@@ -539,7 +539,9 @@ export function redactMcpServer(server: McpServerDef): McpServerDef {
       // the resolved value.
       env[key] = reference.source === 'process-env'
         ? { source: 'process-env', name: reference.name, ...(reference.required === undefined ? {} : { required: reference.required }) }
-        : { source: 'keychain', id: reference.id, ...(reference.required === undefined ? {} : { required: reference.required }) };
+        : reference.source === 'oauth'
+          ? { source: 'oauth', provider: reference.provider, ...(reference.required === undefined ? {} : { required: reference.required }) }
+          : { source: 'keychain', id: reference.id, ...(reference.required === undefined ? {} : { required: reference.required }) };
     }
   }
   return { ...server, env };
@@ -593,7 +595,7 @@ export function mcpEnvironmentDigest(
     if (server.env === undefined) continue;
     const serverEnv: Record<string, string> = {};
     for (const [outputKey, ref] of Object.entries(server.env).sort(([left], [right]) => left.localeCompare(right))) {
-      const identity = ref.source === 'process-env' ? ref.name : ref.id;
+      const identity = ref.source === 'process-env' ? ref.name : ref.source === 'oauth' ? ref.provider : ref.id;
       const value = ref.source === 'process-env' ? env[ref.name] : '<credential-store>';
       serverEnv[outputKey] = sha256String(
         `reglet:mcp-env:v2\u0000${serverName}\u0000${outputKey}\u0000${ref.source}\u0000${identity}\u0000${value === undefined ? '<missing>' : value}`,
@@ -719,6 +721,10 @@ function resolveMcpServerEnv(
       if (ref.required !== false) missingKeychainBindings.push(`${key}:${ref.id}`);
       continue;
     }
+    if (ref.source === 'oauth') {
+      if (ref.required !== false) missingKeychainBindings.push(`${key}:oauth:${ref.provider}`);
+      continue;
+    }
     const value = env[ref.name];
     if (value === undefined && ref.required !== false) {
       missingProcessEnvironment.push(`${key}:${ref.name}`);
@@ -751,13 +757,21 @@ async function resolveMcpServerSecrets(
   const missingProcessEnvironment: string[] = [];
   const missingKeychainBindings: string[] = [];
   for (const [key, reference] of Object.entries(server.env)) {
-    const value = reference.source === 'process-env'
-      ? env[reference.name]
-      : await secretStore.resolve(reference.id);
+    let value: string | undefined;
+    if (reference.source === 'process-env') {
+      value = env[reference.name];
+    } else if (reference.source === 'oauth') {
+      const provider = reference.provider.toLowerCase();
+      value = (await secretStore.resolve(`oauth-${provider}`)) ?? (await secretStore.resolve(`${provider}-token`));
+    } else {
+      value = await secretStore.resolve(reference.id);
+    }
     if (value === undefined) {
       if (reference.required !== false) {
         if (reference.source === 'process-env') {
           missingProcessEnvironment.push(`${key}:${reference.name}`);
+        } else if (reference.source === 'oauth') {
+          missingKeychainBindings.push(`${key}:oauth:${reference.provider}`);
         } else {
           missingKeychainBindings.push(`${key}:${reference.id}`);
         }

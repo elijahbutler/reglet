@@ -36,9 +36,6 @@ const allContents: ApplyContent[] = ['rules', 'skills', 'mcp'];
 
 export async function applyAll(opts: ApplyAllOptions = {}): Promise<ApplyReport> {
   const home = opts.home ?? regletHome();
-  if (opts.home !== undefined) {
-    return withRegletHome(home, () => applyAllWithHome(opts, home));
-  }
   return applyAllWithHome(opts, home);
 }
 
@@ -174,20 +171,6 @@ async function assertValidMcp(home: string, providers: readonly ProviderAdapter[
   }
   if (issues.length > 0) {
     throw new Error(`Invalid MCP configuration: ${issues.join('; ')}`);
-  }
-}
-
-async function withRegletHome<T>(home: string, callback: () => Promise<T>): Promise<T> {
-  const previous = process.env.REGLET_HOME;
-  process.env.REGLET_HOME = home;
-  try {
-    return await callback();
-  } finally {
-    if (previous === undefined) {
-      delete process.env.REGLET_HOME;
-    } else {
-      process.env.REGLET_HOME = previous;
-    }
   }
 }
 

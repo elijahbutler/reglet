@@ -74,9 +74,23 @@ describe('daemon service specs', () => {
     expect(uninstall.command).toEqual(['schtasks', '/delete', '/tn', 'com.reglet.daemon', '/f']);
   });
 
+  test('renders a Linux systemd user service spec', () => {
+    const home = path.join(path.sep, 'home', 'test');
+    const install = daemonServiceSpec('linux', home);
+    const uninstall = daemonUninstallSpec('linux', home);
+
+    expect(install.kind).toBe('systemd');
+    expect(install.path).toBe(path.join(home, '.config', 'systemd', 'user', 'com.reglet.daemon.service'));
+    expect(install.command).toEqual(['systemctl', '--user', 'enable', '--now', 'com.reglet.daemon.service']);
+    expect(install.content).toContain('Description=Reglet Daemon');
+    expect(install.content).toContain('daemon run');
+    expect(uninstall.kind).toBe('systemd');
+    expect(uninstall.command).toEqual(['systemctl', '--user', 'disable', '--now', 'com.reglet.daemon.service']);
+  });
+
   test('rejects unsupported service platforms', () => {
-    expect(() => daemonServiceSpec('linux', '/home/test')).toThrow('unsupported');
-    expect(() => daemonUninstallSpec('linux', '/home/test')).toThrow('unsupported');
+    expect(() => daemonServiceSpec('freebsd' as NodeJS.Platform, '/home/test')).toThrow('unsupported');
+    expect(() => daemonUninstallSpec('freebsd' as NodeJS.Platform, '/home/test')).toThrow('unsupported');
   });
 });
 

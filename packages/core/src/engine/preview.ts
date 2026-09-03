@@ -276,9 +276,11 @@ async function previewMcp(
   } catch {
     return skipEntry(adapter.id, 'mcp', `${adapter.id}:mcp blocked by validation`);
   }
-  if (adapter.applyMcp(resolvedServers, { dryRun: true, home, providerHome: providerRoot }) === null) {
+  const check = adapter.applyMcp(resolvedServers, { dryRun: true, home, providerHome: providerRoot });
+  if (check === null) {
     return skipEntry(adapter.id, 'mcp', `${adapter.id}:mcp unsupported`);
   }
+  await check;
   const rawBefore = await readOptionalFile(outputPath);
   const rawAfter = await renderMcpInSandbox(adapter, outputPath, home, providerRoot);
   const before = await redactMcpSecrets(rawBefore, redactionServers);
@@ -320,8 +322,14 @@ async function renderMcpInSandbox(
     await copyIfPresent(path.join(home, 'mcp', 'servers.json'), path.join(sandboxHome, 'mcp', 'servers.json'));
     await copyIfPresent(path.join(home, 'mcp', 'providers'), path.join(sandboxHome, 'mcp', 'providers'));
     await copyIfPresent(outputPath, sandboxOutput);
-    await applyAll({ providers: [adapter.id], contents: ['mcp'], home: sandboxHome, providerHome: sandboxProviderHome });
-    return readOptionalFile(sandboxOutput);
+    await applyAll({
+      providers: [adapter.id],
+      contents: ['mcp'],
+      home: sandboxHome,
+      providerHome: sandboxProviderHome,
+      reviewedReplacement: true,
+    });
+    return await readOptionalFile(sandboxOutput);
   } finally {
     await rm(sandbox, { recursive: true, force: true });
   }
@@ -348,7 +356,9 @@ async function redactMcpSecrets(
       const replacement = `<redacted:${key}>`;
       const resolvedValue = ref.source === 'process-env'
         ? process.env[ref.name]
-        : await secretStore.resolve(ref.id);
+        : ref.source === 'oauth'
+          ? (await secretStore.resolve(`oauth-${ref.provider.toLowerCase()}`)) ?? (await secretStore.resolve(`${ref.provider.toLowerCase()}-token`))
+          : await secretStore.resolve(ref.id);
       if (resolvedValue !== undefined && resolvedValue.length > 0) {
         redacted = redacted.replaceAll(resolvedValue, replacement);
       }

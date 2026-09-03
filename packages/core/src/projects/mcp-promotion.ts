@@ -78,7 +78,7 @@ function normalizeServer(name: string, value: unknown, projectRoot: string): Pro
   for (const [key, raw] of Object.entries(rawEnvironment)) {
     if (isSecretRef(raw)) {
       env[key] = raw;
-      secretReferenceIds.push(raw.source === 'keychain' ? raw.id : raw.name);
+      secretReferenceIds.push(raw.source === 'keychain' ? raw.id : raw.source === 'oauth' ? raw.provider : raw.name);
       continue;
     }
     if (typeof raw !== 'string') {

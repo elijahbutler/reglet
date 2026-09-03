@@ -21,13 +21,21 @@ export interface DaemonRunOptions {
 }
 
 export interface ServiceSpec {
-  kind: 'launchd' | 'schtasks';
+  kind: 'launchd' | 'schtasks' | 'systemd';
   path?: string;
   command: string[];
   content?: string;
 }
 
 const daemonLabel = 'com.reglet.daemon';
+
+export function isCompiledBinary(): boolean {
+  return (
+    import.meta.url.includes('$bunfs') ||
+    (!path.basename(process.execPath).toLowerCase().startsWith('bun') &&
+      !path.basename(process.execPath).toLowerCase().startsWith('node'))
+  );
+}
 
 export async function runDaemon(options: DaemonRunOptions = {}): Promise<void> {
   const debounceMs = options.debounceMs ?? 500;
@@ -106,7 +114,8 @@ export async function startDaemon(): Promise<number> {
 
   await mkdir(path.join(home, '.state'), { recursive: true });
   const logFd = await openLogFd(home);
-  const child = spawn(process.execPath, [currentCliPath(), 'daemon', 'run'], {
+  const args = isCompiledBinary() ? ['daemon', 'run'] : [currentCliPath(), 'daemon', 'run'];
+  const child = spawn(process.execPath, args, {
     detached: true,
     stdio: ['ignore', logFd, logFd],
     env: process.env,
@@ -146,6 +155,16 @@ export async function installDaemon(platform = process.platform, homeDir = os.ho
     return spec;
   }
 
+  if (spec.kind === 'systemd') {
+    if (spec.path === undefined || spec.content === undefined) {
+      throw new Error('Invalid systemd service spec');
+    }
+    await mkdir(path.dirname(spec.path), { recursive: true });
+    await writeFile(spec.path, spec.content);
+    spawn(spec.command[0] ?? 'systemctl', spec.command.slice(1), { stdio: 'inherit' });
+    return spec;
+  }
+
   spawn(spec.command[0] ?? 'schtasks', spec.command.slice(1), { stdio: 'inherit' });
   return spec;
 }
@@ -158,11 +177,18 @@ export async function uninstallDaemon(platform = process.platform, homeDir = os.
     return spec;
   }
 
+  if (spec.kind === 'systemd' && spec.path !== undefined) {
+    spawn(spec.command[0] ?? 'systemctl', spec.command.slice(1), { stdio: 'inherit' });
+    await rm(spec.path, { force: true });
+    return spec;
+  }
+
   spawn(spec.command[0] ?? 'schtasks', spec.command.slice(1), { stdio: 'inherit' });
   return spec;
 }
 
 export function daemonServiceSpec(platform: NodeJS.Platform, homeDir: string): ServiceSpec {
+  const isCompiled = isCompiledBinary();
   const cliPath = currentCliPath();
   if (platform === 'darwin') {
     const plistPath = path.join(homeDir, 'Library', 'LaunchAgents', `${daemonLabel}.plist`);
@@ -170,11 +196,14 @@ export function daemonServiceSpec(platform: NodeJS.Platform, homeDir: string): S
       kind: 'launchd',
       path: plistPath,
       command: ['launchctl', 'load', plistPath],
-      content: renderLaunchdPlist(cliPath),
+      content: renderLaunchdPlist(cliPath, isCompiled),
     };
   }
 
   if (platform === 'win32') {
+    const runTarget = isCompiled
+      ? `"${process.execPath}" daemon run`
+      : `"${process.execPath}" "${cliPath}" daemon run`;
     return {
       kind: 'schtasks',
       command: [
@@ -185,9 +214,22 @@ export function daemonServiceSpec(platform: NodeJS.Platform, homeDir: string): S
         '/sc',
         'onlogon',
         '/tr',
-        `"${process.execPath}" "${cliPath}" daemon run`,
+        runTarget,
         '/f',
       ],
+    };
+  }
+
+  if (platform === 'linux') {
+    const servicePath = path.join(homeDir, '.config', 'systemd', 'user', `${daemonLabel}.service`);
+    const execStart = isCompiled
+      ? `${process.execPath} daemon run`
+      : `${process.execPath} ${cliPath} daemon run`;
+    return {
+      kind: 'systemd',
+      path: servicePath,
+      command: ['systemctl', '--user', 'enable', '--now', `${daemonLabel}.service`],
+      content: renderSystemdService(execStart),
     };
   }
 
@@ -208,6 +250,15 @@ export function daemonUninstallSpec(platform: NodeJS.Platform, homeDir: string):
     return {
       kind: 'schtasks',
       command: ['schtasks', '/delete', '/tn', daemonLabel, '/f'],
+    };
+  }
+
+  if (platform === 'linux') {
+    const servicePath = path.join(homeDir, '.config', 'systemd', 'user', `${daemonLabel}.service`);
+    return {
+      kind: 'systemd',
+      path: servicePath,
+      command: ['systemctl', '--user', 'disable', '--now', `${daemonLabel}.service`],
     };
   }
 
@@ -261,10 +312,18 @@ async function queueDriftFromDaemon(): Promise<void> {
       await appendDriftEvent(record);
       await logDaemon(`queued drift ${record.provider}:${record.content}:${record.status} ${record.outputPath}`);
     }
-    if (drift.length > 0 && process.platform === 'darwin' && notificationsEnabled()) {
-      spawn('osascript', ['-e', 'display notification "Provider config drift detected" with title "Reglet"'], {
-        stdio: 'ignore',
-      });
+    if (drift.length > 0 && notificationsEnabled()) {
+      if (process.platform === 'darwin') {
+        const child = spawn('osascript', ['-e', 'display notification "Provider config drift detected" with title "Reglet"'], {
+          stdio: 'ignore',
+        });
+        child.on('error', () => {});
+      } else if (process.platform === 'linux') {
+        const child = spawn('notify-send', ['Reglet', 'Provider config drift detected'], {
+          stdio: 'ignore',
+        });
+        child.on('error', () => {});
+      }
     }
   } catch (error) {
     await logDaemon(`drift detection failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -302,7 +361,28 @@ async function logDaemon(message: string): Promise<void> {
   console.log(line.trimEnd());
 }
 
-function renderLaunchdPlist(cliPath: string): string {
+function renderSystemdService(execStart: string): string {
+  return `[Unit]
+Description=Reglet Daemon
+After=default.target
+
+[Service]
+ExecStart=${execStart}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+`;
+}
+
+function renderLaunchdPlist(cliPath: string, isCompiled: boolean): string {
+  const programArguments = isCompiled
+    ? [process.execPath, 'daemon', 'run']
+    : [process.execPath, cliPath, 'daemon', 'run'];
+  const argsXml = programArguments
+    .map((arg) => `    <string>${escapeXml(arg)}</string>`)
+    .join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -311,10 +391,7 @@ function renderLaunchdPlist(cliPath: string): string {
   <string>${daemonLabel}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${escapeXml(process.execPath)}</string>
-    <string>${escapeXml(cliPath)}</string>
-    <string>daemon</string>
-    <string>run</string>
+${argsXml}
   </array>
   <key>RunAtLoad</key>
   <true/>

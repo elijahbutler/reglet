@@ -26,6 +26,7 @@ import {
 import type { SyncV2DeviceSecrets, SyncV2ObjectPlaintext, StoredSyncV2Envelope } from './v2-types.js';
 import { hasLibraryManifest, loadLibraryManifest } from '../artifacts/library.js';
 import { tryMergeLibraryManifestText } from './library-merge.js';
+import { isSyncedCredential, syncCredentialToKeyring } from '../auth/credentials.js';
 
 export interface SyncV2Result {
   completedAt: string;
@@ -317,6 +318,10 @@ async function applyDecryptedChange(
 
   await writePrivateFile(localPath, change.content);
   await writePrivateFile(basePath, change.content);
+  if (filePath.startsWith('credentials/') && filePath.endsWith('.json')) {
+    const text = new TextDecoder('utf8').decode(change.content);
+    await autoSyncCredentialKeyring(text);
+  }
   state.files[filePath] = {
     objectId: change.envelope.objectId,
     revision: change.envelope.revision,
@@ -455,6 +460,17 @@ async function recordEncryptedConflict(
   if (!result.conflicts.includes(relativeConflict)) result.conflicts.push(relativeConflict);
 }
 
+async function autoSyncCredentialKeyring(content: string): Promise<void> {
+  try {
+    const parsed: unknown = JSON.parse(content);
+    if (isSyncedCredential(parsed)) {
+      await syncCredentialToKeyring(parsed);
+    }
+  } catch {
+    // Ignore invalid credential parsing
+  }
+}
+
 async function collectEncryptedSyncFiles(home: string): Promise<string[]> {
   if (await hasLibraryManifest(home)) {
     return collectLibrarySyncFiles(home);
@@ -463,6 +479,7 @@ async function collectEncryptedSyncFiles(home: string): Promise<string[]> {
   await collectUnder(path.join(home, 'rules'), 'rules', files);
   await collectUnder(path.join(home, 'skills'), 'skills', files);
   await collectUnder(path.join(home, 'mcp', 'providers'), 'mcp/providers', files);
+  await collectUnder(path.join(home, 'credentials'), 'credentials', files);
   if (await pathExists(path.join(home, 'mcp', 'servers.json'))) files.push('mcp/servers.json');
   return files.sort((left, right) => left.localeCompare(right));
 }
@@ -470,6 +487,9 @@ async function collectEncryptedSyncFiles(home: string): Promise<string[]> {
 async function collectLibrarySyncFiles(home: string): Promise<string[]> {
   const manifest = await loadLibraryManifest(home);
   const files = new Set<string>(['library.json']);
+  const credFiles: string[] = [];
+  await collectUnder(path.join(home, 'credentials'), 'credentials', credFiles);
+  for (const file of credFiles) files.add(file);
   for (const artifact of manifest.artifacts) {
     if (artifact.locator.type === 'directory') {
       const directoryFiles: string[] = [];
@@ -488,7 +508,13 @@ async function collectLibrarySyncFiles(home: string): Promise<string[]> {
 
 async function requireCanonicalEncryptedSyncPath(home: string, filePath: string): Promise<string> {
   const allowed = requireAllowedEncryptedSyncPath(filePath);
-  if (!(await hasLibraryManifest(home)) || allowed === 'library.json') return allowed;
+  if (
+    !(await hasLibraryManifest(home)) ||
+    allowed === 'library.json' ||
+    allowed.startsWith('credentials/')
+  ) {
+    return allowed;
+  }
   const manifest = await loadLibraryManifest(home);
   const canonical = manifest.artifacts.some((artifact) =>
     artifact.locator.type === 'directory'

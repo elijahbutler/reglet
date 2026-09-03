@@ -92,9 +92,9 @@ describe('master and composition revisions', () => {
     );
 
     process.env.REGLET_TEST_TOKEN = 'secret-one';
-    const first = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home });
+    const first = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home, providerHome });
     process.env.REGLET_TEST_TOKEN = 'secret-two';
-    const second = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home });
+    const second = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home, providerHome });
 
     expect(second.digest).not.toBe(first.digest);
     expect(JSON.stringify(second)).not.toContain('secret-two');
@@ -122,13 +122,13 @@ describe('master and composition revisions', () => {
     config.providers.claude.enabled = true;
     config.providers.claude.mcp = true;
     await saveConfig(config, home);
-    const before = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home });
+    const before = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home, providerHome });
     await mkdir(path.join(home, 'mcp', 'providers', 'codex'), { recursive: true });
     await writeFile(
       path.join(home, 'mcp', 'providers', 'codex', 'servers.json'),
       '{"mcpServers":{"codex-only":{"command":"node"}}}\n',
     );
-    const after = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home });
+    const after = await previewApplyStructured({ providers: ['claude'], contents: ['mcp'], home, providerHome });
 
     expect(after.masterRevision).not.toBe(before.masterRevision);
     expect(after.entries[0]?.compositionRevision).toBe(before.entries[0]?.compositionRevision);

@@ -2020,7 +2020,11 @@ async function secretBindings(home: string, store: SecretStore) {
     ...Object.values(master.providerMcpDefinitions).flatMap((definitions) => Object.values(definitions)),
   ]) {
     for (const reference of Object.values(definition.server.env ?? {})) {
-      const id = reference.source === 'keychain' ? `keychain:${reference.id}` : `process-env:${reference.name}`;
+      const id = reference.source === 'keychain'
+        ? `keychain:${reference.id}`
+        : reference.source === 'oauth'
+          ? `oauth:${reference.provider}`
+          : `process-env:${reference.name}`;
       references.set(id, reference);
     }
   }

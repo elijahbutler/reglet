@@ -157,6 +157,7 @@ import {
   uninstallDaemon,
 } from './daemon.js';
 import { registerSyncV2PreviewCommands } from './sync-preview.js';
+import { registerAuthCommands } from './auth.js';
 import { serveManagerRuntime } from '@reglet/manager-runtime';
 
 const providerIds = ['claude', 'codex', 'cursor', 'gemini', 'windsurf', 'opencode'] as const;
@@ -1272,6 +1273,7 @@ mcp
   });
 
 registerSyncV2PreviewCommands(program);
+registerAuthCommands(program);
 
 const daemon = program.command('daemon').description('Run or manage the background daemon');
 
@@ -3082,10 +3084,17 @@ async function runAiMerge(runner: AiMergeRunner, prompt: string): Promise<string
         resolve(stdout);
       });
 
+      child.stdin.on('error', (error) => {
+        if (isNodeError(error) && (error.code === 'EPIPE' || error.code === 'ERR_STREAM_WRITE_AFTER_END')) {
+          return;
+        }
+      });
+
       if (!runner.promptAsArgument) {
-        child.stdin.write(prompt);
+        child.stdin.end(prompt);
+      } else {
+        child.stdin.end();
       }
-      child.stdin.end();
     });
   } finally {
     await rm(workingDirectory, { recursive: true, force: true });
