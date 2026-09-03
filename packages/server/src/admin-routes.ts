@@ -293,5 +293,31 @@ function expiredSessionCookie(): string {
 }
 
 function sameOrigin(request: Request, expectedOrigin: string): boolean {
-  return request.headers.get('origin') === expectedOrigin;
+  const origin = request.headers.get('origin');
+  if (origin !== null) {
+    if (origin === expectedOrigin) return true;
+    try {
+      const parsedOrigin = new URL(origin);
+      const parsedExpected = new URL(expectedOrigin);
+      if (parsedOrigin.host === parsedExpected.host) return true;
+
+      const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
+      if (host !== null && (parsedOrigin.host === host || parsedOrigin.hostname === host.split(':')[0])) {
+        return true;
+      }
+    } catch {}
+  }
+  const referer = request.headers.get('referer');
+  if (referer !== null) {
+    try {
+      const parsedReferer = new URL(referer);
+      const parsedExpected = new URL(expectedOrigin);
+      if (parsedReferer.origin === expectedOrigin || parsedReferer.host === parsedExpected.host) return true;
+      const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
+      if (host !== null && (parsedReferer.host === host || parsedReferer.hostname === host.split(':')[0])) {
+        return true;
+      }
+    } catch {}
+  }
+  return false;
 }

@@ -273,6 +273,38 @@ describe('owner dashboard and connection grants', () => {
     expect(integrity.status).toBe(200);
     expect(await integrity.json()).toMatchObject({ ok: true });
   });
+
+  test('allows claim and admin requests when origin matches reverse-proxy host headers', async () => {
+    const links: string[] = [];
+    const app = useApp(createApp({
+      publicUrl: 'https://localhost',
+      onOwnerClaimLink: (link) => links.push(link),
+      rateLimit: false,
+    }));
+    const token = new URL(links[0]!).hash.slice('#claim='.length);
+
+    const response = await app.request('/api/admin/v1/claim', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: 'https://reglet.cloudview.cc',
+        'x-forwarded-host': 'reglet.cloudview.cc',
+      },
+      body: JSON.stringify({ token, email: 'owner@example.com', password: 'correct horse battery staple' }),
+    });
+    expect(response.status).toBe(200);
+
+    const attack = await app.request('/api/admin/v1/claim', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: 'https://evil.com',
+        'x-forwarded-host': 'reglet.cloudview.cc',
+      },
+      body: JSON.stringify({ token, email: 'owner@example.com', password: 'correct horse battery staple' }),
+    });
+    expect(attack.status).toBe(403);
+  });
 });
 
 async function claimedServer(
