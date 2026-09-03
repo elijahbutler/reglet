@@ -5,7 +5,7 @@ import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from '
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
-import { confirm, isCancel, multiselect, outro } from '@clack/prompts';
+import { isCancel, multiselect, outro, select } from '@clack/prompts';
 import { Command, InvalidArgumentError } from 'commander';
 import {
   failureResponse,
@@ -144,6 +144,7 @@ import {
   saveSyncV2State,
   startSyncV2BootstrapConnection,
   syncOnceV2,
+  listCredentials,
 } from '@reglet/core';
 import { allAdapters } from '@reglet/core';
 import {
@@ -156,7 +157,7 @@ import {
   stopDaemon,
   uninstallDaemon,
 } from './daemon.js';
-import { registerSyncV2PreviewCommands } from './sync-preview.js';
+import { handleConnect, registerSyncV2PreviewCommands } from './sync-preview.js';
 import { registerAuthCommands } from './auth.js';
 import { serveManagerRuntime } from '@reglet/manager-runtime';
 
@@ -168,7 +169,7 @@ const rulesSteeringPromptLimit = 4_000;
 type ContentId = (typeof contentIds)[number];
 
 const program = new Command();
-const version = process.env.REGLET_VERSION ?? '0.5.0';
+const version = process.env.REGLET_VERSION ?? '0.5.1';
 const managerApplication = new RegletApplication();
 
 program
@@ -177,8 +178,9 @@ program
   .version(version);
 
 program
-  .command('init')
-  .description('Create the master directory and optionally enroll detected providers')
+  .command('setup')
+  .alias('init')
+  .description('Interactive onboarding: detect providers, configure sync, and connect')
   .option('-y, --yes', 'run non-interactively and enroll detected providers')
   .option('-p, --provider <provider...>', 'provider(s) to enroll/import', parseProviderList)
   .option('-c, --content <content...>', 'content type(s) to import/apply', parseContentList)
@@ -189,13 +191,198 @@ program
       const providers = options.provider ?? (await detectedProviderIds());
       const contents = options.content ?? [...contentIds];
       await runOnboarding(providers, contents, options.apply !== false);
+      console.log(`Initialized ${regletHome()}`);
     } else if (process.stdin.isTTY) {
       await runInteractiveOnboarding();
+    } else {
+      console.log(`Initialized master directory at ${regletHome()}`);
     }
-    console.log(`Initialized ${regletHome()}`);
   });
 
-const migrate = program.command('migrate').description('Run explicit, reversible metadata migrations');
+program
+  .command('status')
+  .description('Show full system status: providers, sync connection, and credentials')
+  .option('--check', 'exit with 2 when drift is found')
+  .option('--json', 'print machine-readable JSON')
+  .action(async (options: { check?: boolean; json?: boolean }) => {
+    if (options.json === true) {
+      const status = await buildStatusJson();
+      printJson(status);
+      if (options.check === true && status.driftedCount > 0) {
+        process.exitCode = 2;
+      }
+      return;
+    }
+
+    const config = await loadConfig();
+    const syncState = await loadSyncV2State().catch(() => null);
+    const creds = await listCredentials().catch(() => []);
+
+    const providerSummaries = [];
+    for (const adapter of allAdapters()) {
+      const detected = await adapter.detect().catch(() => false);
+      const enrolled = config.providers[adapter.id]?.enabled ?? false;
+      const rules = config.providers[adapter.id]?.rules ?? false;
+      const skills = config.providers[adapter.id]?.skills ?? false;
+      const mcp = config.providers[adapter.id]?.mcp ?? false;
+      if (detected || enrolled) {
+        providerSummaries.push({
+          id: adapter.id,
+          name: adapter.displayName,
+          installed: detected,
+          enrolled,
+          content: [rules ? 'rules' : null, skills ? 'skills' : null, mcp ? 'mcp' : null].filter(Boolean) as string[],
+        });
+      }
+    }
+
+    console.log(`\nReglet v${version} · System Status\n`);
+
+    console.log('AI Providers:');
+    if (providerSummaries.length === 0) {
+      console.log('  No AI coding assistants detected yet. Run "reglet setup" to configure providers.\n');
+    } else {
+      for (const p of providerSummaries) {
+        const dot = p.enrolled ? '●' : '○';
+        const status = p.enrolled ? `enrolled (${p.content.join(', ') || 'all'})` : 'available (not enrolled)';
+        console.log(`  ${dot} ${p.name.padEnd(16)} ${status}`);
+      }
+      console.log('');
+    }
+
+    console.log('Encrypted Sync:');
+    if (!syncState) {
+      console.log('  ○ Not connected (Local-only mode)');
+      console.log('  To connect across devices, run: reglet connect <server-url-or-invite>\n');
+    } else if (syncState.phase === 'pending') {
+      const pendingDevice = syncState.method === 'pair' ? syncState.request.deviceName : syncState.deviceName;
+      console.log(`  ⏳ Pending approval for device: ${pendingDevice}`);
+      console.log(`  Server: ${syncState.serverUrl}`);
+      if (syncState.method === 'pair') {
+        console.log(`  Pairing code: ${syncState.request.code} (run "reglet approve ${syncState.request.code}" on an authorized device)`);
+      } else {
+        console.log(`  Fingerprint: ${syncState.fingerprint} (waiting for owner approval in dashboard)`);
+      }
+      console.log('');
+    } else {
+      console.log(`  ● Connected to ${syncState.serverUrl}`);
+      console.log(`  Device: ${syncState.deviceName} (vault: ${syncState.vaultId.slice(0, 8)}..., epoch: ${syncState.keyEpoch})`);
+      if (syncState.lastSync) {
+        console.log(`  Last sync: ${syncState.lastSync.completedAt} (${syncState.lastSync.pulled} pulled, ${syncState.lastSync.pushed} pushed)`);
+      }
+      if (syncState.lastError) {
+        console.log(`  ⚠ Last sync warning: ${syncState.lastError.message}`);
+        if (syncState.lastError.message.includes('401') || syncState.lastError.message.includes('unauthorized')) {
+          console.log('    Run "reglet connect <invite> --force" to re-authenticate.');
+        }
+      }
+      console.log('');
+    }
+
+    console.log('Credentials:');
+    const githubCred = creds.find((c) => c.provider === 'github');
+    if (githubCred && githubCred.user?.login) {
+      console.log(`  ● GitHub: authenticated as @${githubCred.user.login}`);
+    } else {
+      console.log('  ○ GitHub: not connected (run "reglet auth login" to connect for MCP tools)');
+    }
+    const drift = await detectDrift().catch(() => []);
+    const drifted = drift.filter((record) => record.status !== 'clean');
+    if (drifted.length > 0) {
+      console.log('Detected Drift:');
+      for (const record of drifted) {
+        console.log(`  ⚠ ${record.provider}:${record.content} drifted (${record.status})`);
+      }
+      console.log('  Run "reglet apply" to re-synchronize.\n');
+    }
+
+    if (options.check === true && drifted.length > 0) {
+      process.exitCode = 2;
+    }
+  });
+
+program
+  .command('providers')
+  .alias('provider')
+  .description('List supported AI coding assistants and manage which ones are synced')
+  .option('--json', 'print machine-readable JSON')
+  .action(async (options: { json?: boolean }) => {
+    const config = await loadConfig();
+    const rows = [];
+    for (const adapter of allAdapters()) {
+      const detected = await adapter.detect();
+      const pConfig = config.providers[adapter.id];
+      const enrolled = pConfig?.enabled ?? false;
+      const rules = pConfig?.rules ?? false;
+      const skills = pConfig?.skills ?? false;
+      const mcp = pConfig?.mcp ?? false;
+      rows.push({
+        id: adapter.id,
+        name: adapter.displayName,
+        installed: detected,
+        enrolled,
+        rules,
+        skills,
+        mcp,
+      });
+    }
+    if (options.json === true) {
+      console.log(JSON.stringify(rows, null, 2));
+      return;
+    }
+    console.log('\nAI Coding Assistants:');
+    console.log('Provider       Installed   Enrolled   Rules   Skills   MCP');
+    console.log('─────────────  ──────────  ─────────  ──────  ───────  ───');
+    for (const r of rows) {
+      const idCol = r.id.padEnd(14);
+      const instCol = (r.installed ? 'yes' : 'no').padEnd(11);
+      const enrCol = (r.enrolled ? 'yes' : 'no').padEnd(10);
+      const rulesCol = (r.rules ? '✓' : '-').padEnd(7);
+      const skillsCol = (r.skills ? '✓' : '-').padEnd(8);
+      const mcpCol = r.mcp ? '✓' : '-';
+      console.log(`${idCol} ${instCol} ${enrCol} ${rulesCol} ${skillsCol} ${mcpCol}`);
+    }
+    console.log('\nTo enable an assistant:   reglet enable <provider>');
+    console.log('To disable an assistant:  reglet disable <provider>');
+    console.log('To sync changes now:      reglet apply\n');
+  });
+
+program
+  .command('enable')
+  .description('Enable rules and configuration sync for an AI provider')
+  .argument('<target>', 'provider or provider:rules|skills|mcp (e.g. claude, cursor:rules)', parseProviderTarget)
+  .action(async (target: ProviderTarget) => {
+    await setEnrollment(target, true);
+    console.log(`✓ Enabled ${formatTarget(target)}. Run "reglet apply" to sync rules to this provider.`);
+  });
+
+program
+  .command('disable')
+  .description('Disable rules and configuration sync for an AI provider')
+  .argument('<target>', 'provider or provider:rules|skills|mcp (e.g. claude)', parseProviderTarget)
+  .action(async (target: ProviderTarget) => {
+    await setEnrollment(target, false);
+    console.log(`✓ Disabled ${formatTarget(target)}.`);
+  });
+
+program
+  .command('apply')
+  .description('Apply master rules, skills, and MCP config to enrolled providers')
+  .option('-p, --provider <provider>', 'provider to apply', parseProvider)
+  .option('-c, --content <content>', 'content type to apply', parseContent)
+  .option('-n, --dry-run', 'report planned writes without changing files')
+  .option('--reviewed-replacement', 'confirm replacement of detected provider drift')
+  .action(async (options: { provider?: ProviderId; content?: ApplyContent; dryRun?: boolean; reviewedReplacement?: boolean }) => {
+    const report = await applyAll({
+      providers: options.provider === undefined ? undefined : [options.provider],
+      contents: options.content === undefined ? undefined : [options.content],
+      dryRun: options.dryRun === true,
+      reviewedReplacement: options.reviewedReplacement,
+    });
+    printApplyResults(report.results);
+  });
+
+const migrate = program.command('migrate', { hidden: true }).description('Run explicit, reversible metadata migrations');
 
 migrate
   .command('library-v2')
@@ -242,7 +429,7 @@ migrate
   });
 
 program
-  .command('scan')
+  .command('scan', { hidden: true })
   .description('Print detected providers and existing inventory')
   .option('--json', 'print machine-readable JSON for setup apps')
   .action(async (options: { json?: boolean }) => {
@@ -259,7 +446,7 @@ program
   });
 
 program
-  .command('open')
+  .command('open', { hidden: true })
   .description('Open a local Reglet or project path in the system file browser')
   .argument('[path]', 'path to open', regletHome())
   .action(async (targetPath: string) => {
@@ -267,7 +454,7 @@ program
   });
 
 program
-  .command('list')
+  .command('list', { hidden: true })
   .description('List canonical library artifacts')
   .argument('[kind]', 'instructions, skills, or mcp', parseLibraryKind)
   .option('--archived', 'list archived artifacts instead of active artifacts')
@@ -283,7 +470,7 @@ program
   });
 
 program
-  .command('show')
+  .command('show', { hidden: true })
   .description('Show a canonical library artifact')
   .argument('<artifact>', 'artifact ID or unambiguous slug')
   .option('--json', 'print machine-readable JSON')
@@ -297,7 +484,7 @@ program
   });
 
 program
-  .command('create')
+  .command('create', { hidden: true })
   .description('Create a canonical instruction, skill, or MCP artifact from stdin')
   .argument('<kind>', 'instruction, skill, or mcp', parseLibraryKind)
   .requiredOption('--slug <slug>', 'stable artifact slug')
@@ -326,7 +513,7 @@ program
   });
 
 program
-  .command('duplicate')
+  .command('duplicate', { hidden: true })
   .description('Duplicate an artifact with a stable new ID and cleared targets')
   .argument('<artifact>')
   .option('--json')
@@ -335,7 +522,7 @@ program
   });
 
 program
-  .command('rename')
+  .command('rename', { hidden: true })
   .description('Rename an artifact without changing its ID')
   .argument('<artifact>')
   .argument('<slug>')
@@ -345,7 +532,7 @@ program
   });
 
 program
-  .command('archive')
+  .command('archive', { hidden: true })
   .description('Archive an artifact so it remains canonical but stops projecting')
   .argument('<artifact>')
   .option('--json')
@@ -354,7 +541,7 @@ program
   });
 
 program
-  .command('delete')
+  .command('delete', { hidden: true })
   .description('Permanently delete an artifact and retain recoverable history')
   .argument('<artifact>')
   .requiredOption('-y, --yes', 'confirm permanent deletion')
@@ -363,7 +550,7 @@ program
     printApplicationResult(await applicationData('library.delete', { artifact, confirmed: options.yes }), options.json, 'deleted');
   });
 
-const project = program.command('project').description('Manage read-only project discovery roots');
+const project = program.command('project', { hidden: true }).description('Manage read-only project discovery roots');
 const projectRoot = project.command('root').description('Manage configured development roots');
 
 projectRoot
@@ -448,7 +635,7 @@ project
   });
 
 program
-  .command('promote')
+  .command('promote', { hidden: true })
   .description('Promote a reviewed project discovery into the canonical library')
   .argument('<discovery>')
   .option('--mode <mode>', 'global-instruction, convert-to-skill, or disabled-draft', parsePromotionMode)
@@ -478,7 +665,7 @@ program
     printApplicationResult(result, options.json, 'promoted');
   });
 
-const secret = program.command('secret').description('Bind local-only secret references');
+const secret = program.command('secret', { hidden: true }).description('Bind local-only secret references');
 secret
   .command('set')
   .argument('<id>')
@@ -509,7 +696,7 @@ secret
     else console.log(`secret\t${booleanField(result, 'bound') ? 'bound' : 'unbound'}\t${id}`);
   });
 
-const remote = program.command('remote').description('Manage optional remote Manager access');
+const remote = program.command('remote', { hidden: true }).description('Manage optional remote Manager access');
 remote
   .command('enable')
   .argument('<endpoint>', 'Tailnet or custom HTTPS endpoint')
@@ -532,7 +719,7 @@ remote
     else console.log(`remote\t${booleanField(result, 'enabled') ? 'enabled' : 'disabled'}`);
   });
 
-const session = program.command('session').description('Pair and revoke scoped remote sessions');
+const session = program.command('session', { hidden: true }).description('Pair and revoke scoped remote sessions');
 session
   .command('pair')
   .option('--scope <scope>', 'read, write, or admin', parseSessionScope, 'read')
@@ -558,7 +745,7 @@ session
   });
 
 program
-  .command('history')
+  .command('history', { hidden: true })
   .description('List retained canonical artifact revisions')
   .argument('<artifact>')
   .option('--json')
@@ -569,7 +756,7 @@ program
   });
 
 program
-  .command('undo')
+  .command('undo', { hidden: true })
   .description('Restore an artifact revision')
   .argument('<artifact>')
   .option('--revision <revision>')
@@ -584,7 +771,7 @@ program
   });
 
 program
-  .command('diagnostics')
+  .command('diagnostics', { hidden: true })
   .description('Print redacted local Manager diagnostics')
   .option('--json')
   .action(async (options: { json?: boolean }) => {
@@ -594,7 +781,7 @@ program
   });
 
 program
-  .command('serve')
+  .command('serve', { hidden: true })
   .description('Run the persistent local Manager runtime')
   .option('--hostname <hostname>', 'bind hostname', '127.0.0.1')
   .option('--port <port>', 'bind port; 0 selects an available port', parsePort, 0)
@@ -630,7 +817,7 @@ program
     await runtime.stop();
   });
 
-const manager = program.command('manager').description('Read local-only manager state');
+const manager = program.command('manager', { hidden: true }).description('Read local-only manager state');
 
 manager
   .command('rpc')
@@ -667,7 +854,7 @@ manager
   });
 
 program
-  .command('plan')
+  .command('plan', { hidden: true })
   .description('Preview first-run onboarding reads and writes without changing files')
   .option('-p, --provider <provider...>', 'provider(s) to include', parseProviderList)
   .option('-c, --content <content...>', 'content type(s) to include', parseContentList)
@@ -687,58 +874,7 @@ program
   });
 
 program
-  .command('apply')
-  .description('Apply master rules, skills, and MCP config to enrolled providers')
-  .option('-p, --provider <provider>', 'provider to apply', parseProvider)
-  .option('-c, --content <content>', 'content type to apply', parseContent)
-  .option('--dry-run', 'report planned writes without changing files')
-  .option('--reviewed-replacement', 'confirm replacement of detected provider drift')
-  .action(async (options: { provider?: ProviderId; content?: ApplyContent; dryRun?: boolean; reviewedReplacement?: boolean }) => {
-    const report = await applyAll({
-      providers: options.provider === undefined ? undefined : [options.provider],
-      contents: options.content === undefined ? undefined : [options.content],
-      dryRun: options.dryRun,
-      reviewedReplacement: options.reviewedReplacement,
-    });
-    printApplyResults(report.results);
-  });
-
-program
-  .command('status')
-  .description('Print enrollment and drift status')
-  .option('--check', 'exit with 2 when drift is found')
-  .option('--json', 'print machine-readable JSON for manager apps')
-  .action(async (options: { check?: boolean; json?: boolean }) => {
-    if (options.json === true) {
-      const status = await buildStatusJson();
-      printJson(status);
-      if (options.check === true && status.driftedCount > 0) {
-        process.exitCode = 2;
-      }
-      return;
-    }
-
-    const config = await loadConfig();
-    for (const provider of providerIds) {
-      const providerConfig = config.providers[provider];
-      console.log(
-        `${provider}\t${providerConfig.enabled ? 'enabled' : 'disabled'}\trules=${providerConfig.rules ? 'on' : 'off'}\tskills=${providerConfig.skills ? 'on' : 'off'}\tmcp=${providerConfig.mcp ? 'on' : 'off'}`,
-      );
-    }
-
-    const drift = await detectDrift();
-    const drifted = drift.filter((record) => record.status !== 'clean');
-    for (const record of drift) {
-      console.log(`drift\t${record.provider}\t${record.content}\t${record.status}\t${record.outputPath}`);
-    }
-
-    if (options.check === true && drifted.length > 0) {
-      process.exitCode = 2;
-    }
-  });
-
-program
-  .command('enroll')
+  .command('enroll', { hidden: true })
   .description('Enroll a provider or provider content type')
   .argument('<target>', 'provider or provider:rules|skills|mcp', parseProviderTarget)
   .action(async (target: ProviderTarget) => {
@@ -746,7 +882,7 @@ program
   });
 
 program
-  .command('unenroll')
+  .command('unenroll', { hidden: true })
   .description('Unenroll a provider or provider content type')
   .argument('<target>', 'provider or provider:rules|skills|mcp', parseProviderTarget)
   .action(async (target: ProviderTarget) => {
@@ -754,7 +890,7 @@ program
   });
 
 program
-  .command('restore')
+  .command('restore', { hidden: true })
   .description('Restore backed-up provider files for a provider or all providers')
   .argument('[provider]', 'provider to restore', parseProvider)
   .action(async (provider?: ProviderId) => {
@@ -762,14 +898,14 @@ program
   });
 
 program
-  .command('revert')
+  .command('revert', { hidden: true })
   .description('Restore all backed-up provider files and remove Reglet-created outputs')
   .argument('[provider]', 'provider to revert', parseProvider)
   .action(async (provider?: ProviderId) => {
     printRevertResults(await revert(provider));
   });
 
-const operations = program.command('operations').description('Inspect and restore Reglet apply operations');
+const operations = program.command('operations', { hidden: true }).description('Inspect and restore Reglet apply operations');
 
 operations
   .command('list')
@@ -786,7 +922,7 @@ operations
     }
   });
 
-const state = program.command('state').description('Inspect and clear local Reglet state');
+const state = program.command('state', { hidden: true }).description('Inspect and clear local Reglet state');
 
 state
   .command('legacy-network-status')
@@ -863,7 +999,7 @@ operations
   });
 
 program
-  .command('diff')
+  .command('diff', { hidden: true })
   .description('Preview apply actions without writing files')
   .option('-p, --provider <provider>', 'provider to diff', parseProvider)
   .option('-c, --content <content>', 'content type to diff', parseContent)
@@ -876,7 +1012,7 @@ program
     printApplyResults(report.results);
   });
 
-const apply = program.command('apply-structured').description('Preview or apply exact structured provider writes');
+const apply = program.command('apply-structured', { hidden: true }).description('Preview or apply exact structured provider writes');
 
 apply
   .command('preview')
@@ -966,7 +1102,7 @@ rules
   });
 
 program
-  .command('import')
+  .command('import', { hidden: true })
   .description('Import drifted provider content back into the master directory')
   .argument('<target>', 'provider:rules|skills|mcp', parseProviderTarget)
   .option('--json', 'print machine-readable JSON for manager apps')
@@ -1275,7 +1411,7 @@ mcp
 registerSyncV2PreviewCommands(program);
 registerAuthCommands(program);
 
-const daemon = program.command('daemon').description('Run or manage the background daemon');
+const daemon = program.command('daemon', { hidden: true }).description('Run or manage the background daemon');
 
 daemon
   .command('run')
@@ -2284,47 +2420,87 @@ async function runOnboarding(providers: ProviderId[], contents: ApplyContent[], 
 }
 
 async function runInteractiveOnboarding(): Promise<void> {
+  console.log('\n╭────────────────────────────────────────────────────────╮');
+  console.log('│  Welcome to Reglet!                                    │');
+  console.log('│  The control plane for AI agent rules, skills & MCP.  │');
+  console.log('╰────────────────────────────────────────────────────────╯\n');
+
+  // Step 1: Detect and select providers
   const detected = await detectedProviderIds();
-  if (detected.length === 0) {
-    outro('No provider directories detected. Created the master directory only.');
-    return;
-  }
+  const allKnown = allAdapters();
 
-  const providers = await multiselect({
-    message: 'Select providers to enroll',
-    options: detected.map((provider) => ({
-      value: provider,
-      label: `${provider} (${getAdapter(provider).displayName})`,
-    })),
-    required: true,
+  const providerChoices = allKnown.map((adapter) => {
+    const isDetected = detected.includes(adapter.id);
+    return {
+      value: adapter.id,
+      label: `${adapter.displayName}${isDetected ? ' (detected on this machine)' : ''}`,
+    };
   });
-  if (isCancel(providers)) {
-    outro('Onboarding cancelled.');
+
+  const selectedProviders = await multiselect({
+    message: 'Select AI coding assistants to manage on this machine:',
+    options: providerChoices,
+    initialValues: detected.length > 0 ? detected : ['claude', 'cursor'],
+    required: false,
+  });
+
+  if (isCancel(selectedProviders)) {
+    outro('Setup cancelled.');
     return;
   }
 
-  const contents = await multiselect({
-    message: 'Select content types to import and manage',
-    options: contentIds.map((content) => ({ value: content, label: content })),
+  const providersToEnroll = normalizeProviderSelections(selectedProviders as string[]);
+
+  // Step 2: Content types to manage
+  const selectedContents = await multiselect({
+    message: 'Select content types to manage and synchronize:',
+    options: [
+      { value: 'rules', label: 'Master Rules (shared instructions & guidelines)' },
+      { value: 'skills', label: 'Skills (custom workflows & agent prompts)' },
+      { value: 'mcp', label: 'MCP Configurations (Model Context Protocol servers)' },
+    ],
     initialValues: ['rules', 'skills', 'mcp'],
     required: true,
   });
-  if (isCancel(contents)) {
-    outro('Onboarding cancelled.');
+
+  if (isCancel(selectedContents)) {
+    outro('Setup cancelled.');
     return;
   }
 
-  const shouldApply = await confirm({
-    message: `Import selected content and apply to ${providers.length} provider(s)?`,
-    initialValue: true,
+  const contentsToEnroll = normalizeContentSelections(selectedContents as string[]);
+
+  if (providersToEnroll.length > 0) {
+    await runOnboarding(providersToEnroll, contentsToEnroll, true);
+    console.log(`\n✓ Configured ${providersToEnroll.length} assistant(s): ${providersToEnroll.join(', ')}\n`);
+  }
+
+  // Step 3: Sync server setup
+  const wantSync = await select({
+    message: 'Would you like to connect to an encrypted Reglet sync server?',
+    options: [
+      { value: 'later', label: 'Skip for now (use in local-only mode)' },
+      { value: 'now', label: 'Connect now (enter server URL or invitation link)' },
+    ],
   });
-  if (isCancel(shouldApply) || !shouldApply) {
-    outro('Onboarding cancelled.');
-    return;
+
+  if (!isCancel(wantSync) && wantSync === 'now') {
+    try {
+      await handleConnect();
+    } catch (connectError) {
+      console.log(`Sync connection note: ${connectError instanceof Error ? connectError.message : String(connectError)}. You can run "reglet connect" anytime.`);
+    }
   }
 
-  await runOnboarding(normalizeProviderSelections(providers), normalizeContentSelections(contents));
-  outro('Onboarding complete.');
+  // Step 4: Tool authentication guidance
+  const creds = await listCredentials().catch(() => []);
+  const githubCred = creds.find((c) => c.provider === 'github');
+  if (!githubCred) {
+    console.log('GitHub Integration:');
+    console.log('  Connect GitHub credentials for MCP tools anytime with: reglet auth login\n');
+  }
+
+  outro('Reglet setup complete! Run "reglet status" anytime to inspect your system.');
 }
 
 function normalizeProviderSelections(values: readonly string[]): ProviderId[] {

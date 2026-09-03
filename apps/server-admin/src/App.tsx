@@ -4,6 +4,8 @@ import {
   ChevronRight,
   Clipboard,
   DatabaseBackup,
+  Eye,
+  EyeOff,
   Gauge,
   HardDrive,
   KeyRound,
@@ -89,11 +91,17 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (value: SessionRespo
   const claim = claimFromHash();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
+    if (claim !== null && password !== confirmPassword) {
+      setError('Passwords do not match. Please ensure both password fields are identical.');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -124,12 +132,55 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (value: SessionRespo
         </div>
         <form onSubmit={(event) => void submit(event)}>
           <label>Email<input autoComplete="username" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
-          <label>Password<input autoComplete={claim === null ? 'current-password' : 'new-password'} type="password" minLength={12} maxLength={1024} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
+          <label>
+            Password
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <input
+                autoComplete={claim === null ? 'current-password' : 'new-password'}
+                type={showPassword ? 'text' : 'password'}
+                minLength={12}
+                maxLength={1024}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                style={{ width: '100%', paddingRight: '40px' }}
+                required
+              />
+              <button
+                type="button"
+                tabIndex={-1}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                style={{ position: 'absolute', right: '8px', background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: '4px', opacity: 0.7 }}
+                onClick={() => setShowPassword(!showPassword)}
+              >
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
+          </label>
+          {claim !== null && (
+            <label>
+              Confirm password
+              <input
+                autoComplete="new-password"
+                type={showPassword ? 'text' : 'password'}
+                minLength={12}
+                maxLength={1024}
+                value={confirmPassword}
+                onChange={(event) => setConfirmPassword(event.target.value)}
+                required
+              />
+            </label>
+          )}
           {error !== '' && <ErrorNotice message={error} />}
           <button className="primary" disabled={busy} type="submit">
             {busy ? <LoaderCircle className="spin" aria-hidden="true" /> : <KeyRound aria-hidden="true" />}
             {claim === null ? 'Sign in' : 'Set owner access'}
           </button>
+          {claim === null && (
+            <p style={{ fontSize: '0.8rem', opacity: 0.75, marginTop: '16px', lineHeight: 1.4, textAlign: 'center' }}>
+              Forgot password? Run inside your server container terminal:<br />
+              <code style={{ fontSize: '0.75rem', wordBreak: 'break-all' }}>bun packages/server/src/admin.ts set-password &lt;new-password&gt;</code>
+            </p>
+          )}
         </form>
       </section>
     </main>
@@ -349,11 +400,34 @@ function Status({ icon, label, value, tone }: { icon: JSX.Element; label: string
 }
 
 function InvitationPanel({ grant, copied, onCopy, onClose }: { grant: ConnectionGrant; copied: boolean; onCopy: () => void; onClose: () => void }): JSX.Element {
+  const [copiedCmd, setCopiedCmd] = useState(false);
+  const cliCommand = `reglet connect "${grant.connectUrl}"`;
   return (
     <section className="invitation-panel" aria-labelledby="invitation-title">
-      <div><h2 id="invitation-title">{grant.kind === 'bootstrap' ? 'Connect the first device' : 'Add a trusted device'}</h2><p>Expires {formatDate(grant.expiresAt)}. The bearer remains in the link fragment.</p></div>
-      <code>{grant.connectUrl}</code>
-      <div className="row-actions"><button className="secondary" onClick={onCopy}>{copied ? <Check /> : <Clipboard />}{copied ? 'Copied' : 'Copy link'}</button><button className="icon-button" title="Close invitation" aria-label="Close invitation" onClick={onClose}><X /></button></div>
+      <div>
+        <h2 id="invitation-title">{grant.kind === 'bootstrap' ? 'Connect the first device' : 'Add a trusted device'}</h2>
+        <p>Expires {formatDate(grant.expiresAt)}. Run this command on your device terminal:</p>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%' }}>
+        <code style={{ userSelect: 'all', wordBreak: 'break-all' }}>{cliCommand}</code>
+        <div className="row-actions" style={{ marginTop: '4px' }}>
+          <button
+            className="primary"
+            onClick={() => void navigator.clipboard.writeText(cliCommand).then(() => {
+              setCopiedCmd(true);
+              setTimeout(() => setCopiedCmd(false), 3000);
+            })}
+          >
+            {copiedCmd ? <Check /> : <Clipboard />}
+            {copiedCmd ? 'Copied command!' : 'Copy CLI command'}
+          </button>
+          <button className="secondary" onClick={onCopy}>
+            {copied ? <Check /> : <Link2 />}
+            {copied ? 'Copied link' : 'Copy link only'}
+          </button>
+          <button className="icon-button" title="Close invitation" aria-label="Close invitation" onClick={onClose}><X /></button>
+        </div>
+      </div>
     </section>
   );
 }
@@ -400,9 +474,47 @@ function ConnectionHandoff(): JSX.Element {
   const grant = params.get('grant');
   const kind = params.get('kind');
   const [copied, setCopied] = useState(false);
+  const [copiedCmd, setCopiedCmd] = useState(false);
   const invitation = window.location.href;
+  const cliCommand = `reglet connect "${invitation}"`;
   const deepLink = grant === null ? '' : `reglet://connect#grant=${encodeURIComponent(grant)}&server=${encodeURIComponent(window.location.origin)}${kind === 'bootstrap' || kind === 'pair' ? `&kind=${kind}` : ''}`;
-  return <main className="handoff-shell"><section className="handoff-panel"><Brand /><div className="handoff-icon"><Link2 /></div><h1>Connect to {window.location.hostname}</h1><p>This invitation gives Reglet permission to request encrypted sync access. A trusted device must approve later-device membership.</p>{grant === null ? <ErrorNotice message="This invitation link is incomplete." /> : <><a className="primary link-button" href={deepLink}>Open Reglet<ChevronRight /></a><button className="secondary" onClick={() => void navigator.clipboard.writeText(invitation).then(() => setCopied(true))}>{copied ? <Check /> : <Clipboard />}{copied ? 'Copied invitation' : 'Copy for Reglet'}</button></>}<p className="boundary"><ShieldCheck />The server cannot read vault content or transfer vault keys.</p></section></main>;
+  return (
+    <main className="handoff-shell">
+      <section className="handoff-panel">
+        <Brand />
+        <div className="handoff-icon"><Link2 /></div>
+        <h1>Connect to {window.location.hostname}</h1>
+        <p>This invitation gives Reglet permission to request encrypted sync access.</p>
+        {grant === null ? (
+          <ErrorNotice message="This invitation link is incomplete." />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', width: '100%', alignItems: 'center' }}>
+            <code style={{ userSelect: 'all', wordBreak: 'break-all', textAlign: 'left', padding: '12px', background: 'rgba(255,255,255,0.06)', borderRadius: '6px', width: '100%' }}>
+              {cliCommand}
+            </code>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
+              <button
+                className="primary"
+                onClick={() => void navigator.clipboard.writeText(cliCommand).then(() => {
+                  setCopiedCmd(true);
+                  setTimeout(() => setCopiedCmd(false), 3000);
+                })}
+              >
+                {copiedCmd ? <Check /> : <Clipboard />}
+                {copiedCmd ? 'Copied CLI Command!' : 'Copy CLI Command'}
+              </button>
+              <a className="secondary link-button" href={deepLink}>Open Desktop App<ChevronRight /></a>
+              <button className="secondary" onClick={() => void navigator.clipboard.writeText(invitation).then(() => setCopied(true))}>
+                {copied ? <Check /> : <Link2 />}
+                {copied ? 'Copied link' : 'Copy link'}
+              </button>
+            </div>
+          </div>
+        )}
+        <p className="boundary"><ShieldCheck />The server cannot read vault content or transfer vault keys.</p>
+      </section>
+    </main>
+  );
 }
 
 function Brand(): JSX.Element { return <div className="brand"><span aria-hidden="true">R</span><strong>Reglet</strong><small>server</small></div>; }

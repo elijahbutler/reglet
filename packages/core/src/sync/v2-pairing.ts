@@ -57,6 +57,7 @@ export interface RequestSyncV2PairingOptions {
   serverUrl?: string;
   connectUrl?: string;
   deviceName: string;
+  force?: boolean;
   home?: string;
   fetchImpl?: typeof fetch;
   secretStore?: SyncV2SecretStore;
@@ -65,6 +66,7 @@ export interface RequestSyncV2PairingOptions {
 export interface StartSyncV2BootstrapConnectionOptions {
   connectUrl: string;
   deviceName: string;
+  force?: boolean;
   home?: string;
   fetchImpl?: typeof fetch;
   secretStore?: SyncV2SecretStore;
@@ -218,11 +220,21 @@ export async function startSyncV2BootstrapConnection(
     throw new Error('This connection link is for joining an existing encrypted vault');
   }
   requireDeviceName(options.deviceName);
-  if ((await loadSyncV2State(home)) !== null) throw new Error('Encrypted sync is already configured on this device');
   const store = options.secretStore ?? platformSyncV2SecretStore();
+  if ((await loadSyncV2State(home)) !== null) {
+    if (options.force) {
+      await logoutSyncV2({ home, secretStore: store });
+    } else {
+      throw new Error('Encrypted sync is already configured on this device. Use --force to replace it.');
+    }
+  }
   const credentialId = pendingSyncV2CredentialId(link.serverUrl);
-  if ((await store.get(activeSyncV2CredentialId(link.serverUrl))) !== null) {
-    throw new Error('Active sync credentials exist but local sync state is missing');
+  if (!options.force && (await store.get(activeSyncV2CredentialId(link.serverUrl))) !== null) {
+    throw new Error('Sync credentials exist but local sync state is missing; restore the state file or remove the orphaned operating-system credential before bootstrapping');
+  }
+  if (options.force) {
+    await store.delete(activeSyncV2CredentialId(link.serverUrl)).catch(() => {});
+    await store.delete(credentialId).catch(() => {});
   }
 
   let secrets: PendingSyncV2BootstrapSecrets;
@@ -316,19 +328,25 @@ export async function requestSyncV2Pairing(options: RequestSyncV2PairingOptions)
   }
   if (link === null && options.serverUrl === undefined) throw new Error('A sync server or invitation link is required');
   const serverUrl = link?.serverUrl ?? requireSecureSyncServerUrl(options.serverUrl ?? '');
-  if ((await loadSyncV2State(home)) !== null) throw new Error('Encrypted sync is already configured on this device');
-  requireDeviceName(options.deviceName);
   const store = options.secretStore ?? platformSyncV2SecretStore();
+  if ((await loadSyncV2State(home)) !== null) {
+    if (options.force) {
+      await logoutSyncV2({ home, secretStore: store });
+    } else {
+      throw new Error('Encrypted sync is already configured on this device. Use --force to replace it.');
+    }
+  }
+  requireDeviceName(options.deviceName);
   const client = new SyncV2Client(serverUrl, options.fetchImpl);
   await client.ensureCompatible();
   const credentialId = pendingSyncV2CredentialId(serverUrl);
-  if (
-    (await store.get(credentialId)) !== null ||
-    (await store.get(activeSyncV2CredentialId(serverUrl))) !== null
-  ) {
-    throw new Error(
-      'Sync credentials exist but local sync state is missing; restore the state file or remove the orphaned operating-system credential before pairing',
-    );
+  if (!options.force) {
+    if ((await store.get(credentialId)) !== null || (await store.get(activeSyncV2CredentialId(serverUrl))) !== null) {
+      throw new Error('Sync credentials exist but local sync state is missing; restore the state file or remove the orphaned operating-system credential before pairing');
+    }
+  } else {
+    await store.delete(credentialId).catch(() => {});
+    await store.delete(activeSyncV2CredentialId(serverUrl)).catch(() => {});
   }
   const device = generateSyncV2DeviceKeys();
   const deviceToken = randomBytes(24).toString('base64url');
@@ -522,6 +540,69 @@ export async function pendingSyncV2ConnectionStatus(options: {
   };
 }
 
+export async function waitForSyncV2ConnectionApproval(options: {
+  home?: string;
+  fetchImpl?: typeof fetch;
+  secretStore?: SyncV2SecretStore;
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  onPoll?: (status: PendingSyncV2ConnectionStatus) => void;
+} = {}): Promise<PendingSyncV2ConnectionStatus> {
+  const home = options.home ?? regletHome();
+  const pollIntervalMs = options.pollIntervalMs ?? 1500;
+  const timeoutMs = options.timeoutMs ?? 300_000;
+  const startTime = Date.now();
+
+  while (true) {
+    if (options.signal?.aborted) throw new Error('Connection wait aborted');
+    if (Date.now() - startTime > timeoutMs) throw new Error('Timed out waiting for connection approval');
+
+    const status = await pendingSyncV2ConnectionStatus({
+      home,
+      fetchImpl: options.fetchImpl,
+      secretStore: options.secretStore,
+    });
+
+    options.onPoll?.(status);
+
+    if (status.status === 'approved' || status.status === 'claimed') {
+      return status;
+    }
+    if (status.status === 'cancelled' || new Date(status.expiresAt).getTime() < Date.now()) {
+      throw new Error(`Connection was ${status.status === 'cancelled' ? 'cancelled' : 'expired'}`);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+}
+
+export async function autoCompleteSyncV2Connection(options: {
+  home?: string;
+  fetchImpl?: typeof fetch;
+  secretStore?: SyncV2SecretStore;
+  status?: PendingSyncV2ConnectionStatus;
+} = {}): Promise<void> {
+  const home = options.home ?? regletHome();
+  const status = options.status ?? (await pendingSyncV2ConnectionStatus({ home, fetchImpl: options.fetchImpl, secretStore: options.secretStore }));
+  if (status.fingerprint === null) throw new Error('Connection approval or fingerprint is not available yet');
+  if (status.method === 'bootstrap') {
+    await completeSyncV2BootstrapConnection({
+      confirmedFingerprint: status.fingerprint,
+      home,
+      fetchImpl: options.fetchImpl,
+      secretStore: options.secretStore,
+    });
+  } else {
+    await completeSyncV2Pairing({
+      confirmedSas: status.fingerprint,
+      home,
+      fetchImpl: options.fetchImpl,
+      secretStore: options.secretStore,
+    });
+  }
+}
+
 export async function completeSyncV2BootstrapConnection(options: {
   confirmedFingerprint: string;
   home?: string;
@@ -670,11 +751,14 @@ export async function disconnectSyncV2(options: {
 } = {}): Promise<void> {
   const home = options.home ?? regletHome();
   const state = await loadSyncV2State(home);
-  if (state === null) return;
   const store = options.secretStore ?? platformSyncV2SecretStore();
-  if (!options.localOnly && state.phase === 'active') {
-    const secrets = await loadSyncV2DeviceSecrets(state.credentialId, store);
-    await new SyncV2Client(state.serverUrl, options.fetchImpl).revokeDevice(secrets.deviceToken, state.deviceId);
+  if (state !== null && !options.localOnly && state.phase === 'active') {
+    try {
+      const secrets = await loadSyncV2DeviceSecrets(state.credentialId, store);
+      await new SyncV2Client(state.serverUrl, options.fetchImpl).revokeDevice(secrets.deviceToken, state.deviceId);
+    } catch {
+      // Continue with local logout even if server revocation fails
+    }
   }
   await logoutSyncV2({ home, secretStore: store });
 }
@@ -685,16 +769,17 @@ export async function logoutSyncV2(options: {
 } = {}): Promise<void> {
   const home = options.home ?? regletHome();
   const state = await loadSyncV2State(home);
-  if (state === null) return;
   const store = options.secretStore ?? platformSyncV2SecretStore();
-  const credentialIds = new Set([
-    state.credentialId,
-    activeSyncV2CredentialId(state.serverUrl),
-    pendingSyncV2CredentialId(state.serverUrl),
-  ]);
-  for (const credentialId of credentialIds) await store.delete(credentialId);
-  await clearSyncV2State(home);
-  await rm(path.join(home, '.state', 'sync-v2-bases'), { recursive: true, force: true });
+  if (state !== null) {
+    const credentialIds = new Set([
+      state.credentialId,
+      activeSyncV2CredentialId(state.serverUrl),
+      pendingSyncV2CredentialId(state.serverUrl),
+    ]);
+    for (const credentialId of credentialIds) await store.delete(credentialId).catch(() => {});
+  }
+  await clearSyncV2State(home).catch(() => {});
+  await rm(path.join(home, '.state', 'sync-v2-bases'), { recursive: true, force: true }).catch(() => {});
 }
 
 function requireSecretsMatchState(

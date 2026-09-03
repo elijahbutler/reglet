@@ -3,6 +3,7 @@ import { Database } from 'bun:sqlite';
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { issueOwnerReset, resetEmptySyncVault } from './admin-storage.js';
+import { hashSecret } from './security.js';
 import { initializeSchema } from './storage.js';
 
 const databasePath = path.resolve(process.env.REGLET_DB ?? './reglet.sqlite');
@@ -55,6 +56,79 @@ if (command === 'owner-reset-link') {
     backup.close();
   }
   console.log(`backup\tverified\t${destination}`);
+} else if (command === 'set-password' || command === 'reset-password') {
+  const newPassword = process.argv[3];
+  if (!newPassword || newPassword.length < 12) {
+    throw new Error('Password must be at least 12 characters');
+  }
+  const database = new Database(databasePath);
+  try {
+    initializeSchema(database);
+    const owner = database.query('select id, email from admin_owners limit 1').get() as { id: number; email: string } | null;
+    if (!owner) throw new Error('No owner account found. Use set-owner <email> <password> to configure one.');
+    const passwordHash = await hashSecret(newPassword);
+    database.query('update admin_owners set password_hash = ?, updated_at = ? where id = ?').run(
+      passwordHash,
+      new Date().toISOString(),
+      owner.id,
+    );
+    database.query('delete from admin_sessions where owner_id = ?').run(owner.id);
+    console.log(`Password updated successfully for owner: ${owner.email}`);
+  } finally {
+    database.close();
+  }
+} else if (command === 'set-owner') {
+  const email = process.argv[3];
+  const newPassword = process.argv[4];
+  if (!email || !email.includes('@')) throw new Error('Valid email required: admin.ts set-owner <email> <password>');
+  if (!newPassword || newPassword.length < 12) throw new Error('Password must be at least 12 characters');
+  const database = new Database(databasePath);
+  try {
+    initializeSchema(database);
+    const passwordHash = await hashSecret(newPassword);
+    const now = new Date().toISOString();
+    const owner = database.query('select id from admin_owners limit 1').get() as { id: number } | null;
+    if (owner) {
+      database.query('update admin_owners set email = ?, password_hash = ?, updated_at = ? where id = ?').run(
+        email,
+        passwordHash,
+        now,
+        owner.id,
+      );
+      database.query('delete from admin_sessions where owner_id = ?').run(owner.id);
+      console.log(`Updated owner to ${email}`);
+    } else {
+      const userResult = database.query('insert into users (created_at) values (?)').run(now);
+      const userId = Number(userResult.lastInsertRowid);
+      database.query(
+        'insert into admin_owners (user_id, email, password_hash, created_at, updated_at) values (?, ?, ?, ?, ?)',
+      ).run(userId, email, passwordHash, now, now);
+      console.log(`Created owner account for ${email}`);
+    }
+  } finally {
+    database.close();
+  }
+} else if (command === 'show-owner' || command === 'status') {
+  const database = new Database(databasePath);
+  try {
+    initializeSchema(database);
+    const owner = database.query('select id, email, created_at, updated_at from admin_owners limit 1').get() as {
+      id: number;
+      email: string;
+      created_at: string;
+      updated_at: string;
+    } | null;
+    if (!owner) {
+      console.log('No owner configured (unclaimed server)');
+    } else {
+      const deviceCount = (database.query('select count(*) as count from devices where revoked_at is null').get() as { count: number }).count;
+      console.log(`Owner: ${owner.email}`);
+      console.log(`Configured: ${owner.updated_at || owner.created_at}`);
+      console.log(`Active devices: ${deviceCount}`);
+    }
+  } finally {
+    database.close();
+  }
 } else if (command === 'reset-empty-vault') {
   if (process.argv[3] !== '--confirm-empty-vault') {
     throw new Error('Usage: admin.ts reset-empty-vault --confirm-empty-vault');
@@ -68,7 +142,7 @@ if (command === 'owner-reset-link') {
     database.close();
   }
 } else {
-  throw new Error('Usage: admin.ts <owner-reset-link|check|backup|reset-empty-vault> [argument]');
+  throw new Error('Usage: admin.ts <set-password|set-owner|show-owner|owner-reset-link|check|backup|reset-empty-vault> [argument]');
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
