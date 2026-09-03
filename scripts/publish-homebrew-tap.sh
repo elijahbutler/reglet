@@ -53,6 +53,10 @@ if [[ -f "$CASK_PATH" ]]; then
   cp "$CASK_PATH" "$TAP_DIR/Casks/reglet.rb"
   git -C "$TAP_DIR" add Casks/reglet.rb
 fi
+
+git -C "$TAP_DIR" config user.name "github-actions[bot]"
+git -C "$TAP_DIR" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
 if git -C "$TAP_DIR" diff --cached --quiet; then
   echo "Homebrew tap already contains Reglet $VERSION."
   exit 0
