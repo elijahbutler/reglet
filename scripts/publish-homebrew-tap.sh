@@ -13,12 +13,16 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
   echo "A valid REGLET_VERSION or GITHUB_REF_NAME is required to publish Homebrew." >&2
   exit 1
 fi
-if [[ ! -f "$FORMULA_PATH" || ! -f "$CASK_PATH" ]]; then
-  echo "Generate the Homebrew formula and cask before publishing the tap." >&2
+if [[ ! -f "$FORMULA_PATH" ]]; then
+  echo "Generate the Homebrew formula before publishing the tap." >&2
   exit 1
 fi
-if ! grep -Fq "version \"$VERSION\"" "$FORMULA_PATH" || ! grep -Fq "version \"$VERSION\"" "$CASK_PATH"; then
-  echo "The generated Homebrew files do not match Reglet $VERSION." >&2
+if ! grep -Fq "version \"$VERSION\"" "$FORMULA_PATH"; then
+  echo "The generated Homebrew formula does not match Reglet $VERSION." >&2
+  exit 1
+fi
+if [[ -f "$CASK_PATH" ]] && ! grep -Fq "version \"$VERSION\"" "$CASK_PATH"; then
+  echo "The generated Homebrew cask does not match Reglet $VERSION." >&2
   exit 1
 fi
 
@@ -28,7 +32,7 @@ if [[ -n "${REGLET_HOMEBREW_TAP_CLONE_URL:-}" ]]; then
   push_tap() { git -C "$1" push origin HEAD:main; }
 else
   if [[ -z "${HOMEBREW_TAP_TOKEN:-}" ]]; then
-    echo "HOMEBREW_TAP_TOKEN is required to push Formula/reglet.rb and Casks/reglet.rb to $TAP_REPOSITORY." >&2
+    echo "HOMEBREW_TAP_TOKEN is required to push Formula/reglet.rb to $TAP_REPOSITORY." >&2
     exit 1
   fi
   TAP_CLONE_URL="https://github.com/${TAP_REPOSITORY}.git"
@@ -40,13 +44,15 @@ fi
 TEMP_ROOT="${RUNNER_TEMP:-/tmp}"
 TAP_DIR="$(mktemp -d "$TEMP_ROOT/reglet-homebrew.XXXXXX")"
 clone_tap "$TAP_DIR"
-mkdir -p "$TAP_DIR/Formula" "$TAP_DIR/Casks"
+mkdir -p "$TAP_DIR/Formula"
 cp "$FORMULA_PATH" "$TAP_DIR/Formula/reglet.rb"
-cp "$CASK_PATH" "$TAP_DIR/Casks/reglet.rb"
+git -C "$TAP_DIR" add Formula/reglet.rb
 
-git -C "$TAP_DIR" config user.name "github-actions[bot]"
-git -C "$TAP_DIR" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-git -C "$TAP_DIR" add Formula/reglet.rb Casks/reglet.rb
+if [[ -f "$CASK_PATH" ]]; then
+  mkdir -p "$TAP_DIR/Casks"
+  cp "$CASK_PATH" "$TAP_DIR/Casks/reglet.rb"
+  git -C "$TAP_DIR" add Casks/reglet.rb
+fi
 if git -C "$TAP_DIR" diff --cached --quiet; then
   echo "Homebrew tap already contains Reglet $VERSION."
   exit 0

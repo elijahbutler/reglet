@@ -19,17 +19,11 @@ if [[ ! -f "$ARM64_BINARY" || ! -f "$X64_BINARY" ]]; then
   echo "Missing macOS binaries. Run: bun run build:binaries" >&2
   exit 1
 fi
-if [[ ! -f "$ARM64_DMG" || ! -f "$X64_DMG" ]]; then
-  echo "Missing macOS desktop disk images. Run the Tauri macOS release build before generating Homebrew artifacts." >&2
-  exit 1
-fi
 
 ARM64_SHA="$(shasum -a 256 "$ARM64_BINARY" | awk '{print $1}')"
 X64_SHA="$(shasum -a 256 "$X64_BINARY" | awk '{print $1}')"
-ARM64_DMG_SHA="$(shasum -a 256 "$ARM64_DMG" | awk '{print $1}')"
-X64_DMG_SHA="$(shasum -a 256 "$X64_DMG" | awk '{print $1}')"
 
-mkdir -p "$FORMULA_DIR" "$CASK_DIR"
+mkdir -p "$FORMULA_DIR"
 
 cat > "$FORMULA_PATH" <<RUBY
 class Reglet < Formula
@@ -61,7 +55,13 @@ class Reglet < Formula
 end
 RUBY
 
-cat > "$CASK_PATH" <<RUBY
+echo "Generated $FORMULA_PATH"
+
+if [[ -f "$ARM64_DMG" && -f "$X64_DMG" ]]; then
+  ARM64_DMG_SHA="$(shasum -a 256 "$ARM64_DMG" | awk '{print $1}')"
+  X64_DMG_SHA="$(shasum -a 256 "$X64_DMG" | awk '{print $1}')"
+  mkdir -p "$CASK_DIR"
+  cat > "$CASK_PATH" <<RUBY
 cask "reglet" do
   version "$VERSION"
 
@@ -89,6 +89,5 @@ cask "reglet" do
   end
 end
 RUBY
-
-echo "Generated $FORMULA_PATH"
-echo "Generated $CASK_PATH"
+  echo "Generated $CASK_PATH"
+fi
