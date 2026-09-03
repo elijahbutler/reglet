@@ -1,4 +1,4 @@
-import { createApp } from './app.js';
+import { closeApp, createApp } from './app.js';
 
 const configuredToken = process.env.REGLET_TOKEN;
 const app = createApp({
@@ -12,6 +12,15 @@ const app = createApp({
   backupDirectory: process.env.REGLET_BACKUP_DIR,
   onOwnerClaimLink: (link) => console.error(`[reglet] Claim the owner dashboard once: ${link}`),
 });
+
+const shutdown = () => {
+  console.log('[reglet] Shutting down sync server gracefully...');
+  closeApp(app);
+  process.exit(0);
+};
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
 
 export { createApp };
 export default {

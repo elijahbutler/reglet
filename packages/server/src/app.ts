@@ -86,7 +86,7 @@ interface RenameDeviceBody {
 }
 
 const appDatabases = new WeakMap<Hono, Database>();
-const serviceVersion = '0.5.3';
+const serviceVersion = '0.5.4';
 const protocolVersion = 1;
 const defaultBodyLimitBytes = 256 * 1024;
 const changesPageSize = 100;
@@ -553,7 +553,13 @@ function requirePublicUrl(value: string): string {
 }
 
 export function closeApp(app: Hono): void {
-  appDatabases.get(app)?.close();
+  const db = appDatabases.get(app);
+  if (db) {
+    try {
+      db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+    } catch {}
+    db.close();
+  }
   appDatabases.delete(app);
 }
 
