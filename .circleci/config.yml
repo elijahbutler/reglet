@@ -1,0 +1,71 @@
+# This config was automatically generated from your source code
+# Stacks detected: cicd:github-actions:.github/workflows,deps:node:.,deps:rust:apps/desktop/src-tauri
+version: 2.1
+orbs:
+  node: circleci/node@5
+jobs:
+  test-node:
+    # Install node dependencies and run tests
+    executor: node/default
+    steps:
+      - checkout
+      - node/install-packages:
+          cache-path: ~/project/node_modules
+          override-ci-command: npm install
+      - run:
+          name: Run tests
+          command: npm test --passWithNoTests
+  test-rust:
+    docker:
+      - image: cimg/rust:1.70
+    working_directory: ~/project/apps/desktop/src-tauri
+    steps:
+      - checkout:
+          path: ~/project
+      - restore_cache:
+          key: cargo-{{ checksum "Cargo.lock" }}
+      - run:
+          command: cargo test
+      - save_cache:
+          key: cargo-{{ checksum "Cargo.lock" }}
+          paths:
+            - ~/.cargo
+  deploy:
+    # This is an example deploy job, not actually used by the workflow
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - run:
+          name: Plan deployment
+          command: |-
+            circleci run release plan deploy \
+              --environment-name="default" \
+              --component-name="deploy" \
+              --target-version="1.0.${CIRCLE_BUILD_NUM}-${CIRCLE_SHA1:0:7}"
+      # Replace this with steps to deploy to users
+      - run:
+          name: deploy
+          command: '#e.g. ./deploy.sh'
+      - run:
+          name: found github actions config
+          command: ':'
+      - run:
+          name: Update deployment status to running
+          command: circleci run release update deploy --status=RUNNING
+      - run:
+          name: Update deployment status to success
+          command: circleci run release update deploy --status=SUCCESS
+          when: on_success
+      - run:
+          name: Update deployment status to failed
+          command: circleci run release update deploy --status=FAILED
+          when: on_fail
+workflows:
+  build-and-test:
+    jobs:
+      - test-node
+      - test-rust
+    # - deploy:
+    #     requires:
+    #       - test-node
+    #       - test-rust
