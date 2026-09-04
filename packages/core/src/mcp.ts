@@ -467,11 +467,18 @@ export function validateMcpServer(name: string, server: unknown): { ok: boolean;
     return { ok: false, issues: [...issues, 'server must be an object'] };
   }
 
-  const supportedFields = new Set(['command', 'args', 'env', 'url']);
+  const supportedFields = new Set(['command', 'args', 'env', 'url', 'enabled', 'disabled']);
   for (const field of Object.keys(server)) {
     if (!supportedFields.has(field)) {
       issues.push(`unsupported field ${field} may alter security or provider behavior`);
     }
+  }
+
+  if (server.enabled !== undefined && typeof server.enabled !== 'boolean') {
+    issues.push('enabled must be a boolean');
+  }
+  if (server.disabled !== undefined && typeof server.disabled !== 'boolean') {
+    issues.push('disabled must be a boolean');
   }
 
   const command = server.command;

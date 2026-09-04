@@ -30,6 +30,9 @@ describe('MCP secret bindings', () => {
       ok: false,
       issues: ['unsupported field headers may alter security or provider behavior'],
     });
+    expect(validateMcpServer('with-enabled', { command: 'node', enabled: true }).ok).toBe(true);
+    expect(validateMcpServer('with-disabled', { command: 'node', disabled: false }).ok).toBe(true);
+    expect(validateMcpServer('bad-enabled', { command: 'node', enabled: 'yes' }).ok).toBe(false);
 
     const store = new MemorySecretStore();
     await store.set('api-token', 'super-secret');

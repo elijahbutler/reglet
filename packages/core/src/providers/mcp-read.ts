@@ -75,7 +75,12 @@ function normalizeMcpServers(value: Record<string, unknown>): Record<string, Mcp
   const servers: Record<string, McpServerDef | ResolvedMcpServerDef> = {};
   for (const [name, server] of Object.entries(value)) {
     if (isMcpServerDef(server)) {
-      servers[name] = server;
+      const canonical: Record<string, unknown> = {};
+      if (typeof server.command === 'string') canonical.command = server.command;
+      if (typeof server.url === 'string') canonical.url = server.url;
+      if (Array.isArray(server.args)) canonical.args = [...server.args];
+      if (isRecord(server.env)) canonical.env = { ...server.env };
+      servers[name] = canonical as McpServerDef | ResolvedMcpServerDef;
     }
   }
   return servers;
