@@ -332,8 +332,9 @@ export async function resolveEffectiveMcpServersEnv(
   home = regletHome(),
   env: NodeJS.ProcessEnv = process.env,
   secretStore: SecretStore = systemSecretStore(),
+  options: { lenient?: boolean } = {},
 ): Promise<Record<string, ResolvedMcpServerDef>> {
-  return resolveEffectiveMcpServerSelection(provider, home, env, secretStore);
+  return resolveEffectiveMcpServerSelection(provider, home, env, secretStore, undefined, options);
 }
 
 export async function resolveSelectedEffectiveMcpServersEnv(
@@ -342,8 +343,9 @@ export async function resolveSelectedEffectiveMcpServersEnv(
   home = regletHome(),
   env: NodeJS.ProcessEnv = process.env,
   secretStore: SecretStore = systemSecretStore(),
+  options: { lenient?: boolean } = {},
 ): Promise<Record<string, ResolvedMcpServerDef>> {
-  return resolveEffectiveMcpServerSelection(provider, home, env, secretStore, new Set(displayNames));
+  return resolveEffectiveMcpServerSelection(provider, home, env, secretStore, new Set(displayNames), options);
 }
 
 async function resolveEffectiveMcpServerSelection(
@@ -352,6 +354,7 @@ async function resolveEffectiveMcpServerSelection(
   env: NodeJS.ProcessEnv,
   secretStore: SecretStore,
   displayNames?: ReadonlySet<string>,
+  options: { lenient?: boolean } = {},
 ): Promise<Record<string, ResolvedMcpServerDef>> {
   const effective = (await listEffectiveMcpServers(provider, home))
     .filter((entry) => displayNames === undefined || displayNames.has(entry.displayName));
@@ -388,7 +391,7 @@ async function resolveEffectiveMcpServerSelection(
   } finally {
     state.close();
   }
-  return resolveMcpServersSecrets(servers, env, secretStore);
+  return resolveMcpServersSecrets(servers, env, secretStore, options);
 }
 
 export async function loadMcpDefinitions(home = regletHome()): Promise<{
@@ -581,14 +584,27 @@ export async function resolveMcpServersSecrets(
   servers: Record<string, McpServerDef>,
   env: NodeJS.ProcessEnv = process.env,
   secretStore: SecretStore = systemSecretStore(),
+  options: { lenient?: boolean } = {},
 ): Promise<Record<string, ResolvedMcpServerDef>> {
   const resolved: Record<string, ResolvedMcpServerDef> = {};
   for (const [name, server] of Object.entries(servers)) {
     const validation = validateMcpServer(name, server);
     if (!validation.ok) {
+      if (options.lenient) {
+        console.warn(`Warning: Skipping invalid MCP server ${name}: ${validation.issues.join('; ')}`);
+        continue;
+      }
       throw new Error(`Invalid MCP server ${name}: ${validation.issues.join('; ')}`);
     }
-    resolved[name] = await resolveMcpServerSecrets(name, server, env, secretStore);
+    try {
+      resolved[name] = await resolveMcpServerSecrets(name, server, env, secretStore);
+    } catch (err) {
+      if (options.lenient) {
+        console.warn(`Warning: Skipping MCP server ${name} (${err instanceof Error ? err.message : String(err)})`);
+        continue;
+      }
+      throw err;
+    }
   }
   return resolved;
 }
@@ -767,6 +783,12 @@ async function resolveMcpServerSecrets(
     let value: string | undefined;
     if (reference.source === 'process-env') {
       value = env[reference.name];
+      if (value === undefined) {
+        value = await secretStore.resolve(reference.name);
+        if (value === undefined && (reference.name === 'GITHUB_PERSONAL_ACCESS_TOKEN' || reference.name === 'GITHUB_TOKEN')) {
+          value = (await secretStore.resolve('oauth-github')) ?? (await secretStore.resolve('github-token'));
+        }
+      }
     } else if (reference.source === 'oauth') {
       const provider = reference.provider.toLowerCase();
       value = (await secretStore.resolve(`oauth-${provider}`)) ?? (await secretStore.resolve(`${provider}-token`));

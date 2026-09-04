@@ -9,8 +9,8 @@ Protocol v2 end-to-end encrypted sync (`v2-crypto`, `v2-engine`, SAS comparison,
 ### Active Milestones Matrix
 
 - **Milestone 0: Sync Hardening (`v0.5.10` - `v0.5.11`)** — Shipped ✅ (2MB payloads, decoupled pairing, server-aware setup, MCP boolean normalization)
-- **Milestone 1: Conflict Resolution CLI (`v0.5.12`)** — Shipped 🚀 (Actionable conflict output, `reglet sync conflicts` interactive wizard, `reglet sync resolve` CLI command, path normalization)
-- **Milestone 2: Elegant MCP & Vaulted Secrets (`v0.5.13`)** — Next Sprint ⏳ (Vaulted E2EE credentials, interactive missing-token prompts, fail-soft MCP projection)
+- **Milestone 1: Conflict Resolution CLI (`v0.5.12`)** — Shipped ✅ (Actionable conflict output, `reglet sync conflicts` interactive wizard, `reglet sync resolve` CLI command, path normalization)
+- **Milestone 2: Table Alignment & Fail-Soft MCP (`v0.5.13`)** — Shipped 🚀 (Aligned `reglet list` tabular output, secretStore/keychain MCP fallback, fail-soft apply)
 - **Milestone 3: Ephemeral Local Web GUI (`v0.6.0`)** — In Design 📐 (`reglet sync conflicts --web` local 127.0.0.1 browser diff & visual merge)
 - **Milestone 4: AI Smart Merging (`v0.6.1`)** — Planned 💡 (Semantic LLM reconciliation of Markdown instructions and JSON configurations)
 - **Milestone 5: Server Resiliency & Operations (`v0.7.0`)** — Planned 💡 (Coolify zero-downtime persistence, automated SQLite snapshots, multi-vault support)

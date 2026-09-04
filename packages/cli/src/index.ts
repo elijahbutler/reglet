@@ -174,7 +174,7 @@ const rulesSteeringPromptLimit = 4_000;
 type ContentId = (typeof contentIds)[number];
 
 const program = new Command();
-const version = process.env.REGLET_VERSION ?? '0.5.12';
+const version = process.env.REGLET_VERSION ?? '0.5.13';
 const managerApplication = new RegletApplication();
 
 program
@@ -473,8 +473,24 @@ program
     await openSystemPath(path.resolve(targetPath));
   });
 
+function printAlignedTable(rows: readonly (readonly string[])[]): void {
+  if (rows.length === 0) return;
+  const colWidths: number[] = [];
+  for (const row of rows) {
+    for (let i = 0; i < row.length; i++) {
+      colWidths[i] = Math.max(colWidths[i] ?? 0, (row[i] ?? '').length);
+    }
+  }
+  for (const row of rows) {
+    const line = row
+      .map((cell, i) => (i === row.length - 1 ? cell : cell.padEnd(colWidths[i] ?? 0)))
+      .join('  ');
+    console.log(line);
+  }
+}
+
 program
-  .command('list', { hidden: true })
+  .command('list')
   .description('List canonical library artifacts')
   .argument('[kind]', 'instructions, skills, or mcp', parseLibraryKind)
   .option('--archived', 'list archived artifacts instead of active artifacts')
@@ -485,8 +501,23 @@ program
       ...(kind === undefined ? {} : { kind }),
       ...(options.all === true ? {} : { lifecycle: options.archived === true ? 'archived' : 'active' }),
     });
-    if (options.json === true) printJson(artifacts);
-    else for (const artifact of asArtifactList(artifacts)) console.log(`${artifact.id}\t${artifact.kind}\t${artifact.lifecycle}\t${artifact.slug}\t${artifact.title}`);
+    if (options.json === true) {
+      printJson(artifacts);
+    } else {
+      const list = asArtifactList(artifacts);
+      if (list.length === 0) {
+        console.log('No canonical artifacts found.');
+        return;
+      }
+      const rows = list.map((artifact) => [
+        artifact.id,
+        artifact.kind,
+        artifact.lifecycle,
+        artifact.slug,
+        artifact.title,
+      ]);
+      printAlignedTable(rows);
+    }
   });
 
 program

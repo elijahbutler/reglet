@@ -104,7 +104,9 @@ async function applyAllWithHome(opts: ApplyAllOptions, home: string): Promise<Ap
           continue;
         }
 
-        const mcpResult = adapter.applyMcp(await resolveEffectiveMcpServersEnv(adapter.id, home), {
+        const mcpResult = adapter.applyMcp(
+          await resolveEffectiveMcpServersEnv(adapter.id, home, process.env, undefined, { lenient: true }),
+          {
           dryRun,
           home,
           providerHome: opts.providerHome,

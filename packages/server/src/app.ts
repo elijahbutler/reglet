@@ -86,7 +86,7 @@ interface RenameDeviceBody {
 }
 
 const appDatabases = new WeakMap<Hono, Database>();
-const serviceVersion = '0.5.12';
+const serviceVersion = '0.5.13';
 const protocolVersion = 1;
 const defaultBodyLimitBytes = 5 * 1024 * 1024;
 const changesPageSize = 100;
