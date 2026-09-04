@@ -650,6 +650,19 @@ function LibraryWorkbench({
   const [editorView, setEditorView] = useState<'edit' | 'diff'>('edit');
   const [mobilePane, setMobilePane] = useState<'collection' | 'editor' | 'details'>('collection');
   const list = useRef<HTMLDivElement>(null);
+
+  const PAGE_SIZE = 50;
+  const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
+
+  useEffect(() => {
+    setVisibleLimit(PAGE_SIZE);
+  }, [filter, scopeFilter, kindFilter, query]);
+
+  const selectedIndex = selected ? artifacts.findIndex((a) => a.metadata.id === selected.metadata.id) : -1;
+  const effectiveLimit = selectedIndex >= visibleLimit ? selectedIndex + 1 : visibleLimit;
+  const visibleArtifacts = artifacts.slice(0, effectiveLimit);
+  const hasMore = artifacts.length > effectiveLimit;
+
   return (
     <>
       <nav className="rg-library-mobile-nav" aria-label="Library panels">
@@ -688,7 +701,7 @@ function LibraryWorkbench({
             <CollectionMessage icon={filter === 'archived' ? <Archive size={16} /> : <FolderSearch size={16} />} title="No artifacts in this view" />
           ) : null}
           <div className="rg-virtual-list">
-            {artifacts.map((artifact) => {
+            {visibleArtifacts.map((artifact) => {
               return (
                 <div className="rg-virtual-row" key={artifact.metadata.id}>
                   <Row
@@ -702,6 +715,15 @@ function LibraryWorkbench({
                 </div>
               );
             })}
+            {hasMore ? (
+              <button
+                type="button"
+                className="rg-load-more"
+                onClick={() => setVisibleLimit((curr) => curr + PAGE_SIZE)}
+              >
+                Show more ({artifacts.length - effectiveLimit} remaining)
+              </button>
+            ) : null}
           </div>
         </div>
         <Button className="rg-new-artifact" tone="quiet" icon={<Plus size={15} />} onClick={onNew}>New artifact</Button>

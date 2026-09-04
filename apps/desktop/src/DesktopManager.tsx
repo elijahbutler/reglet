@@ -100,7 +100,7 @@ export function DesktopManager() {
 
             {[
               { label: 'Homebrew (macOS / Linux)', cmd: 'brew install elijahbutler/tap/reglet' },
-              { label: 'Standalone Script', cmd: 'curl -fsSL https://reglet.cloudview.cc/install.sh | bash' },
+              { label: 'Standalone Installer', cmd: 'curl -fsSL https://reglet.cloudview.cc/install.sh -o install.sh && bash install.sh' },
               { label: 'Bun / Node', cmd: 'bun install -g reglet' },
             ].map((option, idx) => (
               <div

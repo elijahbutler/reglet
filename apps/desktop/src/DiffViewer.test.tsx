@@ -47,4 +47,21 @@ describe('DiffViewer', () => {
     render(<DiffViewer diff="" path="~/.cursorrules" note="No changes detected." />);
     expect(screen.getByText('No changes detected.')).toBeInTheDocument();
   });
+
+  test('correctly preserves added or removed content lines starting with multiple plus or minus characters', () => {
+    const diffWithIncrements = `--- a/counter.ts
++++ b/counter.ts
+@@ -1,2 +1,2 @@
+---oldCounter;
+++++newCounter;
+`;
+    const { lines, splitRows } = parseUnifiedDiff(diffWithIncrements);
+    const removedLine = lines.find((l) => l.type === 'removed');
+    const addedLine = lines.find((l) => l.type === 'added');
+
+    expect(removedLine?.text).toBe('---oldCounter;');
+    expect(addedLine?.text).toBe('++++newCounter;');
+    expect(splitRows.some((r) => r.left?.text === '--oldCounter;')).toBe(true);
+    expect(splitRows.some((r) => r.right?.text === '+++newCounter;')).toBe(true);
+  });
 });

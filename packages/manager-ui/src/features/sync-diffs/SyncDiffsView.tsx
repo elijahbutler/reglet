@@ -96,8 +96,8 @@ export function SyncDiffsView({
         );
         const keys = new Set(actionable.map((u) => u.key));
         setSelectedKeys(keys);
-        if (actionable.length > 0 && !selectedUnitKey) {
-          setSelectedUnitKey(actionable[0]?.key ?? null);
+        if (actionable.length > 0) {
+          setSelectedUnitKey((current) => current ?? actionable[0]?.key ?? null);
         }
       }
     } catch (err: unknown) {
@@ -105,7 +105,7 @@ export function SyncDiffsView({
     } finally {
       setLoading(false);
     }
-  }, [client, requestUnits, selectedUnitKey]);
+  }, [client, requestUnits]);
 
   useEffect(() => {
     void loadReview();

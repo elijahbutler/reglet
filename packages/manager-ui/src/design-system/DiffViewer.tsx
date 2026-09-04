@@ -56,7 +56,7 @@ export function parseUnifiedDiff(diff: string): { lines: ParsedLine[]; splitRows
   };
 
   for (const raw of rawLines) {
-    if (raw.startsWith('+++') || raw.startsWith('---')) {
+    if (raw.startsWith('+++ ') || raw.startsWith('--- ') || raw.startsWith('diff --git ') || raw.startsWith('index ')) {
       lines.push({ type: 'header', text: raw });
       continue;
     }

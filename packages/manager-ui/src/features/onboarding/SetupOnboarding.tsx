@@ -36,7 +36,8 @@ export function SetupOnboarding({ client, snapshot, onRefresh, onComplete, onErr
   const [rootPath, setRootPath] = useState('');
   const [scanProject, setScanProject] = useState(true);
   const [busy, setBusy] = useState(false);
-  const dialog = useDialogFocus<HTMLElement>(true, canCancel ? onCancel : undefined);
+  const isCancelable = Boolean(canCancel && onCancel);
+  const dialog = useDialogFocus<HTMLElement>(true, isCancelable ? onCancel : undefined);
   const currentIndex = steps.findIndex((candidate) => candidate.id === step);
 
   const complete = async (includeSelections: boolean) => {
@@ -72,7 +73,7 @@ export function SetupOnboarding({ client, snapshot, onRefresh, onComplete, onErr
           {step === 'defaults' ? <DefaultsStep providers={snapshot.providers} content={globalContent} targets={targets} onContent={setGlobalContent} onTargets={setTargets} /> : null}
           {step === 'sync' ? <SyncStep client={client} snapshot={snapshot} onRefresh={onRefresh} onError={onError} /> : null}
         </div>
-        <footer><button type="button" className="rg-setup-skip" disabled={busy} onClick={canCancel && onCancel ? onCancel : () => void complete(false)}>{canCancel ? 'Close walkthrough' : 'Skip guided setup'}</button><div>{currentIndex > 0 ? <Button tone="secondary" disabled={busy} onClick={() => setStep(steps[currentIndex - 1]?.id ?? 'machine')}>Back</Button> : null}{currentIndex < steps.length - 1 ? <Button tone="primary" disabled={step === 'defaults' && globalContent.trim().length === 0} onClick={() => setStep(steps[currentIndex + 1]?.id ?? 'sync')}>Continue</Button> : <Button tone="primary" disabled={busy} onClick={() => void complete(true)}>{busy ? 'Finishing…' : 'Finish setup'}</Button>}</div></footer>
+        <footer><button type="button" className="rg-setup-skip" disabled={busy} onClick={isCancelable ? onCancel : () => void complete(false)}>{isCancelable ? 'Close walkthrough' : 'Skip guided setup'}</button><div>{currentIndex > 0 ? <Button tone="secondary" disabled={busy} onClick={() => setStep(steps[currentIndex - 1]?.id ?? 'machine')}>Back</Button> : null}{currentIndex < steps.length - 1 ? <Button tone="primary" disabled={step === 'defaults' && globalContent.trim().length === 0} onClick={() => setStep(steps[currentIndex + 1]?.id ?? 'sync')}>Continue</Button> : <Button tone="primary" disabled={busy} onClick={() => void complete(true)}>{busy ? 'Finishing…' : 'Finish setup'}</Button>}</div></footer>
       </div>
     </section>
   </div>;
