@@ -1,6 +1,6 @@
 {
   "name": "reglet",
-  "version": "0.5.16",
+  "version": "0.5.17",
   "type": "module",
   "bin": { "reglet": "src/index.ts" },
   "files": [

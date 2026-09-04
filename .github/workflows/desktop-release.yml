@@ -223,38 +223,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if release_draft="$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
-            echo "Found existing release $GITHUB_REF_NAME (draft=$release_draft)."
-            if [ "$release_draft" != "true" ]; then
-              echo "Release $GITHUB_REF_NAME is already published! Skipping upload to prevent overwriting public release assets."
-              exit 0
-            fi
-            echo "Reusing draft release $GITHUB_REF_NAME."
-            gh release upload "$GITHUB_REF_NAME" --clobber \
-              dist/reglet-darwin-arm64 \
-              dist/reglet-darwin-x64 \
-              dist/reglet-windows-x64.exe \
-              dist/reglet-linux-arm64 \
-              dist/reglet-linux-x64 \
-              dist/desktop/* \
-              dist/SHA256SUMS.txt \
-              dist/provenance.txt
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; uploading artifacts with --clobber."
           else
+            echo "Creating draft release $GITHUB_REF_NAME."
             gh release create "$GITHUB_REF_NAME" \
               --draft \
               --title "$GITHUB_REF_NAME" \
               --generate-notes \
               --notes "Includes standalone CLI binaries for macOS, Windows, and Linux; desktop artifacts for all three platforms; and cryptographically signed in-app updater artifacts. macOS artifacts are not Developer ID signed and Windows may require SmartScreen approval."
-            gh release upload "$GITHUB_REF_NAME" \
-              dist/reglet-darwin-arm64 \
-              dist/reglet-darwin-x64 \
-              dist/reglet-windows-x64.exe \
-              dist/reglet-linux-arm64 \
-              dist/reglet-linux-x64 \
-              dist/desktop/* \
-              dist/SHA256SUMS.txt \
-              dist/provenance.txt
           fi
+          gh release upload "$GITHUB_REF_NAME" --clobber \
+            dist/reglet-darwin-arm64 \
+            dist/reglet-darwin-x64 \
+            dist/reglet-windows-x64.exe \
+            dist/reglet-linux-arm64 \
+            dist/reglet-linux-x64 \
+            dist/desktop/* \
+            dist/SHA256SUMS.txt \
+            dist/provenance.txt
       - name: Update Homebrew tap
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

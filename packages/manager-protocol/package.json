@@ -1,6 +1,6 @@
 {
   "name": "@reglet/manager-protocol",
-  "version": "0.5.16",
+  "version": "0.5.17",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
