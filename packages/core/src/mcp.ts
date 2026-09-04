@@ -784,7 +784,7 @@ async function resolveMcpServerSecrets(
     if (reference.source === 'process-env') {
       value = env[reference.name];
       if (value === undefined) {
-        value = await secretStore.resolve(reference.name);
+        value = (await secretStore.resolve(reference.name)) ?? (await secretStore.resolve(reference.name.toLowerCase()));
         if (value === undefined && (reference.name === 'GITHUB_PERSONAL_ACCESS_TOKEN' || reference.name === 'GITHUB_TOKEN')) {
           value = (await secretStore.resolve('oauth-github')) ?? (await secretStore.resolve('github-token'));
         }
@@ -793,7 +793,7 @@ async function resolveMcpServerSecrets(
       const provider = reference.provider.toLowerCase();
       value = (await secretStore.resolve(`oauth-${provider}`)) ?? (await secretStore.resolve(`${provider}-token`));
     } else {
-      value = await secretStore.resolve(reference.id);
+      value = (await secretStore.resolve(reference.id)) ?? (await secretStore.resolve(reference.id.toLowerCase())) ?? env[reference.id];
     }
     if (value === undefined) {
       if (reference.required !== false) {
@@ -951,3 +951,50 @@ function normalizeScopeArgs(scopeOrHome: McpScope | string, maybeHome?: string):
   if (typeof scopeOrHome === 'string') return { scope: sharedMcpScope(), home: scopeOrHome };
   return { scope: scopeOrHome, home: maybeHome ?? regletHome() };
 }
+
+export interface MissingMcpSecret {
+  serverName: string;
+  envKey: string;
+  secretId: string;
+  source: 'process-env' | 'oauth' | 'keychain';
+}
+
+export async function findMissingMcpSecrets(
+  servers: Record<string, McpServerDef>,
+  env: NodeJS.ProcessEnv = process.env,
+  secretStore: SecretStore = systemSecretStore(),
+): Promise<MissingMcpSecret[]> {
+  const missing: MissingMcpSecret[] = [];
+  for (const [serverName, server] of Object.entries(servers)) {
+    if (server.env === undefined) continue;
+    for (const [key, reference] of Object.entries(server.env)) {
+      if (reference.required === false) continue;
+      let value: string | undefined;
+      if (reference.source === 'process-env') {
+        value = env[reference.name];
+        if (value === undefined) {
+          value = (await secretStore.resolve(reference.name)) ?? (await secretStore.resolve(reference.name.toLowerCase()));
+          if (value === undefined && (reference.name === 'GITHUB_PERSONAL_ACCESS_TOKEN' || reference.name === 'GITHUB_TOKEN')) {
+            value = (await secretStore.resolve('oauth-github')) ?? (await secretStore.resolve('github-token'));
+          }
+        }
+        if (value === undefined) {
+          missing.push({ serverName, envKey: key, secretId: reference.name, source: 'process-env' });
+        }
+      } else if (reference.source === 'oauth') {
+        const provider = reference.provider.toLowerCase();
+        value = (await secretStore.resolve(`oauth-${provider}`)) ?? (await secretStore.resolve(`${provider}-token`));
+        if (value === undefined) {
+          missing.push({ serverName, envKey: key, secretId: reference.provider, source: 'oauth' });
+        }
+      } else {
+        value = (await secretStore.resolve(reference.id)) ?? (await secretStore.resolve(reference.id.toLowerCase())) ?? env[reference.id];
+        if (value === undefined) {
+          missing.push({ serverName, envKey: key, secretId: reference.id, source: 'keychain' });
+        }
+      }
+    }
+  }
+  return missing;
+}
+

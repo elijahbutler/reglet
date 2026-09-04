@@ -165,6 +165,15 @@ import {
   runPostConnectProviderSetup,
 } from './post-connect.js';
 import { runUpdate } from './update.js';
+import { printAlignedTable } from './table.js';
+import {
+  handleSecretDelete,
+  handleSecretList,
+  handleSecretSet,
+  handleSecretStatus,
+  promptMissingMcpSecrets,
+} from './secret.js';
+
 
 const providerIds = ['claude', 'codex', 'cursor', 'gemini', 'windsurf', 'opencode'] as const;
 const contentIds = ['rules', 'skills', 'mcp'] as const;
@@ -174,7 +183,7 @@ const rulesSteeringPromptLimit = 4_000;
 type ContentId = (typeof contentIds)[number];
 
 const program = new Command();
-const version = process.env.REGLET_VERSION ?? '0.5.13';
+const version = process.env.REGLET_VERSION ?? '0.5.14';
 const managerApplication = new RegletApplication();
 
 program
@@ -378,6 +387,9 @@ program
   .option('-n, --dry-run', 'report planned writes without changing files')
   .option('--reviewed-replacement', 'confirm replacement of detected provider drift')
   .action(async (options: { provider?: ProviderId; content?: ApplyContent; dryRun?: boolean; reviewedReplacement?: boolean }) => {
+    if (options.dryRun !== true && process.stdin.isTTY && (options.content === undefined || options.content === 'mcp')) {
+      await promptMissingMcpSecrets();
+    }
     const report = await applyAll({
       providers: options.provider === undefined ? undefined : [options.provider],
       contents: options.content === undefined ? undefined : [options.content],
@@ -473,21 +485,15 @@ program
     await openSystemPath(path.resolve(targetPath));
   });
 
-function printAlignedTable(rows: readonly (readonly string[])[]): void {
-  if (rows.length === 0) return;
-  const colWidths: number[] = [];
-  for (const row of rows) {
-    for (let i = 0; i < row.length; i++) {
-      colWidths[i] = Math.max(colWidths[i] ?? 0, (row[i] ?? '').length);
-    }
-  }
-  for (const row of rows) {
-    const line = row
-      .map((cell, i) => (i === row.length - 1 ? cell : cell.padEnd(colWidths[i] ?? 0)))
-      .join('  ');
-    console.log(line);
-  }
-}
+program
+  .command('ui')
+  .description('Open interactive local web GUI (visual conflict resolver)')
+  .option('--port <port>', 'bind port', parsePort)
+  .action(async (options: { port?: number }) => {
+    const { runConflictWebGui } = await import('./conflict-web.js');
+    await runConflictWebGui({ port: options.port });
+  });
+
 
 program
   .command('list')
@@ -716,35 +722,56 @@ program
     printApplicationResult(result, options.json, 'promoted');
   });
 
-const secret = program.command('secret', { hidden: true }).description('Bind local-only secret references');
+const secret = program.command('secret').description('Manage encrypted vault secrets and keychain bindings');
+
 secret
   .command('set')
-  .argument('<id>')
-  .requiredOption('--stdin', 'read the secret value from stdin')
-  .option('--json')
-  .action(async (id: string, options: { stdin: boolean; json?: boolean }) => {
-    const value = (await Bun.stdin.text()).replace(/[\r\n]+$/, '');
-    if (value.length === 0) throw new InvalidArgumentError('Secret value is required on stdin.');
-    const result = await applicationData('secret.set', { id, value });
-    if (options.json === true) printJson(result);
-    else console.log(`secret\tbound\t${id}`);
+  .description('Set a secret value in the encrypted vault and OS keychain')
+  .argument('<id>', 'secret identifier (e.g. GITHUB_TOKEN, ANTHROPIC_API_KEY)')
+  .argument('[value]', 'secret value (optional; prompts securely if omitted in TTY)')
+  .option('--stdin', 'read the secret value from stdin')
+  .option('--local-only', 'save only in local OS credential store without syncing to encrypted vault')
+  .option('--json', 'print machine-readable JSON result')
+  .action(async (id: string, value: string | undefined, options: { stdin?: boolean; localOnly?: boolean; json?: boolean }) => {
+    await handleSecretSet(id, value, options);
   });
+
+secret
+  .command('list')
+  .description('List stored secrets, binding status, and MCP server references')
+  .option('--json', 'print machine-readable JSON result')
+  .action(async (options: { json?: boolean }) => {
+    await handleSecretList(options);
+  });
+
 secret
   .command('delete')
-  .argument('<id>')
-  .requiredOption('-y, --yes', 'confirm secret deletion')
-  .option('--json')
-  .action(async (id: string, options: { json?: boolean }) => {
-    printApplicationResult(await applicationData('secret.delete', { id }), options.json, 'secret-deleted');
+  .description('Delete a secret from the vault and OS keychain')
+  .argument('<id>', 'secret identifier')
+  .option('-y, --yes', 'confirm secret deletion without interactive prompt')
+  .option('--json', 'print machine-readable JSON result')
+  .action(async (id: string, options: { yes?: boolean; json?: boolean }) => {
+    await handleSecretDelete(id, options);
   });
+
 secret
   .command('status')
-  .argument('<id>')
-  .option('--json')
-  .action(async (id: string, options: { json?: boolean }) => {
-    const result = await applicationData('secret.status', { id });
-    if (options.json === true) printJson(result);
-    else console.log(`secret\t${booleanField(result, 'bound') ? 'bound' : 'unbound'}\t${id}`);
+  .description('Inspect secret binding status and storage location')
+  .argument('<id>', 'secret identifier')
+  .option('--reveal', 'reveal the secret value (requires confirmation in TTY)')
+  .option('--json', 'print machine-readable JSON result')
+  .action(async (id: string, options: { reveal?: boolean; json?: boolean }) => {
+    await handleSecretStatus(id, options);
+  });
+
+secret
+  .command('get')
+  .description('Alias for secret status')
+  .argument('<id>', 'secret identifier')
+  .option('--reveal', 'reveal the secret value (requires confirmation in TTY)')
+  .option('--json', 'print machine-readable JSON result')
+  .action(async (id: string, options: { reveal?: boolean; json?: boolean }) => {
+    await handleSecretStatus(id, options);
   });
 
 const remote = program.command('remote', { hidden: true }).description('Manage optional remote Manager access');

@@ -63,8 +63,9 @@ export function registerSyncV2PreviewCommands(
   program
     .command('conflicts')
     .description('List and interactively resolve sync conflicts')
+    .option('--web', 'open local interactive web GUI for visual side-by-side diff resolution')
     .option('--json', 'print machine-readable list of conflicts')
-    .action(async (options: { json?: boolean }) => {
+    .action(async (options: { web?: boolean; json?: boolean }) => {
       await handleConflictsCommand(options);
     });
 
@@ -104,8 +105,9 @@ export function registerSyncV2PreviewCommands(
   sync
     .command('conflicts')
     .description('List and interactively resolve sync conflicts')
+    .option('--web', 'open local interactive web GUI for visual side-by-side diff resolution')
     .option('--json', 'print machine-readable list of conflicts')
-    .action(async (options: { json?: boolean }) => {
+    .action(async (options: { web?: boolean; json?: boolean }) => {
       await handleConflictsCommand(options);
     });
 
@@ -596,7 +598,9 @@ function printSyncConflicts(conflicts: string[]): void {
   console.log('  Local files were preserved in ~/.reglet/<file>.');
   console.log('  Vault copies were saved as ~/.reglet/<file>.conflict-<device>.<ext>.\n');
   console.log('To resolve conflicts:');
-  console.log('  • Interactive resolution:');
+  console.log('  • Visual side-by-side web GUI:');
+  console.log('      reglet sync conflicts --web');
+  console.log('  • Interactive CLI wizard:');
   console.log('      reglet sync conflicts');
   console.log('  • Keep your local version ("ours"):');
   console.log('      reglet sync resolve <file> --ours');
@@ -607,7 +611,12 @@ function printSyncConflicts(conflicts: string[]): void {
   console.log('  After resolving, run "reglet sync" to push your changes.\n');
 }
 
-async function handleConflictsCommand(options: { json?: boolean }): Promise<void> {
+async function handleConflictsCommand(options: { json?: boolean; web?: boolean }): Promise<void> {
+  if (options.web === true) {
+    const { runConflictWebGui } = await import('./conflict-web.js');
+    await runConflictWebGui();
+    return;
+  }
   const conflicts = await listSyncV2Conflicts();
   if (options.json === true) {
     console.log(JSON.stringify({ version: 2, conflicts }, null, 2));

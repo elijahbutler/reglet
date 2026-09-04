@@ -57,4 +57,43 @@ describe('MCP secret bindings', () => {
       },
     }, {}, store)).toEqual({ optional: { command: 'node' } });
   });
+
+  test('finds missing required secrets while ignoring optional secrets', async () => {
+    const store = new MemorySecretStore();
+    await store.set('github-token', 'ghp_secret123');
+
+    const missing = await {
+      find: (await import('../src/mcp.js')).findMissingMcpSecrets,
+    }.find({
+      srv1: {
+        command: 'npx',
+        env: {
+          GITHUB_TOKEN: { source: 'process-env', name: 'GITHUB_TOKEN' },
+          API_KEY: { source: 'keychain', id: 'missing-api-key' },
+          OPTIONAL_VAR: { source: 'process-env', name: 'NOT_THERE', required: false },
+        },
+      },
+    }, {}, store);
+
+    expect(missing).toEqual([
+      { serverName: 'srv1', envKey: 'API_KEY', secretId: 'missing-api-key', source: 'keychain' },
+    ]);
+  });
+
+  test('resolves secret from store when process-env key is saved in keychain', async () => {
+    const store = new MemorySecretStore();
+    await store.set('MY_API_KEY', 'key-value-1234');
+
+    const resolved = await resolveMcpServersSecrets({
+      custom: {
+        command: 'run',
+        env: {
+          KEY: { source: 'process-env', name: 'MY_API_KEY' },
+        },
+      },
+    }, {}, store);
+
+    expect(resolved.custom?.env).toEqual({ KEY: 'key-value-1234' });
+  });
 });
+

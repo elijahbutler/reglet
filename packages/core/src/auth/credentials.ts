@@ -80,6 +80,8 @@ export async function deleteCredential(
   if (existed) {
     await rm(target, { force: true });
   }
+  await secretStore.delete(provider).catch(() => {});
+  await secretStore.delete(provider.toLowerCase()).catch(() => {});
   await secretStore.delete(`oauth-${provider.toLowerCase()}`).catch(() => {});
   await secretStore.delete(`${provider.toLowerCase()}-token`).catch(() => {});
   return existed;
@@ -113,6 +115,11 @@ export async function syncCredentialToKeyring(
   secretStore: SecretStore = systemSecretStore(),
 ): Promise<void> {
   const normalized = credential.provider.toLowerCase();
-  await secretStore.set(`oauth-${normalized}`, credential.token);
-  await secretStore.set(`${normalized}-token`, credential.token);
+  await secretStore.set(credential.provider, credential.token).catch(() => {});
+  if (normalized !== credential.provider) {
+    await secretStore.set(normalized, credential.token).catch(() => {});
+  }
+  await secretStore.set(`oauth-${normalized}`, credential.token).catch(() => {});
+  await secretStore.set(`${normalized}-token`, credential.token).catch(() => {});
 }
+

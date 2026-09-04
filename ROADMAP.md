@@ -10,9 +10,9 @@ Protocol v2 end-to-end encrypted sync (`v2-crypto`, `v2-engine`, SAS comparison,
 
 - **Milestone 0: Sync Hardening (`v0.5.10` - `v0.5.11`)** — Shipped ✅ (2MB payloads, decoupled pairing, server-aware setup, MCP boolean normalization)
 - **Milestone 1: Conflict Resolution CLI (`v0.5.12`)** — Shipped ✅ (Actionable conflict output, `reglet sync conflicts` interactive wizard, `reglet sync resolve` CLI command, path normalization)
-- **Milestone 2: Table Alignment & Fail-Soft MCP (`v0.5.13`)** — Shipped 🚀 (Aligned `reglet list` tabular output, secretStore/keychain MCP fallback, fail-soft apply)
-- **Milestone 3: Ephemeral Local Web GUI (`v0.6.0`)** — In Design 📐 (`reglet sync conflicts --web` local 127.0.0.1 browser diff & visual merge)
-- **Milestone 4: AI Smart Merging (`v0.6.1`)** — Planned 💡 (Semantic LLM reconciliation of Markdown instructions and JSON configurations)
+- **Milestone 2: Vaulted Secrets Management & MCP Experience (`v0.5.13` - `v0.5.14`)** — Shipped ✅ (`reglet secret set/list/delete/status`, interactive in-flight prompts, automatic OS keychain + encrypted vault sync)
+- **Milestone 3: Ephemeral Local Web Conflict GUI (`v0.5.14`)** — Shipped 🚀 (`reglet sync conflicts --web`, `reglet ui`, zero-knowledge loopback browser diff & one-click resolution)
+- **Milestone 4: AI Smart Merging (`v0.6.0`)** — In Design 📐 (Semantic LLM reconciliation of Markdown instructions and JSON configurations)
 - **Milestone 5: Server Resiliency & Operations (`v0.7.0`)** — Planned 💡 (Coolify zero-downtime persistence, automated SQLite snapshots, multi-vault support)
 
 The target product is:
