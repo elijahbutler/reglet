@@ -15,11 +15,12 @@ import {
   RefreshCw,
   Search,
   Settings,
+  Sparkles,
   Trash2,
   Download,
   Cloud,
+  ExternalLink,
 } from 'lucide-react';
-import { useVirtualizer } from '@tanstack/react-virtual';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import type {
@@ -48,9 +49,11 @@ import { ReviewApplyWorkbench, type ReviewRequest } from '../features/review/Rev
 import { SettingsWorkbench, type SettingsSection } from '../features/settings/SettingsWorkbench.js';
 import { SetupOnboarding } from '../features/onboarding/SetupOnboarding.js';
 import { OverviewWorkbench } from '../features/overview/OverviewWorkbench.js';
+import { SyncDiffsView } from '../features/sync-diffs/SyncDiffsView.js';
 
 const destinations = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+  { id: 'diffs', label: 'Sync & Diffs', icon: FileDiff },
   { id: 'library', label: 'Library', icon: Library },
   { id: 'projects', label: 'Project Inbox', icon: Inbox },
   { id: 'providers', label: 'Providers', icon: Box },
@@ -107,12 +110,26 @@ export function ManagerApp({ client, hostActions, initialDestination = 'overview
   const [reviewRequest, setReviewRequest] = useState<ReviewRequest | null>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general');
+  const [forceOnboarding, setForceOnboarding] = useState(false);
+  const [showReturningNotice, setShowReturningNotice] = useState(() => {
+    if (typeof localStorage === 'undefined') return false;
+    return localStorage.getItem('reglet:notice:returning-acknowledged') !== 'true';
+  });
   const latestRefresh = useRef(0);
   const latestSnapshotRevision = useRef(-1);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const artifactSearchInput = useRef<HTMLInputElement>(null);
   const reviewReturnTarget = useRef<'top' | 'inspector' | 'overview' | 'providers'>('top');
   const commandModifier = primaryModifierLabel();
+
+  const dismissReturningNotice = () => {
+    setShowReturningNotice(false);
+    try {
+      localStorage.setItem('reglet:notice:returning-acknowledged', 'true');
+    } catch {
+      // ignore
+    }
+  };
 
   const refresh = useCallback(async () => {
     const request = latestRefresh.current + 1;
@@ -296,7 +313,8 @@ export function ManagerApp({ client, hostActions, initialDestination = 'overview
   };
 
   const blockingOnboardingOpen = snapshot?.library.migration.status === 'available' ||
-    (snapshot !== null && !snapshot.settings.setup.completed);
+    (snapshot !== null && !snapshot.settings.setup.completed) ||
+    forceOnboarding;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -337,6 +355,17 @@ export function ManagerApp({ client, hostActions, initialDestination = 'overview
       setBusy(false);
     }
   };
+
+  const openExternalArtifact = useCallback((artifactId: string) => {
+    void client.command('external.open', {
+      target: {
+        kind: 'canonical',
+        artifact: artifactId,
+      },
+    }).catch((openError: unknown) => {
+      setError(messageFrom(openError));
+    });
+  }, [client]);
 
   const initialSyncRequired = snapshot?.settings.sync.enabled === true && snapshot.settings.sync.lastCompletedAt === undefined;
   const runInitialSync = async () => {
@@ -381,6 +410,17 @@ export function ManagerApp({ client, hostActions, initialDestination = 'overview
 
       {initialSyncRequired ? <div className="rg-sync-notice" role="status"><Cloud size={15} aria-hidden="true" /><span><strong>Initial sync required</strong> Your encrypted server is connected, but this library has not been exchanged yet.</span><button type="button" disabled={busy} onClick={() => void runInitialSync()}>{busy ? 'Syncing…' : 'Sync now'}</button></div> : null}
 
+      {showReturningNotice && snapshot !== null && snapshot.settings.setup.completed && (snapshot.library.artifacts.length > 0 || snapshot.providers.some((p) => p.detected)) ? (
+        <aside className="rg-sync-notice bg-white/[0.02] border-b border-white/10" aria-label="Welcome notice">
+          <Sparkles size={15} className="text-amber-400 shrink-0" aria-hidden="true" />
+          <span><strong>Welcome back.</strong> We detected existing configuration on this machine. You can pick up where you left off, or review your settings with the guided walkthrough.</span>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={() => { dismissReturningNotice(); setForceOnboarding(true); }}>Review setup</button>
+            <button type="button" onClick={dismissReturningNotice}>Dismiss</button>
+          </div>
+        </aside>
+      ) : null}
+
       {reviewRequest === null ? <main className="rg-workbench">
         <Pane label="Primary navigation" className="rg-navigation" tone="raised">
           <nav aria-label="Manager destinations">
@@ -402,7 +442,19 @@ export function ManagerApp({ client, hostActions, initialDestination = 'overview
           onOpenLibrary={() => setDestination('library')}
           onOpenProviders={() => setDestination('providers')}
           onReview={openOverviewReview}
-        /> : destination === 'library' ? (
+        /> : destination === 'diffs' ? (
+          <SyncDiffsView
+            client={client}
+            snapshot={snapshot}
+            commandModifier={commandModifier}
+            onRefresh={refresh}
+            onOpenConflictResolver={() => {
+              setDestination('settings');
+              setSettingsSection('sync');
+            }}
+            onOpenSettings={() => setDestination('settings')}
+          />
+        ) : destination === 'library' ? (
           <LibraryWorkbench
             artifacts={artifacts}
             content={artifactContent}
@@ -431,11 +483,12 @@ export function ManagerApp({ client, hostActions, initialDestination = 'overview
             saveState={saveState}
             searchInputRef={artifactSearchInput}
             commandModifier={commandModifier}
+            onOpenExternal={openExternalArtifact}
           />
         ) : destination === 'projects' ? <ProjectInboxWorkbench client={client} snapshot={snapshot} onRefresh={refresh} onError={setError} />
           : destination === 'providers' ? <ProvidersWorkbench client={client} snapshot={snapshot} onError={setError} onRefresh={refresh} onReview={openProviderReview} />
             : destination === 'activity' ? <ActivityWorkbench client={client} snapshot={snapshot} onError={setError} onRefresh={refresh} />
-              : <SettingsWorkbench client={client} hostActions={hostActions} updateStatus={updateStatus} onUpdateStatus={setUpdateStatus} section={settingsSection} onSection={setSettingsSection} snapshot={snapshot} onRefresh={refresh} onError={setError} />}
+              : <SettingsWorkbench client={client} hostActions={hostActions} updateStatus={updateStatus} onUpdateStatus={setUpdateStatus} section={settingsSection} onSection={setSettingsSection} snapshot={snapshot} onRefresh={refresh} onError={setError} onRunSetup={() => setForceOnboarding(true)} />}
       </main> : <main className="rg-review-host"><ReviewApplyWorkbench
         key={reviewRequest.units.map((unit) => `${unit.provider}:${unit.content}`).join('|')}
         client={client}
@@ -456,6 +509,7 @@ export function ManagerApp({ client, hostActions, initialDestination = 'overview
         onRefresh={() => void refresh()}
         onArchive={selectedArtifact?.metadata.lifecycle === 'active' ? () => void mutateArtifact('library.archive', selectedArtifact.metadata.id) : undefined}
         onSettings={() => { setSettingsSection('general'); setDestination('settings'); }}
+        onRunSetup={() => setForceOnboarding(true)}
       />
 
       {snapshot?.library.migration.status === 'available' ? <MigrationOnboarding
@@ -465,11 +519,16 @@ export function ManagerApp({ client, hostActions, initialDestination = 'overview
         onError={setError}
       /> : null}
 
-      {snapshot !== null && snapshot.library.migration.status !== 'available' && !snapshot.settings.setup.completed ? <SetupOnboarding
+      {snapshot !== null && snapshot.library.migration.status !== 'available' && (!snapshot.settings.setup.completed || forceOnboarding) ? <SetupOnboarding
         client={client}
         snapshot={snapshot}
         onRefresh={refresh}
-        onComplete={(openProjectInbox) => setDestination(openProjectInbox ? 'projects' : 'library')}
+        canCancel={snapshot.settings.setup.completed || forceOnboarding}
+        onCancel={() => setForceOnboarding(false)}
+        onComplete={(openProjectInbox) => {
+          setForceOnboarding(false);
+          setDestination(openProjectInbox ? 'projects' : 'library');
+        }}
         onError={setError}
       /> : null}
 
@@ -555,6 +614,7 @@ interface LibraryWorkbenchProps {
   onReview: (provider: ManagerArtifactProjectionV3['provider']) => void;
   searchInputRef: RefObject<HTMLInputElement>;
   commandModifier: string;
+  onOpenExternal?: (id: string) => void;
 }
 
 function LibraryWorkbench({
@@ -585,16 +645,24 @@ function LibraryWorkbench({
   onReview,
   searchInputRef,
   commandModifier,
+  onOpenExternal,
 }: LibraryWorkbenchProps) {
   const [editorView, setEditorView] = useState<'edit' | 'diff'>('edit');
   const [mobilePane, setMobilePane] = useState<'collection' | 'editor' | 'details'>('collection');
   const list = useRef<HTMLDivElement>(null);
-  const virtual = useVirtualizer({
-    count: artifacts.length,
-    getScrollElement: () => list.current,
-    estimateSize: () => 38,
-    overscan: 8,
-  });
+
+  const PAGE_SIZE = 50;
+  const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
+
+  useEffect(() => {
+    setVisibleLimit(PAGE_SIZE);
+  }, [filter, scopeFilter, kindFilter, query]);
+
+  const selectedIndex = selected ? artifacts.findIndex((a) => a.metadata.id === selected.metadata.id) : -1;
+  const effectiveLimit = selectedIndex >= visibleLimit ? selectedIndex + 1 : visibleLimit;
+  const visibleArtifacts = artifacts.slice(0, effectiveLimit);
+  const hasMore = artifacts.length > effectiveLimit;
+
   return (
     <>
       <nav className="rg-library-mobile-nav" aria-label="Library panels">
@@ -632,17 +700,30 @@ function LibraryWorkbench({
           {!loading && artifacts.length === 0 ? (
             <CollectionMessage icon={filter === 'archived' ? <Archive size={16} /> : <FolderSearch size={16} />} title="No artifacts in this view" />
           ) : null}
-          <div className="rg-virtual-list" style={{ height: virtual.getTotalSize() }}>
-            {virtual.getVirtualItems().map((item) => {
-              const artifact = artifacts[item.index];
-              if (artifact === undefined) return null;
-              return <div className="rg-virtual-row" key={artifact.metadata.id} style={{ transform: `translateY(${item.start}px)`, height: item.size }}><Row
-                active={selected?.metadata.id === artifact.metadata.id}
-                leading={<FileText size={15} />}
-                trailing={<small>{scopeLabel(artifact)}</small>}
-                onClick={() => { onSelect(artifact.metadata.id); setMobilePane('editor'); }}
-              >{artifact.metadata.title}</Row></div>;
+          <div className="rg-virtual-list">
+            {visibleArtifacts.map((artifact) => {
+              return (
+                <div className="rg-virtual-row" key={artifact.metadata.id}>
+                  <Row
+                    active={selected?.metadata.id === artifact.metadata.id}
+                    leading={<FileText size={15} />}
+                    trailing={<small>{scopeLabel(artifact)}</small>}
+                    onClick={() => { onSelect(artifact.metadata.id); setMobilePane('editor'); }}
+                  >
+                    {artifact.metadata.title}
+                  </Row>
+                </div>
+              );
             })}
+            {hasMore ? (
+              <button
+                type="button"
+                className="rg-load-more"
+                onClick={() => setVisibleLimit((curr) => curr + PAGE_SIZE)}
+              >
+                Show more ({artifacts.length - effectiveLimit} remaining)
+              </button>
+            ) : null}
           </div>
         </div>
         <Button className="rg-new-artifact" tone="quiet" icon={<Plus size={15} />} onClick={onNew}>New artifact</Button>
@@ -654,6 +735,15 @@ function LibraryWorkbench({
             <button type="button" aria-pressed={editorView === 'edit'} onClick={() => setEditorView('edit')}>Edit</button>
             <button type="button" aria-pressed={editorView === 'diff'} onClick={() => setEditorView('diff')}>Changes</button>
           </div>
+          {selected !== null && onOpenExternal !== undefined ? (
+            <Button
+              tone="quiet"
+              icon={<ExternalLink size={14} />}
+              onClick={() => onOpenExternal(selected.metadata.id)}
+            >
+              Open in Editor
+            </Button>
+          ) : null}
         </PaneHeader>
         {selected === null ? (
           <div className="rg-empty-canvas"><FileText size={24} /><strong>Select an artifact</strong><span>Choose a library item to inspect its canonical content and projections.</span></div>
@@ -677,12 +767,32 @@ function LibraryWorkbench({
         )}
       </Pane>
 
-      <ProjectionInspector mobileActive={mobilePane === 'details'} artifact={selected} onDuplicate={onDuplicate} onArchive={onArchive} onRename={onRename} onDelete={onDelete} onHistory={onHistory} onReview={onReview} />
+      <ProjectionInspector
+        mobileActive={mobilePane === 'details'}
+        artifact={selected}
+        onDuplicate={onDuplicate}
+        onArchive={onArchive}
+        onRename={onRename}
+        onDelete={onDelete}
+        onHistory={onHistory}
+        onReview={onReview}
+        onOpenExternal={onOpenExternal}
+      />
     </>
   );
 }
 
-function ProjectionInspector({ artifact, mobileActive, onDuplicate, onArchive, onRename, onDelete, onHistory, onReview }: {
+function ProjectionInspector({
+  artifact,
+  mobileActive,
+  onDuplicate,
+  onArchive,
+  onRename,
+  onDelete,
+  onHistory,
+  onReview,
+  onOpenExternal,
+}: {
   artifact: ManagerArtifactV3 | null;
   mobileActive: boolean;
   onDuplicate: () => void;
@@ -691,6 +801,7 @@ function ProjectionInspector({ artifact, mobileActive, onDuplicate, onArchive, o
   onDelete: () => void;
   onHistory: () => void;
   onReview: (provider: ManagerArtifactProjectionV3['provider']) => void;
+  onOpenExternal?: (id: string) => void;
 }) {
   const selectedProjection = artifact?.projections.find((projection) => projection.status === 'drifted') ?? artifact?.projections[0] ?? null;
   return (
@@ -726,6 +837,9 @@ function ProjectionInspector({ artifact, mobileActive, onDuplicate, onArchive, o
           <section className="rg-inspector-section">
             <h2>Lifecycle & history</h2>
             <div className="rg-action-grid">
+              {onOpenExternal !== undefined ? (
+                <Button tone="secondary" icon={<ExternalLink size={14} />} onClick={() => onOpenExternal(artifact.metadata.id)}>Open in Editor</Button>
+              ) : null}
               <Button tone="secondary" icon={<Copy size={14} />} onClick={onDuplicate}>Duplicate</Button>
               <Button tone="secondary" onClick={onRename}>Rename</Button>
               <Button tone="secondary" icon={<Archive size={14} />} onClick={onArchive}>{artifact.metadata.lifecycle === 'archived' ? 'Restore' : 'Archive'}</Button>

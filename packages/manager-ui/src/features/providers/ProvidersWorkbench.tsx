@@ -12,6 +12,7 @@ import {
   Play,
   ShieldOff,
   Sparkles,
+  FolderOpen,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type {
@@ -68,6 +69,14 @@ export function ProvidersWorkbench({ client, snapshot, onError, onRefresh, onRev
     }
   };
 
+  const revealSource = (provider: ManagerProviderId, content: ManagerContentId) => {
+    void client.command('external.reveal', {
+      target: { kind: 'provider', provider, content },
+    }).catch((revealError: unknown) => {
+      onError(revealError instanceof Error ? revealError.message : 'Could not reveal provider path in filesystem.');
+    });
+  };
+
   return (
     <>
       <Pane label="Providers" className="rg-collection rg-operation-list">
@@ -110,6 +119,7 @@ export function ProvidersWorkbench({ client, snapshot, onError, onRefresh, onRev
                   onAction={setAction}
                   onReview={() => onReview(selected.id, content)}
                   onResume={() => void resumeManaging(selected.id, content)}
+                  onReveal={() => revealSource(selected.id, content)}
                 />;
               })}
             </section>
@@ -131,7 +141,7 @@ export function ProvidersWorkbench({ client, snapshot, onError, onRefresh, onRev
   );
 }
 
-function ProviderSourceRow({ provider, source, supported, hasProjection, busy, onAction, onReview, onResume }: {
+function ProviderSourceRow({ provider, source, supported, hasProjection, busy, onAction, onReview, onResume, onReveal }: {
   provider: ManagerProviderV3;
   source: ManagerProviderSourceV3;
   supported: boolean;
@@ -140,6 +150,7 @@ function ProviderSourceRow({ provider, source, supported, hasProjection, busy, o
   onAction: (action: ProviderSourceAction) => void;
   onReview: () => void;
   onResume: () => void;
+  onReveal?: () => void;
 }) {
   const unmanaged = source.items.filter((item) => item.ownership === 'unmanaged');
   const managed = source.ownership === 'managed' || source.ownership === 'mixed';
@@ -150,6 +161,11 @@ function ProviderSourceRow({ provider, source, supported, hasProjection, busy, o
       <span className="rg-provider-source__icon"><Icon size={17} aria-hidden="true" /></span>
       <span><strong>{contentLabel(source.content)}</strong><small>{source.path ?? 'No provider path detected'}</small></span>
       <OwnershipBadge source={source} supported={supported} />
+      {source.path && onReveal ? (
+        <Button tone="quiet" icon={<FolderOpen size={13} />} onClick={onReveal} aria-label={`Reveal ${source.path}`}>
+          Reveal
+        </Button>
+      ) : null}
     </header>
     {source.issues.length === 0 ? null : <div className="rg-provider-source__issues">{source.issues.map((issue) => <span key={`${issue.code}:${issue.message}`}><FileText size={13} /><span><strong>{issue.code}</strong>{issue.message}</span></span>)}</div>}
     <div className="rg-provider-source__items">
