@@ -1,9 +1,9 @@
 services:
   reglet-sync:
     build:
-      context: ../..
+      context: .
       dockerfile: Dockerfile.sync
-    image: reglet-sync:preview-v2
+    image: reglet-sync:latest
     restart: unless-stopped
     init: true
     read_only: true
@@ -15,7 +15,7 @@ services:
       - /tmp:size=16m,mode=1777
     environment:
       REGLET_DB: /data/reglet.sqlite
-      REGLET_PUBLIC_URL: ${REGLET_PUBLIC_URL:?Set REGLET_PUBLIC_URL to the public HTTPS origin}
+      REGLET_PUBLIC_URL: ${REGLET_PUBLIC_URL:?Set REGLET_PUBLIC_URL to public HTTPS origin, e.g. https://reglet.cloudview.cc}
       REGLET_BACKUP_DIR: /backups
       REGLET_TOKEN: ${REGLET_BOOTSTRAP_TOKEN:-}
       REGLET_ENABLE_LEGACY_V1: "0"
@@ -23,7 +23,7 @@ services:
       REGLET_TRUST_PROXY: "1"
       PORT: "3000"
     ports:
-      - 127.0.0.1:${REGLET_BIND_PORT:-3100}:3000
+      - "${REGLET_BIND_PORT:-3000}:3000"
     volumes:
       - reglet-data:/data
       - reglet-backups:/backups
