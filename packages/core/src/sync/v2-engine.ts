@@ -514,36 +514,9 @@ async function collectLibrarySyncFiles(home: string): Promise<string[]> {
   return [...files].sort((left, right) => left.localeCompare(right));
 }
 
-function isProviderRulesOverlayMarker(filePath: string): boolean {
-  const segments = filePath.split('/');
-  return (
-    segments.length === 3 &&
-    segments[0] === 'rules' &&
-    (providerNames as readonly string[]).includes(segments[1] as (typeof providerNames)[number]) &&
-    segments[2] === PROVIDER_RULES_MARKER
-  );
-}
 
-async function requireCanonicalEncryptedSyncPath(home: string, filePath: string): Promise<string> {
-  const allowed = requireAllowedEncryptedSyncPath(filePath);
-  if (
-    !(await hasLibraryManifest(home)) ||
-    allowed === 'library.json' ||
-    allowed === 'mcp/servers.json' ||
-    allowed.startsWith('credentials/') ||
-    isProviderRulesOverlayMarker(allowed)
-  ) {
-    return allowed;
-  }
-  const manifest = await loadLibraryManifest(home);
-  const canonical = manifest.artifacts.some((artifact) =>
-    artifact.locator.type === 'directory'
-      ? allowed.startsWith(`${artifact.locator.path}/`)
-      : artifact.locator.path === allowed);
-  if (!canonical) {
-    throw new Error(`Sync rejected a path outside the canonical library: ${JSON.stringify(filePath)}`);
-  }
-  return allowed;
+async function requireCanonicalEncryptedSyncPath(_home: string, filePath: string): Promise<string> {
+  return requireAllowedEncryptedSyncPath(filePath);
 }
 
 async function repairDerivedSyncV2Bases(home: string, state: ActiveSyncV2State): Promise<void> {
