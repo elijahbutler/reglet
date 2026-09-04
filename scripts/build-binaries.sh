@@ -9,7 +9,7 @@ if [[ -n "${REGLET_VERSION:-}" ]]; then
 elif [[ -n "${GITHUB_REF_NAME:-}" ]]; then
   VERSION="${GITHUB_REF_NAME}"
 else
-  VERSION="$(git describe --tags --abbrev=0 2>/dev/null || echo "0.5.5")"
+  VERSION="$(git describe --tags --abbrev=0 2>/dev/null || echo "0.5.6")"
 fi
 VERSION="${VERSION#v}"
 

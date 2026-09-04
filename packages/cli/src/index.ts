@@ -164,6 +164,7 @@ import {
   interactiveDriftReview,
   runPostConnectProviderSetup,
 } from './post-connect.js';
+import { runUpdate } from './update.js';
 
 const providerIds = ['claude', 'codex', 'cursor', 'gemini', 'windsurf', 'opencode'] as const;
 const contentIds = ['rules', 'skills', 'mcp'] as const;
@@ -173,7 +174,7 @@ const rulesSteeringPromptLimit = 4_000;
 type ContentId = (typeof contentIds)[number];
 
 const program = new Command();
-const version = process.env.REGLET_VERSION ?? '0.5.5';
+const version = process.env.REGLET_VERSION ?? '0.5.6';
 const managerApplication = new RegletApplication();
 
 program
@@ -384,6 +385,21 @@ program
       reviewedReplacement: options.reviewedReplacement,
     });
     printApplyResults(report.results);
+  });
+
+program
+  .command('update')
+  .description('Update the reglet CLI to the latest release')
+  .option('--force', 'download and install even if already on the latest version')
+  .option('--json', 'print machine-readable JSON result')
+  .option('--path <path>', 'override the binary path to replace (advanced)')
+  .action(async (options: { force?: boolean; json?: boolean; path?: string }) => {
+    await runUpdate({
+      currentVersion: version,
+      force: options.force === true,
+      json: options.json === true,
+      targetPath: options.path,
+    });
   });
 
 const migrate = program.command('migrate', { hidden: true }).description('Run explicit, reversible metadata migrations');
