@@ -61,7 +61,9 @@ const decoder = new TextDecoder('utf-8', { fatal: true });
 const keyBytes = 32;
 const nonceBytes = 24;
 const signatureBytes = 64;
-const syncV2ObjectMaximumBytes = 128 * 1024;
+const syncV2ObjectMaximumBytes = 2 * 1024 * 1024;
+const syncV2CiphertextMaximumBytes = Math.ceil((syncV2ObjectMaximumBytes * 4) / 3) + 32 * 1024;
+const syncV2CiphertextStringMaximumLength = Math.ceil((syncV2CiphertextMaximumBytes * 4) / 3) + 4096;
 
 export function generateSyncV2DeviceKeys(): DeviceKeyPair {
   const agreement = x25519.keygen();
@@ -626,9 +628,9 @@ function isBase64UrlBytes(value: unknown, length: number): value is string {
 }
 
 function isBoundedCiphertext(value: unknown): value is string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 180_000) return false;
+  if (typeof value !== 'string' || value.length === 0 || value.length > syncV2CiphertextStringMaximumLength) return false;
   try {
-    return decodeBase64Url(value).byteLength <= syncV2ObjectMaximumBytes + 4096;
+    return decodeBase64Url(value).byteLength <= syncV2CiphertextMaximumBytes;
   } catch {
     return false;
   }

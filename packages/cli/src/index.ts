@@ -174,7 +174,7 @@ const rulesSteeringPromptLimit = 4_000;
 type ContentId = (typeof contentIds)[number];
 
 const program = new Command();
-const version = process.env.REGLET_VERSION ?? '0.5.9';
+const version = process.env.REGLET_VERSION ?? '0.5.10';
 const managerApplication = new RegletApplication();
 
 program
@@ -2442,10 +2442,21 @@ async function runOnboarding(providers: ProviderId[], contents: ApplyContent[], 
 }
 
  async function runInteractiveOnboarding(): Promise<void> {
+  const syncState = await loadSyncV2State().catch(() => null);
+  const isServerConnected = syncState?.phase === 'active';
+
   console.log('\n╭────────────────────────────────────────────────────────╮');
   console.log('│  Welcome to Reglet!                                    │');
   console.log('│  The control plane for AI agent rules, skills & MCP.  │');
-  console.log('╰────────────────────────────────────────────────────────╯\n');
+  console.log('╰────────────────────────────────────────────────────────╯');
+  if (isServerConnected) {
+    console.log(`\n🔗 Connected to sync vault: ${syncState.serverUrl}`);
+    console.log(`   Device: ${syncState.deviceName} (vault: ${syncState.vaultId.slice(0, 8)}...)\n`);
+  } else if (syncState?.phase === 'pending') {
+    console.log(`\n⏳ Pending pairing with: ${syncState.serverUrl}\n`);
+  } else {
+    console.log('');
+  }
 
   // Step 1: Detect and select providers
   const detected = await detectedProviderIds();
@@ -2502,19 +2513,56 @@ async function runOnboarding(providers: ProviderId[], contents: ApplyContent[], 
   }
 
   // Step 3: Sync server setup
-  const wantSync = await select({
-    message: 'Would you like to connect to an encrypted Reglet sync server?',
-    options: [
-      { value: 'later', label: 'Skip for now (use in local-only mode)' },
-      { value: 'now', label: 'Connect now (enter server URL or invitation link)' },
-    ],
-  });
+  if (isServerConnected) {
+    console.log(`Sync status: Connected to ${syncState.serverUrl}`);
+    const syncAction = await select({
+      message: 'This device is connected to an encrypted vault. What would you like to do?',
+      options: [
+        { value: 'sync', label: 'Synchronize now (pull vault content & push local changes)' },
+        { value: 'skip', label: 'Keep current state (skip sync for now)' },
+        { value: 'reconnect', label: 'Reconnect or switch to a different vault' },
+      ],
+    });
 
-  if (!isCancel(wantSync) && wantSync === 'now') {
-    try {
-      await handleConnect();
-    } catch (connectError) {
-      console.log(`Sync connection note: ${connectError instanceof Error ? connectError.message : String(connectError)}. You can run "reglet connect" anytime.`);
+    if (!isCancel(syncAction)) {
+      if (syncAction === 'sync') {
+        console.log('\nSynchronizing with vault...');
+        try {
+          const syncResult = await syncOnceV2();
+          console.log(`\n✓ Synchronized! (pushed: ${syncResult.pushed.length}, pulled: ${syncResult.pulled.length})\n`);
+          if (syncResult.providerReviewRequired) {
+            await interactiveDriftReview(providersToEnroll);
+          }
+        } catch (err) {
+          console.warn(`\n⚠ Sync encountered an issue: ${err instanceof Error ? err.message : String(err)}`);
+          console.log('Run "reglet sync" anytime to retry.\n');
+        }
+      } else if (syncAction === 'reconnect') {
+        try {
+          await handleConnect();
+        } catch (connectError) {
+          console.log(`Sync connection note: ${connectError instanceof Error ? connectError.message : String(connectError)}.`);
+        }
+      }
+    }
+  } else if (syncState?.phase === 'pending') {
+    console.log(`Sync status: Pending pairing with ${syncState.serverUrl}`);
+    console.log('  Approve this device on an authorized device or run: reglet sync connection-status\n');
+  } else {
+    const wantSync = await select({
+      message: 'Would you like to connect to an encrypted Reglet sync server?',
+      options: [
+        { value: 'later', label: 'Skip for now (use in local-only mode)' },
+        { value: 'now', label: 'Connect now (enter server URL or invitation link)' },
+      ],
+    });
+
+    if (!isCancel(wantSync) && wantSync === 'now') {
+      try {
+        await handleConnect();
+      } catch (connectError) {
+        console.log(`Sync connection note: ${connectError instanceof Error ? connectError.message : String(connectError)}. You can run "reglet connect" anytime.`);
+      }
     }
   }
 

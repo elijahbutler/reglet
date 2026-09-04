@@ -186,35 +186,37 @@ export async function runInteractiveProviderSelection(
  * Accepts `runOnboarding` as a callback to avoid importing from index.ts.
  */
 export async function runPostConnectProviderSetup(
-  opts: { providerReviewRequired: boolean },
+  opts: { providerReviewRequired: boolean; forcePrompt?: boolean },
   runOnboarding: (providers: ProviderId[], contents: ApplyContent[], apply: boolean) => Promise<void>,
 ): Promise<void> {
   if (!process.stdin.isTTY) return;
 
-  const config = await loadConfig();
-  const anyEnrolled = allAdapters().some((a) => config.providers[a.id]?.enabled === true);
+  if (opts.forcePrompt !== true) {
+    const config = await loadConfig();
+    const anyEnrolled = allAdapters().some((a) => config.providers[a.id]?.enabled === true);
 
-  if (!anyEnrolled) {
-    console.log('\nNo providers are enrolled on this device yet.');
-  } else if (opts.providerReviewRequired) {
-    console.log(
-      "\nThe synced vault contains rules/skills that haven't been applied to providers on this device yet.",
-    );
-  } else {
-    return;
-  }
+    if (!anyEnrolled) {
+      console.log('\nNo providers are enrolled on this device yet.');
+    } else if (opts.providerReviewRequired) {
+      console.log(
+        "\nThe synced vault contains rules/skills that haven't been applied to providers on this device yet.",
+      );
+    } else {
+      return;
+    }
 
-  const wantSetup = await select({
-    message: 'Would you like to configure which providers to sync now?',
-    options: [
-      { value: 'yes', label: 'Yes — choose providers and review any conflicts' },
-      { value: 'later', label: 'Later — run "reglet setup" when ready' },
-    ],
-  });
+    const wantSetup = await select({
+      message: 'Would you like to configure which providers to sync now?',
+      options: [
+        { value: 'yes', label: 'Yes — choose providers and review any conflicts' },
+        { value: 'later', label: 'Later — run "reglet setup" when ready' },
+      ],
+    });
 
-  if (isCancel(wantSetup) || wantSetup === 'later') {
-    console.log('Run "reglet setup" anytime to configure providers.\n');
-    return;
+    if (isCancel(wantSetup) || wantSetup === 'later') {
+      console.log('Run "reglet setup" anytime to configure providers.\n');
+      return;
+    }
   }
 
   await initMasterDir();

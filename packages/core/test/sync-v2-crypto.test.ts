@@ -150,6 +150,47 @@ describe('sync protocol v2 cryptography', () => {
     expect(syncV2ProtocolVersion).toBe(2);
     expect(syncV2Suite).toContain('xchacha20poly1305');
   });
+
+  test('supports sync objects larger than 128KB up to 2MB, and rejects objects exceeding 2MB', () => {
+    const device = generateSyncV2DeviceKeys();
+    const vault = generateSyncV2VaultKeys();
+    const largeContent = Buffer.alloc(300 * 1024, 'a');
+
+    const envelope = createSyncV2Envelope({
+      vaultId: vault.vaultId,
+      rootSecret: vault.rootSecret,
+      keyEpoch: 1,
+      path: 'mcp/servers.json',
+      content: largeContent,
+      deleted: false,
+      revision: 1,
+      sequence: 1,
+      authorDeviceId: device.deviceId,
+      signingSecretKey: device.signingSecretKey,
+      previousCheckpoint: initialCheckpoint(),
+    });
+
+    const decrypted = decryptSyncV2Envelope(envelope, vault.rootSecret);
+    expect(decrypted.canonicalPath).toBe('mcp/servers.json');
+    expect(Buffer.from(decrypted.contentBase64, 'base64').byteLength).toBe(300 * 1024);
+
+    const oversizedContent = Buffer.alloc(2 * 1024 * 1024 + 1, 'b');
+    expect(() =>
+      createSyncV2Envelope({
+        vaultId: vault.vaultId,
+        rootSecret: vault.rootSecret,
+        keyEpoch: 1,
+        path: 'mcp/servers.json',
+        content: oversizedContent,
+        deleted: false,
+        revision: 1,
+        sequence: 1,
+        authorDeviceId: device.deviceId,
+        signingSecretKey: device.signingSecretKey,
+        previousCheckpoint: initialCheckpoint(),
+      }),
+    ).toThrow('Sync object exceeds 2097152 bytes');
+  });
 });
 
 function mutate(value: string): string {

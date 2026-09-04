@@ -54,7 +54,7 @@ export interface SyncApiError {
 }
 
 export const syncProtocolVersion = 1;
-const maximumSyncResponseBytes = 2 * 1024 * 1024;
+const maximumSyncResponseBytes = 50 * 1024 * 1024;
 
 export class SyncClient {
   private readonly baseUrl: string;

@@ -345,7 +345,7 @@ describe('sync engine', () => {
     const oversized = new SyncClient(
       'https://sync.example.test',
       'token',
-      (async () => new Response('{}', { headers: { 'content-length': String(3 * 1024 * 1024) } })) as typeof fetch,
+      (async () => new Response('{}', { headers: { 'content-length': String(55 * 1024 * 1024) } })) as typeof fetch,
     );
     await expect(oversized.ensureCompatible()).rejects.toThrow('response is too large');
   });

@@ -1,4 +1,4 @@
-import { confirm, isCancel, password, spinner, text } from '@clack/prompts';
+import { confirm, isCancel, password, select, spinner, text } from '@clack/prompts';
 import { hostname } from 'node:os';
 import type { Command } from 'commander';
 import {
@@ -23,7 +23,7 @@ import {
 export function registerSyncV2PreviewCommands(
   program: Command,
   opts: {
-    onConnected?: (result: { providerReviewRequired: boolean }) => Promise<void>;
+    onConnected?: (result: { providerReviewRequired: boolean; forcePrompt?: boolean }) => Promise<void>;
   } = {},
 ): void {
   // Top-level streamlined commands
@@ -338,7 +338,7 @@ export async function handleConnect(
     force?: boolean;
     invite?: string;
     server?: string;
-    onConnected?: (result: { providerReviewRequired: boolean }) => Promise<void>;
+    onConnected?: (result: { providerReviewRequired: boolean; forcePrompt?: boolean }) => Promise<void>;
   } = {},
 ): Promise<void> {
   let target = targetInput ?? options.invite ?? options.server;
@@ -386,24 +386,20 @@ export async function handleConnect(
     const s = spinner();
     s.start('Waiting for approval in the owner dashboard... (Ctrl+C to run in background)');
 
+    let status;
     try {
-      const status = await waitForSyncV2ConnectionApproval({
+      status = await waitForSyncV2ConnectionApproval({
         timeoutMs: 300_000,
         pollIntervalMs: 1500,
       });
       s.stop('Connection approved by owner dashboard!');
-
-      console.log('Completing connection and running initial sync...');
-      await autoCompleteSyncV2Connection({ status });
-      const syncResult = await syncOnceV2();
-      console.log(`sync\tconnected\tinitial-sync=complete\tpushed=${syncResult.pushed.length}\tpulled=${syncResult.pulled.length}`);
-      console.log(`\n✓ Connected and synchronized with your vault!`);
-      await options.onConnected?.({ providerReviewRequired: syncResult.providerReviewRequired });
     } catch (err) {
       s.stop('Waiting cancelled or timed out.');
       console.log('You can check status or complete connection later using: reglet sync connection-status');
       throw err;
     }
+
+    await completeInteractiveConnection(status, deviceName, 'bootstrap', options);
     return;
   }
 
@@ -428,23 +424,84 @@ export async function handleConnect(
   const s = spinner();
   s.start(`Waiting for approval on another device for code: ${request.code}... (Ctrl+C to run in background)`);
 
+  let status;
   try {
-    const status = await waitForSyncV2ConnectionApproval({
+    status = await waitForSyncV2ConnectionApproval({
       timeoutMs: 300_000,
       pollIntervalMs: 1500,
     });
     s.stop(`Approved by trusted device! (Fingerprint: ${status.fingerprint})`);
-
-    console.log('Completing pairing and running initial sync...');
-    await autoCompleteSyncV2Connection({ status });
-    const syncResult = await syncOnceV2();
-    console.log(`sync\tpaired\tinitial-sync=complete\tpushed=${syncResult.pushed.length}\tpulled=${syncResult.pulled.length}`);
-    console.log(`\n✓ Device "${deviceName}" is paired and synchronized!`);
-    await options.onConnected?.({ providerReviewRequired: syncResult.providerReviewRequired });
   } catch (err) {
     s.stop('Waiting cancelled or timed out.');
     console.log('You can check status or complete pairing later using: reglet sync connection-status');
     throw err;
+  }
+
+  await completeInteractiveConnection(status, deviceName, 'pair', options);
+}
+
+async function completeInteractiveConnection(
+  status: Awaited<ReturnType<typeof waitForSyncV2ConnectionApproval>>,
+  deviceName: string,
+  kind: 'bootstrap' | 'pair',
+  options: {
+    onConnected?: (result: { providerReviewRequired: boolean; forcePrompt?: boolean }) => Promise<void>;
+  },
+): Promise<void> {
+  console.log(`Completing ${kind === 'bootstrap' ? 'connection' : 'pairing'}...`);
+  await autoCompleteSyncV2Connection({ status });
+  console.log(`\n✓ Device "${deviceName}" is paired with your encrypted vault!`);
+
+  if (process.stdin.isTTY) {
+    const nextStep = await select({
+      message: 'How would you like to proceed with this device?',
+      options: [
+        { value: 'setup', label: 'Configure providers & sync (recommended — choose AI tools to manage)' },
+        { value: 'sync', label: 'Sync everything now (pull vault content and push local configs)' },
+        { value: 'later', label: 'Skip initial sync (pair only — sync later with "reglet sync")' },
+      ],
+    });
+
+    if (isCancel(nextStep) || nextStep === 'later') {
+      console.log('\nDevice is paired. Run "reglet sync" anytime to synchronize, or "reglet setup" to configure providers.\n');
+      return;
+    }
+
+    if (nextStep === 'setup') {
+      if (options.onConnected) {
+        await options.onConnected({ providerReviewRequired: false, forcePrompt: true });
+      }
+      console.log('\nRunning sync with vault...');
+      try {
+        const syncResult = await syncOnceV2();
+        console.log(
+          `sync\t${kind === 'bootstrap' ? 'connected' : 'paired'}\tinitial-sync=complete\tpushed=${syncResult.pushed.length}\tpulled=${syncResult.pulled.length}`,
+        );
+        console.log(`\n✓ Device "${deviceName}" is synchronized!`);
+        if (syncResult.providerReviewRequired && options.onConnected) {
+          await options.onConnected({ providerReviewRequired: true });
+        }
+      } catch (syncErr) {
+        console.warn(`\n⚠ Sync encountered an issue: ${syncErr instanceof Error ? syncErr.message : String(syncErr)}`);
+        console.log('Your device remains paired. Run "reglet sync" anytime to retry.\n');
+      }
+      return;
+    }
+  }
+
+  // Non-interactive or user chose 'sync'
+  console.log('Running initial sync...');
+  try {
+    const syncResult = await syncOnceV2();
+    console.log(
+      `sync\t${kind === 'bootstrap' ? 'connected' : 'paired'}\tinitial-sync=complete\tpushed=${syncResult.pushed.length}\tpulled=${syncResult.pulled.length}`,
+    );
+    console.log(`\n✓ Device "${deviceName}" is synchronized!`);
+    await options.onConnected?.({ providerReviewRequired: syncResult.providerReviewRequired });
+  } catch (syncErr) {
+    console.warn(`\n⚠ Device paired successfully, but initial sync encountered an issue:`);
+    console.warn(`  ${syncErr instanceof Error ? syncErr.message : String(syncErr)}`);
+    console.log('Your device remains paired. Run "reglet sync" anytime to retry.\n');
   }
 }
 
