@@ -12,7 +12,7 @@ Protocol v2 end-to-end encrypted sync (`v2-crypto`, `v2-engine`, SAS comparison,
 - **Milestone 1: Conflict Resolution CLI (`v0.5.12`)** — Shipped ✅ (Actionable conflict output, `reglet sync conflicts` interactive wizard, `reglet sync resolve` CLI command, path normalization)
 - **Milestone 2: Vaulted Secrets Management & MCP Experience (`v0.5.13` - `v0.5.14`)** — Shipped ✅ (`reglet secret set/list/delete/status`, interactive in-flight prompts, automatic OS keychain + encrypted vault sync)
 - **Milestone 3: Ephemeral Local Web Conflict GUI (`v0.5.14`)** — Shipped 🚀 (`reglet sync conflicts --web`, `reglet ui`, zero-knowledge loopback browser diff & one-click resolution)
-- **Milestone 3.5: Minimalist Desktop GUI Overhaul & Onboarding (`v0.5.15`)** — Shipped 🚀 (T3 Code-inspired visual diff center, lightweight custom diff engine, CLI dependency assistant, re-triggerable onboarding, external editor launch, native drag regions)
+- **Milestone 3.5: Minimalist Desktop GUI Overhaul & Onboarding (`v0.5.15` - `v0.5.16`)** — Shipped 🚀 (T3 Code-inspired visual diff center, lightweight custom diff engine, CLI dependency assistant, re-triggerable onboarding, external editor launch, native drag regions)
 - **Milestone 4: AI Smart Merging (`v0.6.0`)** — In Design 📐 (Semantic LLM reconciliation of Markdown instructions and JSON configurations)
 - **Milestone 5: Server Resiliency & Operations (`v0.7.0`)** — Planned 💡 (Coolify zero-downtime persistence, automated SQLite snapshots, multi-vault support)
 
