@@ -44,7 +44,7 @@ jobs:
 
   server-admin:
     name: Server dashboard and image
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -71,43 +71,3 @@ jobs:
         run: bash scripts/stage-tauri-check-sidecar.sh
       - run: cd apps/desktop/src-tauri && cargo check
       - run: cd apps/desktop/src-tauri && cargo test
-
-  linux-release-package:
-    name: Linux release package
-    runs-on: ubuntu-22.04
-    env:
-      NO_STRIP: "true"
-      REGLET_TAURI_VERBOSE: "1"
-      REGLET_VERSION: 0.0.0
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-gnu
-      - name: Install Linux desktop dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-      - run: bun install --frozen-lockfile
-      - run: bun run build:binaries -- linux-x64
-      - run: bash scripts/stage-tauri-sidecars.sh x86_64-unknown-linux-gnu
-      - run: bash scripts/build-tauri-desktop.sh x86_64-unknown-linux-gnu deb,appimage
-      - name: Verify AppImage sidecar
-        shell: bash
-        run: |
-          set -euo pipefail
-          appimage="$(find apps/desktop/src-tauri/target -path '*/bundle/appimage/*' -type f -name '*.AppImage' | head -n 1)"
-          test -n "$appimage"
-          appimage="$(realpath "$appimage")"
-          extract_dir="$(mktemp -d)"
-          (
-            cd "$extract_dir"
-            "$appimage" --appimage-extract >/dev/null
-          )
-          cmp \
-            apps/desktop/src-tauri/bin/reglet-x86_64-unknown-linux-gnu \
-            "$extract_dir/squashfs-root/usr/libexec/reglet/reglet"
-          "$extract_dir/squashfs-root/usr/bin/reglet" --version
