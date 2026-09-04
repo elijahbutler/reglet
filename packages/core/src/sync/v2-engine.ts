@@ -27,6 +27,8 @@ import type { SyncV2DeviceSecrets, SyncV2ObjectPlaintext, StoredSyncV2Envelope }
 import { hasLibraryManifest, loadLibraryManifest } from '../artifacts/library.js';
 import { tryMergeLibraryManifestText } from './library-merge.js';
 import { isSyncedCredential, syncCredentialToKeyring } from '../auth/credentials.js';
+import { providerNames } from '../config.js';
+import { PROVIDER_RULES_MARKER } from '../master.js';
 
 export interface SyncV2Result {
   completedAt: string;
@@ -503,7 +505,23 @@ async function collectLibrarySyncFiles(home: string): Promise<string[]> {
       files.add(requireAllowedEncryptedSyncPath(artifact.locator.path));
     }
   }
+  for (const provider of providerNames) {
+    const markerRel = `rules/${provider}/${PROVIDER_RULES_MARKER}`;
+    if (await pathExists(path.join(home, 'rules', provider, PROVIDER_RULES_MARKER))) {
+      files.add(markerRel);
+    }
+  }
   return [...files].sort((left, right) => left.localeCompare(right));
+}
+
+function isProviderRulesOverlayMarker(filePath: string): boolean {
+  const segments = filePath.split('/');
+  return (
+    segments.length === 3 &&
+    segments[0] === 'rules' &&
+    (providerNames as readonly string[]).includes(segments[1] as (typeof providerNames)[number]) &&
+    segments[2] === PROVIDER_RULES_MARKER
+  );
 }
 
 async function requireCanonicalEncryptedSyncPath(home: string, filePath: string): Promise<string> {
@@ -511,7 +529,9 @@ async function requireCanonicalEncryptedSyncPath(home: string, filePath: string)
   if (
     !(await hasLibraryManifest(home)) ||
     allowed === 'library.json' ||
-    allowed.startsWith('credentials/')
+    allowed === 'mcp/servers.json' ||
+    allowed.startsWith('credentials/') ||
+    isProviderRulesOverlayMarker(allowed)
   ) {
     return allowed;
   }

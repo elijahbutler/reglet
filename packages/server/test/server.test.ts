@@ -260,7 +260,7 @@ describe('sync server API', () => {
 
     expect(await (await app.request('/healthz')).json()).toEqual({
       ok: true,
-      service: { name: 'reglet-sync-server', version: '0.5.7' },
+      service: { name: 'reglet-sync-server', version: '0.5.8' },
       protocol: { current: 1, supported: [1] },
     });
     expect(await (await app.request('/')).text()).toContain('Reglet sync server');
@@ -275,7 +275,7 @@ describe('sync server API', () => {
     expect(first.status).toBe(200);
     expect(second.status).toBe(200);
     expect(await first.json()).toEqual({
-      service: { name: 'reglet-sync-server', version: '0.5.7' },
+      service: { name: 'reglet-sync-server', version: '0.5.8' },
       protocol: { current: 1, supported: [1] },
     });
   });

@@ -220,6 +220,38 @@ describe('encrypted sync protocol v2 engine', () => {
     await syncOnceV2({ home: setup.macHome, fetchImpl: setup.fetchImpl, secretStore: setup.macStore });
     await expect(stat(basePath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
+
+  test('synchronizes provider rules overlay marker when library manifest is present', async () => {
+    const setup = await twoDeviceSetup();
+    await mkdir(path.join(setup.macHome, 'rules', 'claude'), { recursive: true });
+    await writeFile(path.join(setup.macHome, 'rules', 'claude', '.reglet-provider-overlay'), 'v1\n');
+    await writeFile(path.join(setup.macHome, 'rules', 'claude', '00-imported.md'), 'Claude rules\n');
+    await saveLibraryManifest({
+      schemaVersion: 2,
+      artifacts: [
+        {
+          id: 'claude-instruction-id', kind: 'instruction', lifecycle: 'active',
+          scope: { kind: 'provider-overlay', provider: 'claude' },
+          slug: 'claude-imported', title: 'Claude Rules', tags: [], targets: ['claude'],
+          locator: { type: 'file', path: 'rules/claude/00-imported.md' },
+        },
+      ],
+      tombstones: [],
+    }, setup.macHome);
+    // Windows device also has library manifest
+    await saveLibraryManifest({
+      schemaVersion: 2,
+      artifacts: [],
+      tombstones: [],
+    }, setup.windowsHome);
+
+    const pushed = await syncOnceV2({ home: setup.macHome, fetchImpl: setup.fetchImpl, secretStore: setup.macStore });
+    expect(pushed.pushed).toContain('rules/claude/.reglet-provider-overlay');
+
+    const pulled = await syncOnceV2({ home: setup.windowsHome, fetchImpl: setup.fetchImpl, secretStore: setup.windowsStore });
+    expect(pulled.pulled).toContain('rules/claude/.reglet-provider-overlay');
+    expect(await readFile(path.join(setup.windowsHome, 'rules', 'claude', '.reglet-provider-overlay'), 'utf8')).toBe('v1\n');
+  });
 });
 
 async function twoDeviceSetup(): Promise<{

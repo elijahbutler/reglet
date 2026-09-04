@@ -15,12 +15,13 @@ export function tryMergeLibraryManifestText(
   localContent: Uint8Array,
   remoteContent: Uint8Array,
 ): Uint8Array | null {
-  if (baseContent === null) return null;
   let base: LibraryManifest;
   let local: LibraryManifest;
   let remote: LibraryManifest;
   try {
-    base = parseLibraryManifest(JSON.parse(Buffer.from(baseContent).toString('utf8')) as unknown);
+    base = baseContent === null
+      ? { schemaVersion: 2, artifacts: [], tombstones: [] }
+      : parseLibraryManifest(JSON.parse(Buffer.from(baseContent).toString('utf8')) as unknown);
     local = parseLibraryManifest(JSON.parse(Buffer.from(localContent).toString('utf8')) as unknown);
     remote = parseLibraryManifest(JSON.parse(Buffer.from(remoteContent).toString('utf8')) as unknown);
   } catch {
