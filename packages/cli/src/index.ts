@@ -174,7 +174,7 @@ const rulesSteeringPromptLimit = 4_000;
 type ContentId = (typeof contentIds)[number];
 
 const program = new Command();
-const version = process.env.REGLET_VERSION ?? '0.5.11';
+const version = process.env.REGLET_VERSION ?? '0.5.12';
 const managerApplication = new RegletApplication();
 
 program

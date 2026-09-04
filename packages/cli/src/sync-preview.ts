@@ -1,5 +1,6 @@
 import { confirm, isCancel, password, select, spinner, text } from '@clack/prompts';
 import { hostname } from 'node:os';
+import path from 'node:path';
 import type { Command } from 'commander';
 import {
   approveSyncV2Pairing,
@@ -7,13 +8,16 @@ import {
   bootstrapSyncV2,
   completeSyncV2Pairing,
   completeSyncV2BootstrapConnection,
+  inspectSyncV2Conflict,
   listManagedSyncV2Devices,
+  listSyncV2Conflicts,
   loadSyncV2State,
   logoutSyncV2,
   pendingSyncV2PairingStatus,
   pendingSyncV2ConnectionStatus,
   renameManagedSyncV2Device,
   requestSyncV2Pairing,
+  resolveSyncV2Conflict,
   revokeManagedSyncV2Device,
   syncOnceV2,
   startSyncV2BootstrapConnection,
@@ -56,6 +60,14 @@ export function registerSyncV2PreviewCommands(
       console.log(`\n✓ Device "${approval.request.deviceName}" has been approved!`);
     });
 
+  program
+    .command('conflicts')
+    .description('List and interactively resolve sync conflicts')
+    .option('--json', 'print machine-readable list of conflicts')
+    .action(async (options: { json?: boolean }) => {
+      await handleConflictsCommand(options);
+    });
+
   // Sync command group
   const sync = program
     .command('sync')
@@ -76,7 +88,7 @@ export function registerSyncV2PreviewCommands(
         if (result.providerReviewRequired) {
           console.log('Pulled Master changes require local review. Run "reglet apply" to update provider files.');
         }
-        for (const conflict of result.conflicts) console.log(`conflict\t${conflict}`);
+        printSyncConflicts(result.conflicts);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         if (msg.includes('401') || msg.includes('unauthorized')) {
@@ -87,6 +99,49 @@ export function registerSyncV2PreviewCommands(
         }
         throw error;
       }
+    });
+
+  sync
+    .command('conflicts')
+    .description('List and interactively resolve sync conflicts')
+    .option('--json', 'print machine-readable list of conflicts')
+    .action(async (options: { json?: boolean }) => {
+      await handleConflictsCommand(options);
+    });
+
+  sync
+    .command('resolve')
+    .description('Resolve a sync conflict by keeping either the local or remote copy')
+    .argument('<file>', 'canonical path or conflict file path')
+    .option('--ours', 'keep local file')
+    .option('--theirs', 'accept incoming vault file')
+    .action(async (file: string, options: { ours?: boolean; theirs?: boolean }) => {
+      let choice: 'ours' | 'theirs' | undefined;
+      if (options.ours && options.theirs) {
+        throw new Error('Cannot specify both --ours and --theirs');
+      }
+      if (options.ours) choice = 'ours';
+      if (options.theirs) choice = 'theirs';
+      if (!choice) {
+        if (!process.stdin.isTTY) {
+          throw new Error('Specify either --ours or --theirs for non-interactive resolution');
+        }
+        const selected = await select({
+          message: `How would you like to resolve conflict for ${file}?`,
+          options: [
+            { value: 'ours', label: 'Keep local version (ours)' },
+            { value: 'theirs', label: 'Accept incoming vault version (theirs)' },
+          ],
+        });
+        if (isCancel(selected)) {
+          console.log('Resolution cancelled.');
+          return;
+        }
+        choice = selected as 'ours' | 'theirs';
+      }
+      const result = await resolveSyncV2Conflict(file, choice);
+      console.log(`sync\tconflict-resolved\tpath=${result.path}\tchoice=${result.choice}`);
+      console.log(`✓ Resolved ${result.path} (kept ${result.choice}). Run "reglet sync" to push changes.`);
     });
 
   sync
@@ -136,7 +191,7 @@ export function registerSyncV2PreviewCommands(
         if (result.providerReviewRequired) {
           console.log('Pulled Master changes require local Review & Apply before provider files change.');
         }
-        for (const conflict of result.conflicts) console.log(`conflict\t${conflict}`);
+        printSyncConflicts(result.conflicts);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         if (msg.includes('401') || msg.includes('unauthorized')) {
@@ -531,5 +586,102 @@ export function connectionKind(value: string): 'bootstrap' | 'pair' {
     return params.get('kind') === 'bootstrap' ? 'bootstrap' : 'pair';
   } catch {
     return 'pair';
+  }
+}
+
+function printSyncConflicts(conflicts: string[]): void {
+  if (conflicts.length === 0) return;
+  for (const conflict of conflicts) console.log(`conflict\t${conflict}`);
+  console.log(`\n⚠ ${conflicts.length} conflict(s) detected between local files and remote vault.`);
+  console.log('  Local files were preserved in ~/.reglet/<file>.');
+  console.log('  Vault copies were saved as ~/.reglet/<file>.conflict-<device>.<ext>.\n');
+  console.log('To resolve conflicts:');
+  console.log('  • Interactive resolution:');
+  console.log('      reglet sync conflicts');
+  console.log('  • Keep your local version ("ours"):');
+  console.log('      reglet sync resolve <file> --ours');
+  console.log('  • Accept the vault version ("theirs"):');
+  console.log('      reglet sync resolve <file> --theirs');
+  console.log('  • Manual resolution:');
+  console.log('      Edit ~/.reglet/<file> to combine changes, then delete the .conflict-* file.');
+  console.log('  After resolving, run "reglet sync" to push your changes.\n');
+}
+
+async function handleConflictsCommand(options: { json?: boolean }): Promise<void> {
+  const conflicts = await listSyncV2Conflicts();
+  if (options.json === true) {
+    console.log(JSON.stringify({ version: 2, conflicts }, null, 2));
+    return;
+  }
+  if (conflicts.length === 0) {
+    console.log('No sync conflicts detected.');
+    return;
+  }
+  console.log(`\nFound ${conflicts.length} sync conflict(s):\n`);
+  for (const item of conflicts) {
+    console.log(`  • ${item.canonicalPath}`);
+    console.log(`    Local:    ~/.reglet/${item.canonicalPath}`);
+    console.log(`    Incoming: ~/.reglet/${path.basename(item.conflictPath)}`);
+  }
+  console.log('');
+
+  if (!process.stdin.isTTY) {
+    console.log('To resolve a conflict non-interactively:');
+    console.log('  reglet sync resolve <file> --ours   (keep local)');
+    console.log('  reglet sync resolve <file> --theirs (keep remote)');
+    return;
+  }
+
+  for (const item of conflicts) {
+    console.log(`\nResolving conflict for: ${item.canonicalPath}`);
+    const choice = await select({
+      message: `How would you like to resolve ${item.canonicalPath}?`,
+      options: [
+        { value: 'ours', label: 'Keep local version (ours)' },
+        { value: 'theirs', label: 'Accept incoming vault version (theirs)' },
+        { value: 'inspect', label: 'Inspect diff / preview versions' },
+        { value: 'skip', label: 'Skip for now' },
+      ],
+    });
+    if (isCancel(choice) || choice === 'skip') {
+      console.log(`Skipped ${item.canonicalPath}.`);
+      continue;
+    }
+    if (choice === 'inspect') {
+      try {
+        const preview = await inspectSyncV2Conflict(item.canonicalPath);
+        console.log('\n--- Local Content ---');
+        console.log(preview.local.state === 'text' ? preview.local.content : `[${preview.local.state}]`);
+        console.log('--- Incoming Vault Content ---');
+        console.log(preview.remote.state === 'text' ? preview.remote.content : `[${preview.remote.state}]`);
+        console.log('------------------------------\n');
+      } catch (err) {
+        console.warn(`Could not preview: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      const secondChoice = await select({
+        message: `Choice for ${item.canonicalPath}:`,
+        options: [
+          { value: 'ours', label: 'Keep local version (ours)' },
+          { value: 'theirs', label: 'Accept incoming vault version (theirs)' },
+          { value: 'skip', label: 'Skip for now' },
+        ],
+      });
+      if (isCancel(secondChoice) || secondChoice === 'skip') {
+        console.log(`Skipped ${item.canonicalPath}.`);
+        continue;
+      }
+      await resolveSyncV2Conflict(item.canonicalPath, secondChoice as 'ours' | 'theirs');
+      console.log(`✓ Resolved ${item.canonicalPath} -> kept ${secondChoice}`);
+      continue;
+    }
+    await resolveSyncV2Conflict(item.canonicalPath, choice as 'ours' | 'theirs');
+    console.log(`✓ Resolved ${item.canonicalPath} -> kept ${choice}`);
+  }
+
+  const remaining = await listSyncV2Conflicts();
+  if (remaining.length === 0) {
+    console.log('\n✓ All conflicts resolved! Run "reglet sync" to push your changes to the vault.\n');
+  } else {
+    console.log(`\n${remaining.length} conflict(s) remaining. Run "reglet sync conflicts" anytime to continue.\n`);
   }
 }

@@ -20,6 +20,7 @@ import {
 import { requireAllowedEncryptedSyncPath, resolveEncryptedSyncPath } from './v2-path.js';
 import {
   loadActiveSyncV2State,
+  loadSyncV2State,
   saveSyncV2State,
   type ActiveSyncV2State,
 } from './v2-state.js';
@@ -119,13 +120,44 @@ function syncErrorMessage(error: unknown): string {
   return message.slice(0, 500);
 }
 
+export function normalizeConflictTarget(inputPath: string, state: ActiveSyncV2State): string {
+  const cleaned = inputPath.trim().replace(/^~[/\\]\.reglet[/\\]?/, '').replace(/^[/\\]/, '');
+  if (state.files[cleaned]?.conflicted === true) return cleaned;
+  const match = cleaned.match(/^(.*)\.conflict-[^.]+(\..*)?$/);
+  if (match) {
+    const candidate = `${match[1]}${match[2] ?? ''}`;
+    if (state.files[candidate]?.conflicted === true) return candidate;
+  }
+  return cleaned;
+}
+
+export interface SyncV2ConflictItem {
+  canonicalPath: string;
+  conflictPath: string;
+  localPath: string;
+}
+
+export async function listSyncV2Conflicts(home = regletHome()): Promise<SyncV2ConflictItem[]> {
+  const state = await loadSyncV2State(home);
+  if (!state || state.phase !== 'active') return [];
+  const list: SyncV2ConflictItem[] = [];
+  for (const [filePath, tracked] of Object.entries(state.files)) {
+    if (tracked.conflicted === true) {
+      const localPath = await safeLocalSyncV2Path(home, filePath);
+      const conflictPath = conflictFilePath(localPath, state.deviceName);
+      list.push({ canonicalPath: filePath, conflictPath, localPath });
+    }
+  }
+  return list.sort((a, b) => a.canonicalPath.localeCompare(b.canonicalPath));
+}
+
 export async function resolveSyncV2Conflict(
   filePath: string,
   choice: 'ours' | 'theirs',
   home = regletHome(),
 ): Promise<{ path: string; choice: 'ours' | 'theirs'; resolved: true }> {
-  const canonicalPath = requireAllowedEncryptedSyncPath(filePath);
   const state = await loadActiveSyncV2State(home);
+  const canonicalPath = requireAllowedEncryptedSyncPath(normalizeConflictTarget(filePath, state));
   const tracked = state.files[canonicalPath];
   if (tracked?.conflicted !== true) throw new Error(`Encrypted sync conflict does not exist: ${JSON.stringify(canonicalPath)}`);
   const localPath = await safeLocalSyncV2Path(home, canonicalPath);
@@ -144,8 +176,8 @@ export async function inspectSyncV2Conflict(
   filePath: string,
   home = regletHome(),
 ): Promise<SyncV2ConflictPreview> {
-  const canonicalPath = requireAllowedEncryptedSyncPath(filePath);
   const state = await loadActiveSyncV2State(home);
+  const canonicalPath = requireAllowedEncryptedSyncPath(normalizeConflictTarget(filePath, state));
   const tracked = state.files[canonicalPath];
   if (tracked?.conflicted !== true) throw new Error(`Encrypted sync conflict does not exist: ${JSON.stringify(canonicalPath)}`);
   const localPath = await safeLocalSyncV2Path(home, canonicalPath);
