@@ -29,6 +29,7 @@ import {
 import type { ManagerClient } from '../../client/ManagerClient.js';
 import { ManagerTransportError } from '../../client/HttpManagerClient.js';
 import { Button } from '../../design-system/Button.js';
+import { DiffViewer } from '../../design-system/DiffViewer.js';
 import { Shortcut } from '../../design-system/Shortcut.js';
 
 export interface ReviewRequestUnit {
@@ -501,16 +502,7 @@ function OperationIcon({ operation }: { operation: ManagerProjectionReviewEntryV
 }
 
 function UnifiedDiff({ entry, redacted }: { entry: ManagerProjectionReviewEntryV3; redacted: boolean }) {
-  const lines = useMemo(() => entry.diff.split('\n'), [entry.diff]);
-  if (entry.diff.length === 0) {
-    return <div className="rg-review-diff rg-review-diff--empty" role="region" aria-label={`${redacted ? 'Redacted' : 'Exact'} diff for ${entry.path}`}>{entry.note ?? 'No textual difference is available for this operation.'}</div>;
-  }
-  return (
-    <div className="rg-review-diff" role="region" aria-label={`${redacted ? 'Redacted' : 'Exact'} unified diff for ${entry.path}`} tabIndex={0}>
-      {redacted ? <p className="rg-review-diff__notice">Credential-like MCP values are hidden in this preview.</p> : null}
-      <pre><code>{lines.map((line, index) => <span className={diffLineClass(line)} key={`${index}:${line}`}>{line.length === 0 ? ' ' : line}</span>)}</code></pre>
-    </div>
-  );
+  return <DiffViewer diff={entry.diff} path={entry.path} redacted={redacted} note={entry.note} />;
 }
 
 function ApplyResultSummary({ result, onOpenActivity }: { result: ProjectionApplyResult; onOpenActivity: () => void }) {
@@ -609,14 +601,6 @@ function changedLineCounts(diff: string) {
     added: counts.added + (line.startsWith('+') && !line.startsWith('+++') ? 1 : 0),
     removed: counts.removed + (line.startsWith('-') && !line.startsWith('---') ? 1 : 0),
   }), { added: 0, removed: 0 });
-}
-
-function diffLineClass(line: string): string {
-  if (line.startsWith('+') && !line.startsWith('+++')) return 'rg-review-diff__line rg-review-diff__line--added';
-  if (line.startsWith('-') && !line.startsWith('---')) return 'rg-review-diff__line rg-review-diff__line--removed';
-  if (line.startsWith('@@')) return 'rg-review-diff__line rg-review-diff__line--hunk';
-  if (line.startsWith('+++') || line.startsWith('---')) return 'rg-review-diff__line rg-review-diff__line--file';
-  return 'rg-review-diff__line';
 }
 
 function operationDescription(entry: ManagerProjectionReviewEntryV3): string {

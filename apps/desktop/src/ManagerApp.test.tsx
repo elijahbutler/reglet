@@ -498,6 +498,22 @@ describe('shared Manager workbench', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
+  test('allows re-running setup walkthrough from Settings and canceling safely', async () => {
+    const snapshot = structuredClone(managerFixtureSnapshot);
+    snapshot.settings.setup.completed = true;
+    render(<ManagerApp client={new FixtureManagerClient(snapshot)} initialDestination="settings" />);
+
+    expect(await screen.findByRole('heading', { name: 'Guided setup walkthrough' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Re-run walkthrough' }));
+
+    expect(await screen.findByRole('dialog', { name: 'Set up this machine' })).toBeInTheDocument();
+    const closeBtn = screen.getByRole('button', { name: 'Close walkthrough' });
+    expect(closeBtn).toBeInTheDocument();
+    fireEvent.click(closeBtn);
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
   test('blocks legacy content behind explicit reviewed migration onboarding', async () => {
     const snapshot = structuredClone(managerFixtureSnapshot);
     snapshot.library.migration = { status: 'available', legacyArtifacts: 9 };

@@ -1,4 +1,4 @@
-import { Archive, Plus, RefreshCw, Search, Settings } from 'lucide-react';
+import { Archive, Plus, RefreshCw, Search, Settings, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDialogFocus } from '../../design-system/useDialogFocus.js';
 
@@ -9,9 +9,10 @@ export interface CommandPaletteProps {
   onRefresh: () => void;
   onArchive?: () => void;
   onSettings: () => void;
+  onRunSetup?: () => void;
 }
 
-export function CommandPalette({ open, onClose, onNew, onRefresh, onArchive, onSettings }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose, onNew, onRefresh, onArchive, onSettings, onRunSetup }: CommandPaletteProps) {
   const [query, setQuery] = useState('');
   const input = useRef<HTMLInputElement>(null);
   const dialog = useDialogFocus<HTMLElement>(open, onClose);
@@ -19,8 +20,9 @@ export function CommandPalette({ open, onClose, onNew, onRefresh, onArchive, onS
     { label: 'Create new artifact', icon: Plus, run: onNew },
     { label: 'Refresh manager snapshot', icon: RefreshCw, run: onRefresh },
     ...(onArchive === undefined ? [] : [{ label: 'Archive selected artifact', icon: Archive, run: onArchive }]),
+    ...(onRunSetup === undefined ? [] : [{ label: 'Run guided setup walkthrough', icon: Sparkles, run: onRunSetup }]),
     { label: 'Open Settings', icon: Settings, run: onSettings },
-  ].filter((command) => command.label.toLocaleLowerCase().includes(query.toLocaleLowerCase())), [onArchive, onNew, onRefresh, onSettings, query]);
+  ].filter((command) => command.label.toLocaleLowerCase().includes(query.toLocaleLowerCase())), [onArchive, onNew, onRefresh, onRunSetup, onSettings, query]);
   useEffect(() => {
     if (open) setQuery('');
   }, [open]);

@@ -40,3 +40,26 @@ body,
   color: var(--rg-muted, #a3a6ad);
   margin: 0;
 }
+
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+

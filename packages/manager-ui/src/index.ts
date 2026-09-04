@@ -8,3 +8,5 @@ export * from './design-system/Pane.js';
 export * from './design-system/Row.js';
 export * from './design-system/Shortcut.js';
 export * from './design-system/StatusBadge.js';
+export * from './design-system/DiffViewer.js';
+export * from './features/sync-diffs/SyncDiffsView.js';

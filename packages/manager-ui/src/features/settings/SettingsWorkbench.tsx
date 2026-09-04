@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, Database, Download, FileCode2, FolderRoot, KeyRound, Laptop, LoaderCircle, Radio, RefreshCw, Settings, Shield, ShieldAlert, ShieldCheck, Stethoscope } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Database, Download, FileCode2, FolderRoot, KeyRound, Laptop, LoaderCircle, Radio, RefreshCw, Settings, Shield, ShieldAlert, ShieldCheck, Stethoscope, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { JsonValue, ManagerProviderId, ManagerSnapshotV3 } from '@reglet/manager-protocol';
@@ -23,7 +23,7 @@ const sections = [
 
 export type SettingsSection = (typeof sections)[number]['id'];
 
-export function SettingsWorkbench({ client, hostActions, updateStatus, onUpdateStatus, section, onSection, snapshot, onRefresh, onError }: {
+export function SettingsWorkbench({ client, hostActions, updateStatus, onUpdateStatus, section, onSection, snapshot, onRefresh, onError, onRunSetup }: {
   client: ManagerClient;
   hostActions?: ManagerHostActions;
   updateStatus: ManagerUpdateStatus | null;
@@ -33,6 +33,7 @@ export function SettingsWorkbench({ client, hostActions, updateStatus, onUpdateS
   snapshot: ManagerSnapshotV3 | null;
   onRefresh: () => Promise<void>;
   onError: (message: string) => void;
+  onRunSetup?: () => void;
 }) {
   const [rootPath, setRootPath] = useState('');
   const [secretId, setSecretId] = useState('');
@@ -53,17 +54,29 @@ export function SettingsWorkbench({ client, hostActions, updateStatus, onUpdateS
       <Pane label="Settings detail" className="rg-operation-canvas">
         <PaneHeader><span>{sections.find((candidate) => candidate.id === section)?.label}</span></PaneHeader>
         <div className="rg-detail-document">
-          {section === 'general' ? <GeneralSettings hostActions={hostActions} updateStatus={updateStatus} onUpdateStatus={onUpdateStatus} snapshot={snapshot} /> : null}
+          {section === 'general' ? <GeneralSettings hostActions={hostActions} updateStatus={updateStatus} onUpdateStatus={onUpdateStatus} snapshot={snapshot} onRunSetup={onRunSetup} /> : null}
           {section === 'roots' ? <RootsSettings snapshot={snapshot} rootPath={rootPath} onRootPath={setRootPath} busy={busy} onAdd={() => void run(async () => {
             await client.command('project.root.add', { path: rootPath });
             setRootPath('');
             await onRefresh();
           })} /> : null}
-          {section === 'secrets' ? <SecretSettings snapshot={snapshot} id={secretId} value={secretValue} busy={busy} onId={setSecretId} onValue={setSecretValue} onBind={() => void run(async () => {
-            await client.command('secret.set', { id: secretId, value: secretValue });
-            setSecretValue('');
-            await onRefresh();
-          })} /> : null}
+          {section === 'secrets' ? <SecretSettings
+            snapshot={snapshot}
+            id={secretId}
+            value={secretValue}
+            busy={busy}
+            onId={setSecretId}
+            onValue={setSecretValue}
+            onBind={() => void run(async () => {
+              await client.command('secret.set', { id: secretId, value: secretValue });
+              setSecretValue('');
+              await onRefresh();
+            })}
+            onDelete={(idToDelete) => void run(async () => {
+              await client.command('secret.delete', { id: idToDelete });
+              await onRefresh();
+            })}
+          /> : null}
           {section === 'executable-skills' ? <ExecutableSkillsSettings client={client} snapshot={snapshot} onRefresh={onRefresh} onError={onError} /> : null}
           {section === 'sync' ? <SyncSettings client={client} snapshot={snapshot} busy={busy} onRefresh={onRefresh} onError={onError} onDisable={() => void run(async () => { await client.command('sync.disable', {}); await onRefresh(); })} /> : null}
           {section === 'remote' ? <RemoteSettings snapshot={snapshot} busy={busy} onDisable={() => void run(async () => { await client.command('remote.disable', {}); await onRefresh(); })} /> : null}
@@ -90,11 +103,12 @@ interface InstallProgress {
   totalBytes: number | null;
 }
 
-function GeneralSettings({ hostActions, updateStatus, onUpdateStatus, snapshot }: {
+function GeneralSettings({ hostActions, updateStatus, onUpdateStatus, snapshot, onRunSetup }: {
   hostActions?: ManagerHostActions;
   updateStatus: ManagerUpdateStatus | null;
   onUpdateStatus: (status: ManagerUpdateStatus | null) => void;
   snapshot: ManagerSnapshotV3 | null;
+  onRunSetup?: () => void;
 }) {
   const [checking, setChecking] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
@@ -119,7 +133,15 @@ function GeneralSettings({ hostActions, updateStatus, onUpdateStatus, snapshot }
     }
   };
   const installing = installProgress.phase !== 'idle';
-  return <><SectionHeader title="General" description="Canonical library and local runtime status." /><dl className="rg-key-values"><div><dt>Library schema</dt><dd>{snapshot === null ? 'Unavailable' : `v${snapshot.library.schemaVersion}`}</dd></div><div><dt>Protocol</dt><dd>{snapshot === null ? 'Unavailable' : `v${snapshot.protocolVersion}`}</dd></div><div><dt>Revision</dt><dd>{snapshot?.revision ?? 'Unavailable'}</dd></div><div><dt>Migration</dt><dd>{snapshot?.library.migration.status ?? 'Unavailable'}</dd></div></dl>{hostActions?.checkForUpdates !== undefined ? <section className="rg-settings-group rg-update-panel" aria-labelledby="desktop-updates-title">
+  return <><SectionHeader title="General" description="Canonical library and local runtime status." /><dl className="rg-key-values"><div><dt>Library schema</dt><dd>{snapshot === null ? 'Unavailable' : `v${snapshot.library.schemaVersion}`}</dd></div><div><dt>Protocol</dt><dd>{snapshot === null ? 'Unavailable' : `v${snapshot.protocolVersion}`}</dd></div><div><dt>Revision</dt><dd>{snapshot?.revision ?? 'Unavailable'}</dd></div><div><dt>Migration</dt><dd>{snapshot?.library.migration.status ?? 'Unavailable'}</dd></div></dl>{onRunSetup !== undefined ? <section className="rg-settings-group" aria-labelledby="desktop-walkthrough-title">
+    <div className="rg-update-panel__header">
+      <div>
+        <h2 id="desktop-walkthrough-title">Guided setup walkthrough</h2>
+        <p>Re-run the initial onboarding flow to detect new providers or reconfigure project scanning.</p>
+      </div>
+      <Button tone="secondary" onClick={onRunSetup}>Re-run walkthrough</Button>
+    </div>
+  </section> : null}{hostActions?.checkForUpdates !== undefined ? <section className="rg-settings-group rg-update-panel" aria-labelledby="desktop-updates-title">
     <div className="rg-update-panel__header"><div><h2 id="desktop-updates-title">Desktop updates</h2><p>Updates are downloaded from Reglet Releases and verified before installation.</p></div><Button disabled={checking || installing} icon={<RefreshCw className={checking ? 'rg-spin' : undefined} size={14} />} onClick={() => void check()}>{checking ? 'Checking…' : updateStatus === null ? 'Check for updates' : 'Check again'}</Button></div>
     <div className="rg-update-state" aria-live="polite">
       {checking ? <UpdateSummary icon={<ShieldCheck size={18} />} title="Checking for a signed update…" detail="Reglet is comparing this installation with the latest desktop release." /> : null}
@@ -164,8 +186,122 @@ function RootsSettings({ snapshot, rootPath, onRootPath, busy, onAdd }: { snapsh
   return <><SectionHeader title="Project roots" description="Read-only directories scanned for provider guidance." /><label className="rg-field"><span>Absolute root path</span><input value={rootPath} onChange={(event) => onRootPath(event.target.value)} placeholder="Absolute path to your projects" /></label><Button disabled={busy || rootPath.trim().length === 0} onClick={onAdd}>Add root</Button><div className="rg-settings-list">{(snapshot?.projectInbox?.roots ?? []).map((root) => <div key={root.id}><strong>{root.label}</strong><code>{root.path}</code></div>)}</div></>;
 }
 
-function SecretSettings({ snapshot, id, value, busy, onId, onValue, onBind }: { snapshot: ManagerSnapshotV3 | null; id: string; value: string; busy: boolean; onId: (value: string) => void; onValue: (value: string) => void; onBind: () => void }) {
-  return <><SectionHeader title="Secrets" description="Values remain in the native keychain and never enter APIs or canonical content." /><label className="rg-field"><span>Reference ID</span><input value={id} onChange={(event) => onId(event.target.value)} autoComplete="off" /></label><label className="rg-field"><span>Secret value</span><input type="password" value={value} onChange={(event) => onValue(event.target.value)} autoComplete="new-password" /></label><Button disabled={busy || id.trim().length === 0 || value.length === 0} onClick={onBind}>Bind locally</Button><div className="rg-settings-list">{snapshot?.settings.secretBindings.map((binding) => <div key={binding.id}><strong>{binding.id}</strong><span>{binding.bound ? 'Bound' : 'Unbound'}</span></div>)}</div></>;
+function SecretSettings({
+  snapshot,
+  id,
+  value,
+  busy,
+  onId,
+  onValue,
+  onBind,
+  onDelete,
+}: {
+  snapshot: ManagerSnapshotV3 | null;
+  id: string;
+  value: string;
+  busy: boolean;
+  onId: (value: string) => void;
+  onValue: (value: string) => void;
+  onBind: () => void;
+  onDelete?: (id: string) => void;
+}) {
+  const bindings = snapshot?.settings.secretBindings ?? [];
+  return (
+    <>
+      <SectionHeader
+        title="Secrets & Credentials"
+        description="Encrypted in the native OS keychain. Automatically resolved during apply without persisting raw credentials to provider files."
+      />
+      <div className="rg-settings-group">
+        <h2>Add or Update Secret</h2>
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '8px', alignItems: 'center' }}>
+          <span style={{ fontSize: '12px', opacity: 0.7 }}>Presets:</span>
+          {['GITHUB_TOKEN', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'].map((preset) => (
+            <button
+              key={preset}
+              type="button"
+              onClick={() => onId(preset)}
+              style={{
+                fontSize: '11px',
+                padding: '2px 8px',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                background: 'rgba(255, 255, 255, 0.06)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                color: 'inherit',
+                fontFamily: 'monospace',
+              }}
+            >
+              {preset}
+            </button>
+          ))}
+        </div>
+        <label className="rg-field">
+          <span>Reference ID</span>
+          <input
+            value={id}
+            onChange={(event) => onId(event.target.value)}
+            autoComplete="off"
+            placeholder="e.g. GITHUB_TOKEN"
+          />
+        </label>
+        <label className="rg-field">
+          <span>Secret value</span>
+          <input
+            type="password"
+            value={value}
+            onChange={(event) => onValue(event.target.value)}
+            autoComplete="new-password"
+            placeholder="Enter token value…"
+          />
+        </label>
+        <Button
+          tone="primary"
+          disabled={busy || id.trim().length === 0 || value.length === 0}
+          onClick={onBind}
+        >
+          {busy ? 'Saving…' : 'Bind locally'}
+        </Button>
+      </div>
+
+      <div className="rg-settings-group">
+        <h2>Vaulted Secrets ({bindings.length})</h2>
+        {bindings.length === 0 ? (
+          <p style={{ fontSize: '13px', opacity: 0.7 }}>No secrets configured in local keychain.</p>
+        ) : (
+          <div className="rg-settings-list">
+            {bindings.map((binding) => (
+              <div
+                key={binding.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '8px 0',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <KeyRound size={15} style={{ opacity: 0.8 }} />
+                  <strong>{binding.id}</strong>
+                  <span>{binding.bound ? 'Bound' : 'Unbound'}</span>
+                </div>
+                {onDelete ? (
+                  <Button
+                    tone="quiet"
+                    icon={<Trash2 size={13} />}
+                    onClick={() => onDelete(binding.id)}
+                    aria-label={`Delete ${binding.id}`}
+                  >
+                    Delete
+                  </Button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
 }
 
 type SkillTrustState = 'not-required' | 'untrusted' | 'changed' | 'trusted' | 'blocked';
